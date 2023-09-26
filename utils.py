@@ -98,7 +98,8 @@ def train_multiclass_classification(
 
     return model
 
-def concepts_preprocess_fn(batch):
+def concepts_preprocess_fn(
+    batch: tuple[tuple[Tensor, Tensor], Tensor]) -> tuple[Tensor, Tensor]:
     (X, concepts), y = batch
     return X, y
 
@@ -122,3 +123,29 @@ def cross_correlation(X: Tensor, Y: Tensor):
     X = (X - X.mean(dim=0)) / torch.maximum(X.std(dim=0), eps)
     Y = (Y - Y.mean(dim=0)) / torch.maximum(Y.std(dim=0), eps)
     return torch.bmm(X.unsqueeze(-1), Y.unsqueeze(1)).mean(dim=0)
+
+def get_mi_callback_fn(
+    mi_estimator: nn.Module, mi_optimizer: optim.Optimizer) -> Callable:
+    """
+    Return a callback function for training the mutual information estimator
+    (i.e. the `callback_fn` argument in `train_multiclass_classification`).
+
+    Parameters
+    ----------
+    mi_estimator : nn.Module
+        Mutual information estimator
+    mi_optimizer : optim.Optimizer
+        Mutual information optimizer
+    """
+    def mi_training_step(model: nn.Module, epoch, batch_index, batch):
+        (X, concepts), y = batch
+        mi_optimizer.zero_grad()
+        with torch.no_grad():
+            residual = model.residual_network(X)
+            concept_preds = model.concept_network(X)
+
+        mi_loss = mi_estimator.learning_loss(residual, concept_preds)
+        mi_loss.backward()
+        mi_optimizer.step()
+
+    return mi_training_step
