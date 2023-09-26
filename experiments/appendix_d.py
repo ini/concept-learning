@@ -17,7 +17,7 @@ from utils import train_multiclass_classification, cross_correlation
 # train_loader = DataLoader(CIFAR100(train=True), batch_size=64, shuffle=True)
 # test_loader = DataLoader(CIFAR100(train=False), batch_size=64, shuffle=False)
 
-train_loader, test_loader, CONCEPT_DIM = get_data_loaders('cifar100')
+train_loader, test_loader, CONCEPT_DIM = get_data_loaders('cub')
 
 for (X, c), y in train_loader:
     print(X.shape, c.shape)
@@ -64,7 +64,6 @@ def resnet18(output_dim: int, **kwargs):
     return model
 
 
-
 class ConceptBottleneckModel(nn.Module):
 
     def __init__(
@@ -76,6 +75,42 @@ class ConceptBottleneckModel(nn.Module):
         self.base_network = torchvision.models.resnet18(pretrained=True)
         base_dim = self.base_network.fc.in_features
         self.base_network.fc = nn.Identity()
+        # base_dim = 100
+        # self.base_network = nn.Sequential(
+        #     # First convolutional layer
+        #     nn.Conv2d(3, 64, kernel_size=3, padding=1),
+        #     nn.BatchNorm2d(64),
+        #     nn.ReLU(inplace=True),
+        #     nn.Conv2d(64, 64, kernel_size=3, padding=1),
+        #     nn.BatchNorm2d(64),
+        #     nn.ReLU(inplace=True),
+        #     nn.MaxPool2d(kernel_size=2, stride=2),
+
+        #     # Second convolutional layer
+        #     nn.Conv2d(64, 128, kernel_size=3, padding=1),
+        #     nn.BatchNorm2d(128),
+        #     nn.ReLU(inplace=True),
+        #     nn.Conv2d(128, 128, kernel_size=3, padding=1),
+        #     nn.BatchNorm2d(128),
+        #     nn.ReLU(inplace=True),
+        #     nn.MaxPool2d(kernel_size=2, stride=2),
+
+        #     # Third convolutional layer
+        #     nn.Conv2d(128, 256, kernel_size=3, padding=1),
+        #     nn.BatchNorm2d(256),
+        #     nn.ReLU(inplace=True),
+        #     nn.Conv2d(256, 256, kernel_size=3, padding=1),
+        #     nn.BatchNorm2d(256),
+        #     nn.ReLU(inplace=True),
+        #     nn.MaxPool2d(kernel_size=2, stride=2),
+
+        #     # Fully connected layers
+        #     nn.Flatten(),
+        #     nn.Linear(256 * 4 * 4, 512),
+        #     nn.ReLU(inplace=True),
+        #     nn.Dropout(0.5),
+        #     nn.Linear(512, base_dim)  # 100 output classes for CIFAR-100
+        # )
 
         self.concept_network = nn.Sequential(
             nn.Linear(base_dim, hidden_dim), nn.ReLU(),
@@ -94,8 +129,7 @@ class ConceptBottleneckModel(nn.Module):
         )
 
     def forward(self, x: Tensor) -> Tensor:
-        with torch.no_grad():
-            x = self.base_network(x)
+        x = self.base_network(x)
         concept_preds = self.concept_network(x)
         residual = self.residual_network(x)
         bottleneck = torch.cat([concept_preds, residual], dim=-1)

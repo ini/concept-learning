@@ -7,6 +7,7 @@ from datasets.cub import CUB
 
 
 def get_data_loaders(name='cifar100', batch_size=64):
+
     if name == 'cifar100':
         concept_dim = 20
         transform_train = transforms.Compose([
@@ -14,7 +15,6 @@ def get_data_loaders(name='cifar100', batch_size=64):
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
-            transforms.Resize((224, 224)),
         ])
         transform_test = transforms.Compose([
             transforms.ToTensor(),

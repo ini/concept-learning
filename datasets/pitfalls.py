@@ -32,7 +32,7 @@ class MNIST_45(Dataset):
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
         return (self.data[idx], self.concepts[idx]), self.targets[idx]
 
 
@@ -67,7 +67,7 @@ class DatasetC(Dataset):
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
         return (self.data[idx], self.concepts[idx]), self.targets[idx]
 
 
@@ -91,7 +91,7 @@ class DatasetD(Dataset):
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
         return (self.data[idx], self.concepts[idx]), self.targets[idx]
 
 
@@ -112,14 +112,14 @@ class DatasetE(Dataset):
             torch.argwhere(mnist.targets == digit)[:, 0]
             for digit in range(1, 7)
         ], dim=0)
-        self.data, self.targets = mnist.data[idx], mnist.targets[idx]
 
+        self.data, self.targets = mnist.data[idx].float(), mnist.targets[idx]
         self.concepts = torch.stack([
             self.targets == digit for digit in (1, 2, 3)], dim=-1).float()
         self.targets = (self.targets < 4).long()
 
     def __len__(self):
         return len(self.data)
-    
-    def __getitem__(self, idx):
+
+    def __getitem__(self, idx: int):
         return (self.data[idx], self.concepts[idx]), self.targets[idx]
