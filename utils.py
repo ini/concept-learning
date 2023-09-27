@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+from pathlib import Path
 from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -13,13 +14,11 @@ from typing import Callable
 def train_multiclass_classification(
     model: nn.Module,
     train_loader: DataLoader,
-    test_loader: DataLoader | None = None,
     num_epochs: int = 10,
     lr: float = 0.001,
     preprocess_fn: Callable = lambda batch: batch,
     callback_fn: Callable = lambda model, epoch, batch_index, batch: None,
     loss_fn: Callable = lambda data, output, target: F.cross_entropy(output, target),
-    predict_fn: Callable = lambda output: output.argmax(dim=-1),
     save_path: str | None = None,
     save_interval: int | None = None,
 ):
@@ -32,26 +31,26 @@ def train_multiclass_classification(
         Model to train
     train_loader : DataLoader
         Train data
-    test_loader : DataLoader
-        Test data
     num_epochs : int
         Number of epochs to train for
     lr : float
         Learning rate
-    callback_fn : Callable(model, epoch, batch_index, batch)
-        Callback triggered before each training step on a batch
     preprocess_fn : Callable(batch) -> (X, y)
         Function to preprocess the batch before passing it to the model
+    callback_fn : Callable(model, epoch, batch_index, batch)
+        Callback triggered before each training step on a batch
     loss_fn : Callable(data, output, target) -> loss
         Loss function for the model
-    predict_fn : Callable(output) -> prediction
-        Function to convert the model's output to a prediction
     save_path : str
         Path to save the model to
     save_interval : int
         Epoch interval at which to save the model during training
     """
-    # Train
+    # Create save directory if it doesn't exist
+    if save_path:
+        Path(save_path).resolve().parent.mkdir(parents=True, exist_ok=True)
+
+    # Train the model
     model.train()
     optimizer = optim.Adam(model.parameters(), lr=lr)
     for epoch in tqdm(range(num_epochs), desc='Epochs'):
@@ -77,26 +76,39 @@ def train_multiclass_classification(
         if save_path and save_interval and (epoch % save_interval) == 0:
             torch.save(model.state_dict(), save_path)
 
-    # Save
+    # Save the trained model
     if save_path:
         torch.save(model.state_dict(), save_path)
 
+def accuracy(
+    model: nn.Module,
+    data_loader: DataLoader,
+    preprocess_fn: Callable = lambda batch: batch,
+    predict_fn: Callable = lambda output: output.argmax(dim=-1)) -> float:
+    """
+    Parameters
+    ----------
+    model : nn.Module
+        Model to evaluate
+    data_loader : DataLoader
+        Data to evaluate on
+    preprocess_fn : Callable(batch) -> (X, y)
+        Function to preprocess the batch before passing it to the model
+    predict_fn : Callable(output) -> prediction
+        Function to convert the model's output to a prediction
+    """
     # Test
-    if test_loader is not None:
-        model.eval()
-        num_correct, num_samples = 0, 0
-        with torch.no_grad():
-            for batch in test_loader:
-                X, y = preprocess_fn(batch)
-                output = model(X)
-                prediction = predict_fn(output)
-                num_correct += (prediction == y).sum().item()
-                num_samples += y.size(0)
+    model.eval()
+    num_correct, num_samples = 0, 0
+    with torch.no_grad():
+        for batch in data_loader:
+            X, y = preprocess_fn(batch)
+            output = model(X)
+            prediction = predict_fn(output)
+            num_correct += (prediction == y).sum().item()
+            num_samples += y.numel()
 
-        accuracy = 100 * num_correct / num_samples
-        tqdm.write(f"Test Accuracy: {accuracy:.2f}%")
-
-    return model
+    return num_correct / num_samples
 
 def concepts_preprocess_fn(
     batch: tuple[tuple[Tensor, Tensor], Tensor]) -> tuple[Tensor, Tensor]:

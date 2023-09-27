@@ -45,8 +45,9 @@ class ConceptBottleneckModel(nn.Module):
         target_preds : Tensor
             Target predictions
         """
+        x = self.base_network(x)
         if concept_preds is None:
-            concept_preds = self.concept_network(self.base_network(x))
+            concept_preds = self.concept_network(x)
 
         residual = self.residual_network(x)
         bottleneck = torch.cat([concept_preds.detach(), residual], dim=-1)
