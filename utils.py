@@ -124,6 +124,52 @@ def cross_correlation(X: Tensor, Y: Tensor):
     Y = (Y - Y.mean(dim=0)) / torch.maximum(Y.std(dim=0), eps)
     return torch.bmm(X.unsqueeze(-1), Y.unsqueeze(1)).mean(dim=0)
 
+def get_cw_callback_fn(
+    data_loader: DataLoader, concept_dim: int, alignment_frequency: int = 20):
+    """
+    Returns a callback function for aligning the concept whitening layer
+    (i.e. the `callback_fn` argument in `train_multiclass_classification`).
+
+    Parameters
+    ----------
+    data_loader : DataLoader
+        Loader for concept alignment data
+    concept_dim : int
+        Number of concepts
+    alignment_frequency : int
+        Frequency at which to align the concept whitening layer (i.e. every N batches)
+    """
+    print('Creating concept loaders for whitening ...')
+    concept_loaders = [
+        torch.utils.data.DataLoader(
+            dataset=[
+                x for ((x, concepts), y) in data_loader.dataset
+                if concepts[concept_index] == 1 # assumes binary concepts
+            ],
+            batch_size=64,
+            shuffle=True,
+        )
+        for concept_index in range(concept_dim)
+    ]
+
+    def align_concepts(model, epoch, batch_index, batch):
+        if (batch_index + 1) % alignment_frequency == 0:
+            model.eval()
+            with torch.no_grad():
+                for concept_index, concept_loader in enumerate(concept_loaders):
+                    model.bottleneck_layer.mode = concept_index
+                    for X in concept_loader:
+                        X.requires_grad = True
+                        model(X)
+                        break
+
+                    model.bottleneck_layer.update_rotation_matrix(cuda=False)
+                    model.bottleneck_layer.mode = -1
+
+            model.train()
+
+    return align_concepts
+
 def get_mi_callback_fn(
     mi_estimator: nn.Module, mi_optimizer: optim.Optimizer) -> Callable:
     """
