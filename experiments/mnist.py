@@ -14,6 +14,7 @@ from utils import (
     cross_correlation,
     get_cw_callback_fn,
     get_mi_callback_fn,
+    concepts_preprocess_fn,
 )
 
 
@@ -25,7 +26,7 @@ test_loader = DataLoader(MNISTModulo(train=False), batch_size=64, shuffle=False)
 
 INPUT_DIM = 28*28
 OUTPUT_DIM = 10
-CONCEPT_DIM = 8
+CONCEPT_DIM = 5
 
 
 
@@ -97,11 +98,23 @@ def train_bottleneck_joint(
         model,
         train_loader,
         test_loader=test_loader,
-        preprocess_fn=lambda batch: (batch[0][0], batch[1]), # (X, concepts)
+        preprocess_fn=lambda batch: (batch[0][0], batch[1]), # (X, y)
         loss_fn=loss_fn,
         predict_fn=lambda outputs: outputs[2].argmax(-1), # target_preds
         **kwargs,
     )
+
+    try:
+        print("Training to predict target from residual only")
+        new_model = get_base_model(RESIDUAL_DIM, OUTPUT_DIM)
+        train_multiclass_classification(
+            new_model,
+            train_loader,
+            test_loader=test_loader,
+            preprocess_fn=lambda batch: (model(batch[0][0])[1], batch[1]), # (residual, y)
+        )
+    except Exception as e:
+        print(e)
 
 
 
@@ -130,7 +143,10 @@ def test_negative_interventions(model, num_interventions):
 
             elif isinstance(model, ConceptWhiteningModel):
                 X = model.base_network(X)
-                bottleneck = model.bottleneck_layer(X)
+                bottleneck = X
+                while bottleneck.ndim < 4:
+                    bottleneck = bottleneck.unsqueeze(-1)
+                bottleneck = model.bottleneck_layer(bottleneck).view(X.shape)
                 bottleneck[:, :CONCEPT_DIM] = negative_intervention(
                     bottleneck[:, :CONCEPT_DIM], c)
                 target_preds = model.target_network(bottleneck)
@@ -188,16 +204,31 @@ if __name__ == '__main__':
     )
     y4 = test_negative_interventions_multiple(model, values=range(0, CONCEPT_DIM + 1))
 
-    # With concept-whitened residual
-    model = ConceptWhiteningModel(residual_dim=1)
+    # # With concept-whitened residual
+    model = whitening_model(residual_dim=1)
     train_multiclass_classification(
         model,
         train_loader,
         test_loader=test_loader,
         preprocess_fn=lambda batch: (batch[0][0], batch[1]), # (X, concepts)
-        predict_fn=lambda outputs: outputs.argmax(-1), # target_preds
         callback_fn=get_cw_callback_fn(
             train_loader, CONCEPT_DIM, alignment_frequency=20),
+    )
+
+    new_model = get_base_model(RESIDUAL_DIM, OUTPUT_DIM)
+    print("Training to predict target from residual only")
+
+    def preprocess_fn(batch):
+        with torch.no_grad():
+            (X, c), y = batch
+            residual = model.activations(X)[:, c.shape[1]:]
+            return residual, y
+
+    train_multiclass_classification(
+        new_model,
+        train_loader,
+        test_loader=test_loader,
+        preprocess_fn=preprocess_fn,
     )
     y5 = test_negative_interventions_multiple(model, values=range(0, CONCEPT_DIM + 1))
 

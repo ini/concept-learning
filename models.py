@@ -74,23 +74,24 @@ class ConceptWhiteningModel(nn.Module):
         self.bottleneck_layer = IterNormRotation(
             bottleneck_dim, activation_mode=whitening_activation_mode)
 
-    def forward(self, x: Tensor, bottleneck: Tensor | None = None) -> Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         """
         Parameters
         ----------
         x : Tensor
             Input tensor
-        bottleneck : Tensor or None
-            Activations to override the output of the whitening layer
-            (e.g. for interventions)
         """
-        if bottleneck is None:
-            x = self.base_network(x)
-
-            bottleneck = x
-            while bottleneck.ndim < 4:
-                bottleneck = bottleneck.unsqueeze(-1)
-
-            bottleneck = self.bottleneck_layer(bottleneck).view(x.shape)
-
+        bottleneck = self.activations(x)
         return self.target_network(bottleneck)
+
+    def activations(self, x: Tensor) -> Tensor:
+        """
+        Return the output of the concept whitening layer.
+        """
+        x = self.base_network(x)
+
+        bottleneck = x
+        while bottleneck.ndim < 4:
+            bottleneck = bottleneck.unsqueeze(-1)
+
+        return self.bottleneck_layer(bottleneck).view(x.shape)

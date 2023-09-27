@@ -33,7 +33,7 @@ class MNISTModulo(Dataset):
         self.data = mnist.data.float()
         self.targets = mnist.targets.long()
         self.concepts = torch.stack([
-            self.targets % p == i for p in (3, 5) for i in range(p)], dim=-1).float()
+            self.targets % p == i for p in (2, 3) for i in range(p)], dim=-1).float()
 
     def __len__(self):
         return len(self.data)
