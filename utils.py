@@ -68,6 +68,7 @@ def train_multiclass_classification(
     # Train the model
     model.train()
     optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
     for epoch in tqdm(range(num_epochs), desc='Epochs'):
         epoch_losses = []
         batch_index = 0
@@ -89,6 +90,7 @@ def train_multiclass_classification(
                 batches_loop.set_postfix(loss=sum(epoch_losses) / len(epoch_losses))
                 batch_index += 1
 
+        scheduler.step()
         if save_path and save_interval and (epoch % save_interval) == 0:
             torch.save(model.state_dict(), save_path)
 

@@ -9,7 +9,7 @@ from train import train
 
 ### Data
 
-train_loader, test_loader, CONCEPT_DIM = get_data_loaders('cifar100')
+train_loader, test_loader, CONCEPT_DIM = get_data_loaders('cifar100', batch_size=128)
 OUTPUT_DIM = 100
 
 
@@ -58,6 +58,8 @@ if __name__ == '__main__':
         save_interval=10,
         lr=1e-4,
         num_epochs=100,
+        bottleneck_alpha=10.0,
+        bottleneck_beta=10.0,
         mi_estimator_hidden_dim=256,
         mi_optimizer_lr=0.001,
         whitening_alignment_frequency=20,

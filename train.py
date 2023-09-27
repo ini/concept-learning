@@ -56,7 +56,7 @@ def train_bottleneck_joint(
         target_loss = nn.CrossEntropyLoss()(target_preds, target)
         return (alpha * concept_loss) + (beta * residual_loss) + target_loss
 
-    model = train_multiclass_classification(
+    train_multiclass_classification(
         model,
         train_loader,
         preprocess_fn=lambda batch: (batch[0][0], batch[1]),
@@ -70,6 +70,7 @@ def train_bottleneck_joint(
             accuracy(
                 model, test_loader,
                 preprocess_fn=lambda batch: (batch[0][0], batch[1]),
+                predict_fn=lambda outputs: outputs[2].argmax(-1),
             )
         )
 
@@ -112,6 +113,7 @@ def train_whitening(
             accuracy(
                 model, test_loader,
                 preprocess_fn=lambda batch: (batch[0][0], batch[1]),
+                predict_fn=lambda outputs: outputs[2].argmax(-1),
             )
         )
 
@@ -123,6 +125,8 @@ def train(
     train_loader: DataLoader,
     test_loader: DataLoader | None = None,
     save_dir: str | Path = './saved_models',
+    bottleneck_alpha: float = 1.0,
+    bottleneck_beta: float = 1.0,
     mi_estimator_hidden_dim: int = 256,
     mi_optimizer_lr: float = 0.001,
     whitening_alignment_frequency : int = 20,
@@ -151,6 +155,10 @@ def train(
         Test data loader
     save_dir : str | Path
         Directory to save the trained models
+    bottleneck_alpha : float
+        Weight of the concept loss for bottleneck models
+    bottleneck_beta : float
+        Weight of the residual loss for bottleneck models
     mi_estimator_hidden_dim : int
         Hidden dimension of the mutual information estimator
     mi_optimizer_lr : float
@@ -173,6 +181,8 @@ def train(
     train_bottleneck_joint(
         model, train_loader,
         test_loader=test_loader,
+        alpha=bottleneck_alpha,
+        beta=bottleneck_beta,
         save_path=save_dir / 'no_residual.pt',
         **kwargs,
     )
@@ -183,7 +193,10 @@ def train(
     train_bottleneck_joint(
         model, train_loader,
         test_loader=test_loader,
+        alpha=bottleneck_alpha,
+        beta=bottleneck_beta,
         save_path=save_dir / 'latent_residual.pt',
+        **kwargs,
     )
     trained_models.append(model)
 
@@ -193,7 +206,10 @@ def train(
         model, train_loader,
         test_loader=test_loader,
         residual_loss_fn=lambda r, c: cross_correlation(r, c).square().mean(),
+        alpha=bottleneck_alpha,
+        beta=bottleneck_beta,
         save_path=save_dir / 'decorrelated_residual.pt',
+        **kwargs,
     )
     trained_models.append(model)
 
@@ -206,7 +222,10 @@ def train(
         test_loader=test_loader,
         residual_loss_fn=mi_estimator.forward,
         callback_fn=get_mi_callback_fn(mi_estimator, mi_optimizer),
+        alpha=bottleneck_alpha,
+        beta=bottleneck_beta,
         save_path=save_dir / 'mi_residual.pt',
+        **kwargs,
     )
     trained_models.append(model)
 
