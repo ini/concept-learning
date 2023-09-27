@@ -31,7 +31,7 @@ CONCEPT_DIM = 8
 
 ### Models
 
-def get_base_model(input_dim=28*28, output_dim=10, hidden_dim=128):
+def get_base_model(input_dim, output_dim, hidden_dim=128):
     return nn.Sequential(
         nn.Flatten(),
         nn.Linear(input_dim, hidden_dim), nn.ReLU(),
@@ -40,7 +40,7 @@ def get_base_model(input_dim=28*28, output_dim=10, hidden_dim=128):
     )
 
 def bottleneck_model(
-    input_dim: int, output_dim: int, concept_dim: int, residual_dim: int = 0):
+    input_dim=INPUT_DIM, output_dim=OUTPUT_DIM, concept_dim=CONCEPT_DIM, residual_dim=0):
     return ConceptBottleneckModel(
         concept_network=nn.Sequential(
             get_base_model(input_dim, concept_dim), nn.Sigmoid()),
@@ -49,7 +49,7 @@ def bottleneck_model(
     )
 
 def whitening_model(
-    input_dim: int, output_dim: int, concept_dim: int, residual_dim: int = 0):
+    input_dim=INPUT_DIM, output_dim=OUTPUT_DIM, concept_dim=CONCEPT_DIM, residual_dim=0):
     bottleneck_dim = concept_dim + residual_dim
     return ConceptWhiteningModel(
         base_network=get_base_model(input_dim, bottleneck_dim),
@@ -144,62 +144,39 @@ def test_negative_interventions(model, num_interventions):
 
     return accuracy
 
+def test_negative_interventions_multiple(model, values):
+    return [
+        test_negative_interventions(model, num_interventions=i)
+        for i in values
+    ]
+
 
 
 if __name__ == '__main__':
     RESIDUAL_DIM = 1
 
     # Without residual
-    model = bottleneck_model(
-        input_dim=INPUT_DIM,
-        output_dim=OUTPUT_DIM,
-        concept_dim=CONCEPT_DIM,
-        residual_dim=0,
-    )
+    model = bottleneck_model(residual_dim=0)
     train_bottleneck_joint(model, train_loader)
-    y1 = [
-        test_negative_interventions(model, num_interventions=i)
-        for i in range(0, CONCEPT_DIM + 1)
-    ]
+    y1 = test_negative_interventions_multiple(model, values=range(0, CONCEPT_DIM + 1))
 
     # With latent residual
-    model = bottleneck_model(
-        input_dim=INPUT_DIM,
-        output_dim=OUTPUT_DIM,
-        concept_dim=CONCEPT_DIM,
-        residual_dim=RESIDUAL_DIM,
-    )
+    model = bottleneck_model(residual_dim=RESIDUAL_DIM)
     train_bottleneck_joint(model, train_loader)
-    y2 = [
-        test_negative_interventions(model, num_interventions=i)
-        for i in range(0, CONCEPT_DIM + 1)
-    ]
+    y2 = test_negative_interventions_multiple(model, values=range(0, CONCEPT_DIM + 1))
 
     # With decorrelated residual
-    model = bottleneck_model(
-        input_dim=INPUT_DIM,
-        output_dim=OUTPUT_DIM,
-        concept_dim=CONCEPT_DIM,
-        residual_dim=RESIDUAL_DIM,
-    )
+    model = bottleneck_model(residual_dim=RESIDUAL_DIM)
     train_bottleneck_joint(
         model,
         train_loader,
         residual_loss_fn=lambda r, c: cross_correlation(r, c).square().mean(),
         alpha=1.0,
     )
-    y3 = [
-        test_negative_interventions(model, num_interventions=i)
-        for i in range(0, CONCEPT_DIM + 1)
-    ]
+    y3 = test_negative_interventions_multiple(model, values=range(0, CONCEPT_DIM + 1))
 
     # With MI-minimized residual
-    model = bottleneck_model(
-        input_dim=INPUT_DIM,
-        output_dim=OUTPUT_DIM,
-        concept_dim=CONCEPT_DIM,
-        residual_dim=RESIDUAL_DIM,
-    )
+    model = bottleneck_model(residual_dim=RESIDUAL_DIM)
     mi_estimator = CLUB(RESIDUAL_DIM, CONCEPT_DIM, 128)
     mi_optimizer = optim.Adam(mi_estimator.parameters(), lr=0.001)
     train_bottleneck_joint(
@@ -209,18 +186,10 @@ if __name__ == '__main__':
         residual_loss_fn=mi_estimator.forward,
         callback_fn=get_mi_callback_fn(mi_estimator, mi_optimizer),
     )
-    y4 = [
-        test_negative_interventions(model, num_interventions=i)
-        for i in range(0, CONCEPT_DIM + 1)
-    ]
+    y4 = test_negative_interventions_multiple(model, values=range(0, CONCEPT_DIM + 1))
 
     # With concept-whitened residual
-    model = ConceptWhiteningModel(
-        input_dim=INPUT_DIM,
-        output_dim=OUTPUT_DIM,
-        concept_dim=CONCEPT_DIM,
-        residual_dim=1,
-    )
+    model = ConceptWhiteningModel(residual_dim=1)
     train_multiclass_classification(
         model,
         train_loader,
@@ -230,10 +199,7 @@ if __name__ == '__main__':
         callback_fn=get_cw_callback_fn(
             train_loader, CONCEPT_DIM, alignment_frequency=20),
     )
-    y5 = [
-        test_negative_interventions(model, num_interventions=i)
-        for i in range(0, CONCEPT_DIM + 1)
-    ]
+    y5 = test_negative_interventions_multiple(model, values=range(0, CONCEPT_DIM + 1))
 
     # Plot
     import matplotlib.pyplot as plt
