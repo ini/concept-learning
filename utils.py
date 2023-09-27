@@ -7,9 +7,22 @@ from pathlib import Path
 from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from typing import Any
 from typing import Callable
 
 
+
+def to_device(x: Any, device: torch.device | str):
+    """
+    Move a tensor or collection of tensors to a device.
+    """
+    if isinstance(x, Tensor):
+        return x.to(device)
+    elif isinstance(x, tuple):
+        return tuple(to_device(xi, device) for xi in x)
+    elif isinstance(x, list):
+        return [to_device(xi, device) for xi in x]
+    return x
 
 def train_multiclass_classification(
     model: nn.Module,
@@ -46,6 +59,8 @@ def train_multiclass_classification(
     save_interval : int
         Epoch interval at which to save the model during training
     """
+    device = next(model.parameters()).device
+
     # Create save directory if it doesn't exist
     if save_path:
         Path(save_path).resolve().parent.mkdir(parents=True, exist_ok=True)
@@ -58,6 +73,7 @@ def train_multiclass_classification(
         batch_index = 0
         with tqdm(train_loader, desc='Batches', leave=False) as batches_loop:
             for batch in batches_loop:
+                batch = to_device(batch, device)
                 callback_fn(model, epoch, batch_index, batch)
                 X, y = preprocess_fn(batch)
 
@@ -97,12 +113,14 @@ def accuracy(
     predict_fn : Callable(output) -> prediction
         Function to convert the model's output to a prediction
     """
+    device = next(model.parameters()).device
+
     # Test
     model.eval()
     num_correct, num_samples = 0, 0
     with torch.no_grad():
         for batch in data_loader:
-            X, y = preprocess_fn(batch)
+            X, y = preprocess_fn(to_device(batch, device))
             output = model(X)
             prediction = predict_fn(output)
             num_correct += (prediction == y).sum().item()
