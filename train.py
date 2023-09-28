@@ -113,7 +113,6 @@ def train_whitening(
             accuracy(
                 model, test_loader,
                 preprocess_fn=lambda batch: (batch[0][0], batch[1]),
-                predict_fn=lambda outputs: outputs[2].argmax(-1),
             )
         )
 
