@@ -215,7 +215,8 @@ def train(
 
     # With MI-minimized residual
     model = make_bottleneck_model_fn(residual_dim=residual_dim)
-    mi_estimator = CLUB(residual_dim, concept_dim, mi_estimator_hidden_dim)
+    device = next(model.parameters()).device
+    mi_estimator = CLUB(residual_dim, concept_dim, mi_estimator_hidden_dim).to(device)
     mi_optimizer = optim.Adam(mi_estimator.parameters(), lr=mi_optimizer_lr)
     train_bottleneck_joint(
         model, train_loader,

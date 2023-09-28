@@ -212,6 +212,7 @@ class IterNormRotation(torch.nn.Module):
         Update the rotation matrix R using the accumulated gradient G.
         The update uses Cayley transform to make sure R is always orthonormal.
         """
+        device = next(self.parameters()).device
         size_R = self.running_rot.size()
         with torch.no_grad():
             G = self.sum_G/self.counter.reshape(-1,1)
@@ -224,8 +225,8 @@ class IterNormRotation(torch.nn.Module):
                 c2 = 0.9
                 
                 A = torch.einsum('gin,gjn->gij', G, R) - torch.einsum('gin,gjn->gij', R, G) # GR^T - RG^T
-                I = torch.eye(size_R[2]).expand(*size_R)
-                if cuda: I = I.cuda()
+                I = torch.eye(size_R[2]).expand(*size_R).to(device)
+
                 dF_0 = -0.5 * (A ** 2).sum()
                 # binary search for appropriate learning rate
                 cnt = 0
@@ -255,8 +256,7 @@ class IterNormRotation(torch.nn.Module):
                 R = torch.bmm(Q, R)
             
             self.running_rot = R
-            self.counter = (torch.ones(size_R[-1]) * 0.001)
-            if cuda: self.counter = self.counter.cuda()
+            self.counter = (torch.ones(size_R[-1]) * 0.001).to(device)
 
 
     def forward(self, X: torch.Tensor):

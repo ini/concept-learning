@@ -192,7 +192,7 @@ def get_cw_callback_fn(
                     model.bottleneck_layer.mode = concept_index
                     for X in concept_loader:
                         X.requires_grad = True
-                        model(X)
+                        model(X.to(next(model.parameters()).device))
                         break
 
                     model.bottleneck_layer.update_rotation_matrix(cuda=False)
