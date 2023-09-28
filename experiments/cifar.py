@@ -7,7 +7,11 @@ from pathlib import Path
 from torchvision.models.resnet import resnet18, ResNet18_Weights
 
 from data import get_data_loaders
-from evaluation import test_negative_interventions, test_residual_to_label
+from evaluation import (
+    test_negative_interventions,
+    test_residual_to_label,
+    test_concept_residual_correlation,
+)
 from models import ConceptBottleneckModel, ConceptWhiteningModel
 from train import train
 
@@ -51,8 +55,9 @@ def make_whitening_model(residual_dim):
     ).to('cuda')
 
 def load_models(load_dir: str | Path) -> list[nn.Module]:
-    load_dir = Path(load_dir)
     models = []
+    load_dir = Path(load_dir)
+    print(f'Loading models from {load_dir} ...')
 
     models.append(make_bottleneck_model(residual_dim=0))
     models[-1].load_state_dict(
@@ -80,11 +85,11 @@ def load_models(load_dir: str | Path) -> list[nn.Module]:
 
 if __name__ == '__main__':
     # TODO: Add argparse
-    mode = 'residual_to_label'
-    load_dir = Path('saved_models/CIFAR100/2023-09-28_01_56_41/')
+    mode = 'train'
+    load_dir = None # 'saved_models/CIFAR100/2023-09-28_01_56_41/'
 
     if mode == 'train':
-        models = train(
+        train(
             make_bottleneck_model_fn=make_bottleneck_model,
             make_whitening_model_fn=make_whitening_model,
             concept_dim=CONCEPT_DIM,
@@ -95,18 +100,12 @@ if __name__ == '__main__':
             save_interval=10,
             lr=1e-4,
             num_epochs=100,
-            bottleneck_alpha=10.0,
-            bottleneck_beta=10.0,
+            bottleneck_alpha=1.0,
+            bottleneck_beta=1.0,
             mi_estimator_hidden_dim=256,
             mi_optimizer_lr=0.001,
             whitening_alignment_frequency=20,
         )
-
-        no_residual_model = models[0]
-        latent_residual_model = models[1]
-        decorrelated_residual_model = models[2]
-        mi_residual_model = models[3]
-        whitened_residual_model = models[4]
 
     elif mode == 'intervention':
         results = []
@@ -135,11 +134,28 @@ if __name__ == '__main__':
         models = load_models(load_dir)[1:]
         for model in models:
             accuracies = test_residual_to_label(
-                model, test_loader, residual_dim=32, num_classes=OUTPUT_DIM)
+                model,
+                train_loader,
+                test_loader,
+                residual_dim=32,
+                num_classes=OUTPUT_DIM,
+            )
             results.append(1 - np.array(accuracies))
 
         # Plot
         residual_types = ['Latent', 'Decorrelated', 'MI-Minimized', 'Concept-Whitened']
         plt.bar(residual_types, results)
         plt.ylabel('Classification Error')
+        plt.show()
+
+    elif mode == 'cross_correlation':
+        results = []
+        models = load_models(load_dir)[1:]
+        for model in models:
+            results.append(test_concept_residual_correlation(model, test_loader))
+
+        # Plot
+        residual_types = ['Latent', 'Decorrelated', 'MI-Minimized', 'Concept-Whitened']
+        plt.bar(residual_types, results)
+        plt.ylabel('Mean Absolute Cross-Correlation')
         plt.show()

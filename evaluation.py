@@ -6,8 +6,14 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from typing import Iterable
 
+from club import CLUB
 from models import ConceptBottleneckModel, ConceptWhiteningModel
-from utils import accuracy, to_device, train_multiclass_classification
+from utils import (
+    accuracy,
+    cross_correlation,
+    to_device,
+    train_multiclass_classification,
+)
 
 
 
@@ -97,6 +103,7 @@ def test_negative_interventions(
 
 def test_residual_to_label(
     model: ConceptBottleneckModel | ConceptWhiteningModel,
+    train_loader: DataLoader,
     test_loader: DataLoader,
     residual_dim: int,
     num_classes: int):
@@ -107,6 +114,8 @@ def test_residual_to_label(
     ----------
     model : ConceptBottleneckModel or ConceptWhiteningModel
         Model to evaluate
+    train_loader : DataLoader
+        Train data loader
     test_loader : DataLoader
         Test data loader
     residual_dim : int
@@ -136,6 +145,30 @@ def test_residual_to_label(
 
     print('Training ...')
     train_multiclass_classification(
-        residual_to_label_model, test_loader, preprocess_fn=preprocess_fn)
+        residual_to_label_model, train_loader, preprocess_fn=preprocess_fn)
     return accuracy(
         residual_to_label_model, test_loader, preprocess_fn=preprocess_fn)
+
+def test_concept_residual_correlation(
+    model: ConceptBottleneckModel | ConceptWhiteningModel,
+    test_loader: DataLoader):
+    """
+    Test the cross-correlation between the residual and the concept values.
+    """
+    device = next(model.parameters()).device
+    model.eval()
+    correlations = []
+    with torch.no_grad():
+        for batch in test_loader:
+            (X, concepts), y = to_device(batch, device)
+            if isinstance(model, ConceptBottleneckModel):
+                concept_preds, residual, _ = model(X)
+            elif isinstance(model, ConceptWhiteningModel):
+                activations = model.activations(X)
+                concept_preds = activations[:, :concepts.shape[-1]]
+                residual = model.activations(X)[:, concepts.shape[-1]:]
+
+            R = cross_correlation(residual, concept_preds)
+            correlations.append(R.abs().mean().item())
+
+    return sum(correlations) / len(correlations)
