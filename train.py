@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,14 +10,16 @@ from torch.utils.data import DataLoader
 from typing import Callable
 
 from club import CLUB
-from models import ConceptBottleneckModel, ConceptWhiteningModel
+from models import ConceptModel, ConceptBottleneckModel, ConceptWhiteningModel
 from utils import (
-    accuracy,
+    concept_model_accuracy,
     cross_correlation,
     get_cw_callback_fn,
     get_mi_callback_fn,
     train_multiclass_classification,
 )
+
+from mod import differential_entropy
 
 
 
@@ -66,13 +70,7 @@ def train_bottleneck_joint(
 
     if test_loader is not None:
         print(
-            'Test Classification Accuracy:',
-            accuracy(
-                model, test_loader,
-                preprocess_fn=lambda batch: (batch[0][0], batch[1]),
-                predict_fn=lambda outputs: outputs[2].argmax(-1),
-            )
-        )
+            'Test Classification Accuracy:', concept_model_accuracy(model, test_loader))
 
 def train_whitening(
     model: ConceptWhiteningModel,
@@ -109,13 +107,7 @@ def train_whitening(
 
     if test_loader is not None:
         print(
-            'Test Classification Accuracy:',
-            accuracy(
-                model, test_loader,
-                preprocess_fn=lambda batch: (batch[0][0], batch[1]),
-                predict_fn=lambda outputs: outputs[2].argmax(-1),
-            )
-        )
+            'Test Classification Accuracy:', concept_model_accuracy(model, test_loader))
 
 def train(
     make_bottleneck_model_fn: Callable,
@@ -173,8 +165,9 @@ def train(
     # Create save directory
     dataset_name = train_loader.dataset.__class__.__name__
     date = datetime.today().strftime("%Y-%m-%d_%H_%M_%S")
-    save_dir = Path(save_dir) / dataset_name / date
+    save_dir = Path(save_dir).resolve() / dataset_name / date
     save_dir.mkdir(parents=True, exist_ok=True)
+    print('Saving models to:', str(save_dir))
 
     # Train without residual
     model = make_bottleneck_model_fn(residual_dim=0)
@@ -241,5 +234,66 @@ def train(
     )
     trained_models.append(model)
 
+    # With minimum entropy bottleneck
+    model = make_bottleneck_model_fn(residual_dim=residual_dim)
+    train_bottleneck_joint(
+        model, train_loader,
+        test_loader=test_loader,
+        residual_loss_fn=lambda r, c: 10 * differential_entropy(torch.cat([r, c], dim=-1)).exp(),
+        #residual_loss_fn=lambda r, c: differential_entropy(c).exp(),
+        alpha=bottleneck_alpha,
+        beta=bottleneck_beta,
+        save_path=save_dir / 'min_entropy.pt',
+        **kwargs,
+    )
+    trained_models.append(model)
+
     open(save_dir / '.done', 'a').close()
     return trained_models
+
+def load_models(
+    load_dir: str | Path,
+    make_bottleneck_model_fn: Callable[[int], ConceptBottleneckModel],
+    make_whitening_model_fn: Callable[[int], ConceptWhiteningModel],
+    residual_dim: int) -> dict[str, ConceptModel]:
+    """
+    Load saved models from the given directory.
+
+    Returns
+    -------
+    models : dict[str, ConceptModel]
+        Dictionary of saved models
+            * Concept bottleneck model without residual
+            * Concept bottleneck model with latent residual
+            * Concept bottleneck model with decorrelated residual
+            * Concept bottleneck model with mutual information minimizing residual
+            * Concept whitening model with concept-whitened residual
+    """
+    load_dir = Path(load_dir)
+    models = {}
+
+    models['no_residual'] = make_bottleneck_model_fn(residual_dim=0)
+    models['no_residual'].load_state_dict(
+        torch.load(load_dir / 'no_residual.pt'))
+
+    models['latent_residual'] = make_bottleneck_model_fn(residual_dim=residual_dim)
+    models['latent_residual'].load_state_dict(
+        torch.load(load_dir / 'latent_residual.pt'))
+
+    models['decorrelated_residual'] = make_bottleneck_model_fn(residual_dim=residual_dim)
+    models['decorrelated_residual'].load_state_dict(
+        torch.load(load_dir / 'decorrelated_residual.pt'))
+    
+    models['mi_residual'] = make_bottleneck_model_fn(residual_dim=residual_dim)
+    models['mi_residual'].load_state_dict(
+        torch.load(load_dir / 'mi_residual.pt'))
+    
+    models['whitened_residual'] = make_whitening_model_fn(residual_dim=residual_dim)
+    models['whitened_residual'].load_state_dict(
+        torch.load(load_dir / 'whitened_residual.pt'))
+    
+    models['min_entropy'] = make_bottleneck_model_fn(residual_dim=residual_dim)
+    models['min_entropy'].load_state_dict(
+        torch.load(load_dir / 'min_entropy.pt'))
+
+    return models

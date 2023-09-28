@@ -2,4 +2,4 @@
 
 Run the following:
 
-    python -m experiments.mnist
+    python -m experiments.cifar

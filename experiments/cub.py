@@ -15,8 +15,8 @@ from train import train
 
 ### Data
 
-train_loader, test_loader, CONCEPT_DIM = get_data_loaders('cifar100', batch_size=128)
-OUTPUT_DIM = 100
+train_loader, test_loader, CONCEPT_DIM = get_data_loaders('cub', batch_size=64)
+OUTPUT_DIM = 200
 
 
 
@@ -40,7 +40,7 @@ def make_bottleneck_model(residual_dim):
         concept_network=nn.Sequential(make_resnet(CONCEPT_DIM), nn.Sigmoid()),
         residual_network=make_resnet(residual_dim),
         target_network=make_ffn(CONCEPT_DIM + residual_dim, OUTPUT_DIM),
-    ).to('cuda')
+    ).to('cuda:1')
 
 def make_whitening_model(residual_dim):
     bottleneck_dim = CONCEPT_DIM + residual_dim
@@ -48,7 +48,7 @@ def make_whitening_model(residual_dim):
         base_network=make_resnet(bottleneck_dim),
         target_network=make_ffn(bottleneck_dim, OUTPUT_DIM),
         bottleneck_dim=bottleneck_dim,
-    ).to('cuda')
+    ).to('cuda:1')
 
 def load_models(load_dir: str | Path) -> list[nn.Module]:
     load_dir = Path(load_dir)
@@ -80,7 +80,7 @@ def load_models(load_dir: str | Path) -> list[nn.Module]:
 
 if __name__ == '__main__':
     # TODO: Add argparse
-    mode = 'residual_to_label'
+    mode = 'train'
     load_dir = Path('saved_models/CIFAR100/2023-09-28_01_56_41/')
 
     if mode == 'train':
@@ -94,7 +94,7 @@ if __name__ == '__main__':
             save_dir='./saved_models',
             save_interval=10,
             lr=1e-4,
-            num_epochs=100,
+            num_epochs=200,
             bottleneck_alpha=10.0,
             bottleneck_beta=10.0,
             mi_estimator_hidden_dim=256,

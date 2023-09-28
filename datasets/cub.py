@@ -87,7 +87,7 @@ class CUB(Dataset):
         if self.transform:
             img = self.transform(img)
 
-        attributes = img_data['attribute_label']
+        attributes = torch.as_tensor(img_data['attribute_label']).float()
         target = img_data['class_label']
 
         return (img, attributes), target

@@ -6,22 +6,18 @@ from torchvision import datasets, transforms
 
 class MNISTModulo(Dataset):
     """
-    MNIST Dataset with additional concepts for divisibility mod 3 and 5.
+    MNIST Dataset with additional concepts for divisibility mod 5.
 
     Data: image
 
     Targets: digit from 0 to 9
 
     Concepts:
-        * digit % 3 == 0
-        * digit % 3 == 1
-        * digit % 3 == 2
         * digit % 5 == 0
         * digit % 5 == 1
         * digit % 5 == 2
         * digit % 5 == 3
         * digit % 5 == 4
-    
     """
 
     def __init__(self, train: bool = True):
@@ -33,7 +29,7 @@ class MNISTModulo(Dataset):
         self.data = mnist.data.float()
         self.targets = mnist.targets.long()
         self.concepts = torch.stack([
-            self.targets % p == i for p in (2, 3) for i in range(p)], dim=-1).float()
+            self.targets % p == i for p in (5,) for i in range(p)], dim=-1).float()
 
     def __len__(self):
         return len(self.data)

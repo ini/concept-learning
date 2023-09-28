@@ -6,144 +6,64 @@ from torch import Tensor
 
 
 
+def _pad_along_last_axis(X, m):
+    """Pad the data for computing the rolling window difference."""
+    # scales a  bit better than method in _vasicek_like_entropy
+    shape = list(X.shape)
+    shape[-1] = m
+    Xl = torch.broadcast_to(X[..., [0]], shape)  # [0] vs 0 to maintain shape
+    Xr = torch.broadcast_to(X[..., [-1]], shape)
+    return torch.cat((Xl, X, Xr), axis=-1)
 
-class SegmentedLinear2(nn.Linear):
-
-    def __init__(self, in_features: int, out_features: int, N: int = 1, **kwargs):
-        super().__init__(in_features * N, out_features * N, **kwargs)
-        self.N = N
-        self.weight_factor = torch.zeros_like(self.weight.data)
-        for i in range(N):
-            self.weight_factor[
-                i * out_features : (i + 1) * out_features,
-                i * in_features : (i + 1) * in_features,
-            ] = 1
-        self.weight_factor[:out_features, :in_features] = 1
-
-    def forward(self, input: Tensor) -> Tensor:
-        out = F.linear(
-            input.view(*input.shape[:-2], -1),
-            self.weight * self.weight_factor,
-            self.bias,
-        )
-        return out.view(*input.shape[:-1], -1)
+def _vasicek_entropy(X, m):
+    """Compute the Vasicek estimator as described in [6] Eq. 1.3."""
+    n = X.shape[-1]
+    X = _pad_along_last_axis(X, m)
+    differences = X[..., 2 * m:] - X[..., : -2 * m:]
+    logs = torch.log(n/(2*m) * torch.maximum(differences, torch.tensor(1e-6)))
+    return torch.mean(logs, axis=-1)
 
 
-class SegmentedLinear(nn.Module):
+from torch.distributions import MultivariateNormal
+m = MultivariateNormal(torch.zeros(28*28), torch.eye(28*28))
 
-    def __init__(self, input_dim, output_dim, N=1):
-        super().__init__()
-        self.layers = nn.ModuleList([nn.Linear(input_dim, output_dim) for _ in range(N)])
+# def entropy(r, c, eps=1e-6):
+#     x = torch.cat([r, c], dim=-1)
+#     mu = x.mean(dim=0)
+#     var = x.var(dim=0)
+#     var = torch.maximum(var, torch.tensor(eps))
+#     return 1e-3 * (var.log() + (x - mu)**2 / var).sum(dim=-1).mean()
 
-    def forward(self, x):
-        x = x.view(-1, len(self.layers), x.shape[-1])
-        return torch.stack([self.layers[i](x[:, i]) for i in range(len(self.layers))], dim=1)
+def kl_from_unit_gaussian(x):
+    dist = MultivariateNormal(torch.zeros(x.shape[-1]), torch.eye(x.shape[-1]))
+    #x = x.clone()
+    x = (x - x.mean(dim=0)) / torch.maximum(x.std(dim=0), torch.tensor(1e-6))
+    return (28*28 / dist.log_prob(x)).mean()
+
+    p = torch.ones(len(x)) / len(x)
+    log_q = m.log_prob(x)
+    return (p * p.log() / log_q).sum()
+
+    mu = x.mean(dim=0)
+    var = x.var(dim=0)
+    return -0.5 * (var.log() - var - mu**2 + 1).sum(dim=-1).mean()
+
+import math
+def differential_entropy(X):
+    #return -kl_from_unit_gaussian(X)
+    X = torch.moveaxis(X, 0, -1)
+    X, _ = torch.sort(X, dim=-1)
+    window_length = math.floor(math.sqrt(X.shape[-1]) + 0.5)
+
+    H = _vasicek_entropy(X, window_length).mean()
+    #import tqdm
+    #tqdm.tqdm.write(str(H.item()))
+    return H #.exp()
+    return _vasicek_entropy(X, window_length).sum()
 
 
 
-class CCC(nn.Module):
-
-    def __init__(self, input_dim: int, hidden_dim: int = 64):
-        """
-        Parameters
-        ----------
-        dim : int
-            Dimension of input samples
-        hidden_dim : int
-            Dimension of hidden layers in variational approximation network
-        """
-        super().__init__()
-        self.input_dim = input_dim
-
-        self.p_mu = nn.Sequential(
-            SegmentedLinear2(1, hidden_dim, N=input_dim), nn.ReLU(),
-            SegmentedLinear2(hidden_dim, hidden_dim, N=input_dim), nn.ReLU(),
-            SegmentedLinear2(hidden_dim, input_dim, N=input_dim),
-        )
-        self.p_log_var = nn.Sequential(
-            SegmentedLinear2(1, hidden_dim, N=input_dim), nn.ReLU(),
-            SegmentedLinear2(hidden_dim, hidden_dim, N=input_dim), nn.ReLU(),
-            SegmentedLinear2(hidden_dim, input_dim, N=input_dim), nn.Tanh(),
-        )
-        #self.optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
-
-    def log_likelihood(self, x: Tensor) -> Tensor:
-        """
-        Return matrix of (unnormalized) pairwise conditional log-likelihoods.
-
-        Parameters
-        ----------
-        x : Tensor of shape (batch_dim, input_dim)
-            Input samples
-
-        Returns
-        -------
-        Q : Tensor of shape (batch_dim, input_dim, input_dim)
-            Matrix of conditional log-likelihoods, where Q[n, i, j]
-            is the log-likelihood of x[n, i] given x[n, j].
-        """
-        x = x.unsqueeze(-1)
-        mu, log_var = self.p_mu(x), self.p_log_var(x)
-
-        log_var = log_var * 0 + 1
-        #print("LV", log_var.mean().item())
-
-        #losses = (mu - x) ** 2
-        #print(losses.mean(dim=0))
-        # print("losses", losses.mean().item(), losses.std().item(), losses.min().item(), losses.max().item())
-        return -0.5 * ((mu - x)**2 / log_var.exp() + log_var)
-
-    def mutual_information(self, x: Tensor) -> Tensor:
-        """
-        Return an estimated upper bound for the mutual information matrix.
-
-        Parameters
-        ----------
-        x : Tensor of shape (batch_dim, input_dim)
-            Input samples
-
-        Returns
-        -------
-        M : Tensor of shape (input_dim, input_dim)
-            Mutual information upper bound matrix, where M[i, j] is an estimated
-            upper bound on the mutual information between x[:, i] and x[:, j].
-        """
-        Q = self.log_likelihood(x)
-
-        # Positive samples
-        positive = Q
-
-        # Negative samples
-        negative = Q.mean
-        negative = Q.view(Q.shape[0], -1)
-        negative = negative[
-            torch.argsort(torch.rand(*negative.shape), dim=0),
-            torch.arange(negative.shape[1]),
-        ].view(Q.shape)
-
-        # Contrastive log-ratio upper bound
-        return (positive - negative).mean(dim=0)
-
-    def variational_loss(self, x: Tensor) -> Tensor:
-        """
-        Loss for variational network used to approximate
-        conditional log-likelihoods.
-
-        Parameters
-        ----------
-        x : Tensor of shape (batch_dim, input_dim)
-            Input samples
-        """
-        return -self.log_likelihood(x).mean()
-
-    def disentanglement_loss(self, x: Tensor) -> Tensor:
-        """
-        Parameters
-        ----------
-        x : Tensor of shape (batch_dim, input_dim)
-            Input samples
-        """
-        return self.mutual_information(x).mean()
+class EntropyLayer(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         """
@@ -152,115 +72,72 @@ class CCC(nn.Module):
         x : Tensor of shape (batch_dim, input_dim)
             Input samples
         """
+        self.inputs = x
         return x
 
+    def entropy(self) -> Tensor:
+        """
+        Return the entropy of the last input batch.
+        """
+        x = self.inputs.view(-1, self.inputs.shape[-1]).clone()
+        # x -= x.mean(dim=0)
+        # x /= torch.maximum(x.std(dim=0), torch.tensor(1e-6))
+        return differential_entropy(x)
+        mu = x.mean(dim=0).unsqueeze(0)
+        var = x.var(dim=0).unsqueeze(0)
+        return (var.log() + (x - mu)**2 / var).sum(dim=-1).mean()
 
 
+# ccc = EntropyLayer()
+
+x = torch.randn(64, 28*28)
+print(differential_entropy(x), -kl_from_unit_gaussian(x))
+X = torch.moveaxis(x.clone(), 0, -1)
+X, _ = torch.sort(X, dim=-1)
+window_length = math.floor(math.sqrt(X.shape[-1]) + 0.5)
+print(_vasicek_entropy(X, window_length).shape)
+
+# x = torch.rand(64, 28*28)
+# print(differential_entropy(x), -kl_from_unit_gaussian(x))
+
+# x = torch.ones(100, 28*28)
+# print(differential_entropy(x), -kl_from_unit_gaussian(x))
+
+# x[32:] = 1
+# print(differential_entropy(x), -kl_from_unit_gaussian(x))
 
 
+# x = torch.rand(10000, 8)
+# ccc(x)
+# print(ccc.entropy())
 
-def get_base_model(input_dim=28*28, output_dim=10, hidden_dim=128):
-    return nn.Sequential(
-        nn.Flatten(),
-        nn.Linear(input_dim, hidden_dim), nn.ReLU(),
-        nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-        nn.Linear(hidden_dim, output_dim),
-    )
+# x = torch.randn(10000, 8) ** 2
+# ccc(x)
+# print(ccc.entropy())
 
+# x = torch.rand(10000, 8) ** 2
+# ccc(x)
+# print(ccc.entropy())
 
-class MyConceptModel(nn.Module):
+# x = torch.tensor([1, 1, 1, 2, 4, 4, 4, 4]).float().unsqueeze(-1)
+# ccc(x)
+# print(ccc.entropy())
 
-    def __init__(self, concept_dim: int):
-        super().__init__()
-        self.concept_dim = concept_dim
-        self.concept_network = get_base_model(output_dim=concept_dim)
-        self.predictor_network = get_base_model(input_dim=concept_dim)
-
-    def forward(self, x):
-        concept_preds = self.concept_network(x)
-        out = self.predictor_network(concept_preds)
-        return concept_preds, out
-
-    def concept_predictions(self, x):
-        return self.concept_network(x)
-        
+# x = torch.zeros(1000, 8)
+# x[:500] = 1
+# x[:1000] = 20000
+# ccc(x)
+# print(ccc.entropy())
 
 
-
-
-
-
-
-from data_real import pitfalls_decorrelation_dataset
-from utils import train_multiclass_classification, concepts_preprocess_fn
-
-
-train_loader, test_loader, concept_dim = pitfalls_decorrelation_dataset()
-
-model = MyConceptModel(concept_dim)
-my_mod = CCC(input_dim=concept_dim)
-my_mod_optimizer = torch.optim.Adam(my_mod.parameters(), lr=0.001)
-
-def variational_training_step(model, epoch, batch_index, batch):
-    (X, concepts), y = batch
-    my_mod_optimizer.zero_grad()
-    with torch.no_grad():
-        concept_preds = model.concept_network(X)
-
-    variational_loss = my_mod.variational_loss(concept_preds)
-    variational_loss.backward()
-    my_mod_optimizer.step()
-
-def loss_fn(data, output, target):
-    X, concepts = data
-    concept_preds, output = output
-    concept_loss = F.binary_cross_entropy(concept_preds, concepts)
-    disentanglement_loss = my_mod.disentanglement_loss(concept_preds)
-    prediction_loss = F.cross_entropy(output, target)
-    return concept_loss + disentanglement_loss + prediction_loss
-
-model = train_multiclass_classification(
-    model,
-    train_loader,
-    test_loader=test_loader,
-    num_epochs=20,
-    preprocess_fn=concepts_preprocess_fn,
-    callback_fn=variational_training_step,
-)
-
-correct = 0
-total = 0
-with torch.no_grad():
-    for (X, concepts), y in test_loader:
-        activations = model.cw_layer(
-            model.concept_network(X)[..., None, None])[..., :model.concept_dim, 0, 0]
-
-        predicted_concept_idx = torch.topk(activations, 3).indices.sort().values
-        results = torch.stack([
-            concepts[i, predicted_concept_idx[i]] for i in range(len(concepts))])
-        correct += results.sum()
-        total += results.nelement()
-
-accuracy = 100 * correct / total
-print(f"Final Concept Accuracy on the test dataset: {accuracy:.2f}%")
-
-
-
-
-
-
-### Calculate Intra-Concept Leakage
-
-for concept_index in range(model.concept_dim):
-    other_idx = [i for i in range(model.concept_dim) if i != concept_index]
-    model_c = nn.Sequential(nn.Linear(1, 128), nn.ReLU(), nn.Linear(128, len(other_idx)))
+# def thing():
+#     n = 0
+#     def f():
+#         nonlocal n
+#         n += 1
+#         print(n)
     
-    def transform(batch):
-        (X, concepts), y = batch
-        with torch.no_grad():
-            inputs = model.concept_predictions(X)[..., [concept_index]]
-            targets = concepts[..., other_idx].argmax(dim=-1)
-            return inputs, targets
-        
-    model_c = train_multiclass_classification(
-        model_c, train_loader, test_loader=test_loader, preprocess_fn=transform, num_epochs=5)
+#     for i in range(10):
+#         f()
+
+# thing()

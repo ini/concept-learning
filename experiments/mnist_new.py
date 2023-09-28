@@ -3,10 +3,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn as nn
 
-from pathlib import Path
-from torchvision.models.resnet import resnet18, ResNet18_Weights
+from torch.utils.data import DataLoader
 
-from data import get_data_loaders
+from datasets.other import MNISTModulo
+from datasets.pitfalls import DatasetC, DatasetD, DatasetE, MNIST_45
 from evaluation import (
     test_negative_interventions,
     test_random_concepts,
@@ -14,39 +14,65 @@ from evaluation import (
 )
 from models import ConceptBottleneckModel, ConceptWhiteningModel
 from train import train, load_models
-from utils import make_ffn, accuracy
+from utils import make_ffn, concept_model_accuracy
 
 
 
 ### Data
 
-train_loader, test_loader, CONCEPT_DIM = get_data_loaders('cifar100', batch_size=128)
-OUTPUT_DIM = 100
-RESIDUAL_DIM = 32 # if applicable
+train_loader = DataLoader(MNISTModulo(train=True), batch_size=64, shuffle=True)
+test_loader = DataLoader(MNISTModulo(train=False), batch_size=64, shuffle=False)
+
+OUTPUT_DIM = 10
+CONCEPT_DIM = 5
+RESIDUAL_DIM = 1 # if applicable
+
+# train_loader = DataLoader(DatasetC(num_concepts=100, train=True), batch_size=64, shuffle=True)
+# test_loader = DataLoader(DatasetC(num_concepts=100, train=False), batch_size=64, shuffle=False)
+
+# OUTPUT_DIM = 2
+# CONCEPT_DIM = 100
+# RESIDUAL_DIM = 1 # if applicable
+
+# train_loader = DataLoader(DatasetD(train=True), batch_size=64, shuffle=True)
+# test_loader = DataLoader(DatasetD(train=False), batch_size=64, shuffle=False)
+
+# OUTPUT_DIM = 2
+# CONCEPT_DIM = 3
+# RESIDUAL_DIM = 1 # if applicable
+
+# train_loader = DataLoader(DatasetE(train=True), batch_size=64, shuffle=True)
+# test_loader = DataLoader(DatasetE(train=False), batch_size=64, shuffle=False)
+
+# OUTPUT_DIM = 2
+# CONCEPT_DIM = 3
+# RESIDUAL_DIM = 1 # if applicable
+
+# train_loader = DataLoader(MNIST_45(train=True), batch_size=64, shuffle=True)
+# test_loader = DataLoader(MNIST_45(train=False), batch_size=64, shuffle=False)
+
+# OUTPUT_DIM = 2
+# CONCEPT_DIM = 2
+# RESIDUAL_DIM = 1 # if applicable
 
 
 
 ### Models
 
-def make_resnet(output_dim):
-    resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
-    resnet.fc = nn.Linear(resnet.fc.in_features, output_dim)
-    return resnet
-
 def make_bottleneck_model(residual_dim):
     return ConceptBottleneckModel(
-        concept_network=nn.Sequential(make_resnet(CONCEPT_DIM), nn.Sigmoid()),
-        residual_network=make_resnet(residual_dim),
-        target_network=make_ffn(CONCEPT_DIM + residual_dim, OUTPUT_DIM),
-    ).to('cuda')
+        concept_network=make_ffn(CONCEPT_DIM, output_activation=nn.Sigmoid()),
+        residual_network=make_ffn(residual_dim),
+        target_network=make_ffn(OUTPUT_DIM),
+    )
 
 def make_whitening_model(residual_dim):
     bottleneck_dim = CONCEPT_DIM + residual_dim
     return ConceptWhiteningModel(
-        base_network=make_resnet(bottleneck_dim),
-        target_network=make_ffn(bottleneck_dim, OUTPUT_DIM),
+        base_network=make_ffn(bottleneck_dim),
+        target_network=make_ffn(OUTPUT_DIM),
         bottleneck_dim=bottleneck_dim,
-    ).to('cuda')
+    )
 
 
 
@@ -64,9 +90,9 @@ if __name__ == '__main__':
     parser.add_argument(
         '--load-dir', type=str, help='Directory to load saved models from')
     parser.add_argument(
-        '--num-epochs', type=int, default=100, help='Number of epochs to train for')
+        '--num-epochs', type=int, default=10, help='Number of epochs to train for')
     parser.add_argument(
-        '--lr', type=float, default=1e-4, help='Learning rate')
+        '--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument(
         '--alpha', type=float, default=1.0, help='Weight for concept loss')
     parser.add_argument(
@@ -118,19 +144,11 @@ if __name__ == '__main__':
             args.load_dir, make_bottleneck_model, make_whitening_model, RESIDUAL_DIM)
         for model_name in sorted(models.keys()):
             print('\n', 'Model:', model_name)
-            baseline_acc = accuracy(
-                models[model_name], test_loader,
-                preprocess_fn=lambda batch: (batch[0][0], batch[1]),
-                predict_fn=lambda outputs: outputs[2].argmax(-1),
-            )
+            baseline_acc = concept_model_accuracy(models[model_name], test_loader)
             random_concepts_acc = test_random_concepts(
-                models[model_name], train_loader, test_loader,
-                residual_dim=RESIDUAL_DIM, num_classes=OUTPUT_DIM,
-            )
+                models[model_name], test_loader, RESIDUAL_DIM)
             random_residual_acc = test_random_residual(
-                models[model_name], train_loader, test_loader,
-                residual_dim=RESIDUAL_DIM, num_classes=OUTPUT_DIM,
-            )
+                models[model_name], test_loader, RESIDUAL_DIM)
             baseline_results.append(1 - baseline_acc)
             random_concepts_results.append(1 - random_concepts_acc)
             random_residual_results.append(1 - random_residual_acc)
