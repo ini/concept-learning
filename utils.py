@@ -65,6 +65,7 @@ def make_ffn(
     output_dim: int,
     hidden_dim: int = 256,
     num_hidden_layers: int = 2,
+    flatten_input: bool = False,
     output_activation: nn.Module = nn.Identity()) -> nn.Module:
     """
     Create a feedforward network.
@@ -85,8 +86,9 @@ def make_ffn(
         hidden_layers.append(nn.LazyLinear(hidden_dim))
         hidden_layers.append(nn.ReLU())
 
+    pre_input_layer = nn.Flatten() if flatten_input else nn.Identity()
     return nn.Sequential(
-        nn.Flatten(), *hidden_layers, nn.LazyLinear(output_dim), output_activation)
+        pre_input_layer, *hidden_layers, nn.LazyLinear(output_dim), output_activation)
 
 def train_multiclass_classification(
     model: nn.Module,

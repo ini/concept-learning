@@ -19,8 +19,6 @@ from utils import (
     train_multiclass_classification,
 )
 
-from mod import differential_entropy
-
 
 
 def train_bottleneck_joint(
@@ -234,20 +232,6 @@ def train(
     )
     trained_models.append(model)
 
-    # With minimum entropy bottleneck
-    model = make_bottleneck_model_fn(residual_dim=residual_dim)
-    train_bottleneck_joint(
-        model, train_loader,
-        test_loader=test_loader,
-        residual_loss_fn=lambda r, c: 10 * differential_entropy(torch.cat([r, c], dim=-1)).exp(),
-        #residual_loss_fn=lambda r, c: differential_entropy(c).exp(),
-        alpha=bottleneck_alpha,
-        beta=bottleneck_beta,
-        save_path=save_dir / 'min_entropy.pt',
-        **kwargs,
-    )
-    trained_models.append(model)
-
     open(save_dir / '.done', 'a').close()
     return trained_models
 
@@ -291,9 +275,5 @@ def load_models(
     models['whitened_residual'] = make_whitening_model_fn(residual_dim=residual_dim)
     models['whitened_residual'].load_state_dict(
         torch.load(load_dir / 'whitened_residual.pt'))
-    
-    models['min_entropy'] = make_bottleneck_model_fn(residual_dim=residual_dim)
-    models['min_entropy'].load_state_dict(
-        torch.load(load_dir / 'min_entropy.pt'))
 
     return models

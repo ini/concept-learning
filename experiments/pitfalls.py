@@ -3,81 +3,32 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn as nn
 
-from torch.utils.data import DataLoader
-
-from datasets.other import MNISTModulo
-from datasets.pitfalls import DatasetC, DatasetD, DatasetE, MNIST_45
 from evaluation import (
     test_negative_interventions,
     test_random_concepts,
     test_random_residual,
 )
+from loader import get_data_loaders
 from models import ConceptBottleneckModel, ConceptWhiteningModel
 from train import train, load_models
 from utils import make_ffn, concept_model_accuracy
 
 
 
-### Data
-
-train_loader = DataLoader(MNISTModulo(train=True), batch_size=64, shuffle=True)
-test_loader = DataLoader(MNISTModulo(train=False), batch_size=64, shuffle=False)
-
-OUTPUT_DIM = 10
-CONCEPT_DIM = 5
-RESIDUAL_DIM = 1 # if applicable
-
-# train_loader = DataLoader(DatasetC(num_concepts=100, train=True), batch_size=64, shuffle=True)
-# test_loader = DataLoader(DatasetC(num_concepts=100, train=False), batch_size=64, shuffle=False)
-
-# OUTPUT_DIM = 2
-# CONCEPT_DIM = 100
-# RESIDUAL_DIM = 1 # if applicable
-
-# train_loader = DataLoader(DatasetD(train=True), batch_size=64, shuffle=True)
-# test_loader = DataLoader(DatasetD(train=False), batch_size=64, shuffle=False)
-
-# OUTPUT_DIM = 2
-# CONCEPT_DIM = 3
-# RESIDUAL_DIM = 1 # if applicable
-
-# train_loader = DataLoader(DatasetE(train=True), batch_size=64, shuffle=True)
-# test_loader = DataLoader(DatasetE(train=False), batch_size=64, shuffle=False)
-
-# OUTPUT_DIM = 2
-# CONCEPT_DIM = 3
-# RESIDUAL_DIM = 1 # if applicable
-
-# train_loader = DataLoader(MNIST_45(train=True), batch_size=64, shuffle=True)
-# test_loader = DataLoader(MNIST_45(train=False), batch_size=64, shuffle=False)
-
-# OUTPUT_DIM = 2
-# CONCEPT_DIM = 2
-# RESIDUAL_DIM = 1 # if applicable
-
-
-
-### Models
-
-def make_bottleneck_model(residual_dim):
-    return ConceptBottleneckModel(
-        concept_network=make_ffn(CONCEPT_DIM, output_activation=nn.Sigmoid()),
-        residual_network=make_ffn(residual_dim),
-        target_network=make_ffn(OUTPUT_DIM),
-    )
-
-def make_whitening_model(residual_dim):
-    bottleneck_dim = CONCEPT_DIM + residual_dim
-    return ConceptWhiteningModel(
-        base_network=make_ffn(bottleneck_dim),
-        target_network=make_ffn(OUTPUT_DIM),
-        bottleneck_dim=bottleneck_dim,
-    )
-
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--dataset',
+        type=str,
+        default='pitfalls_random_concepts',
+        choices=[
+            'pitfalls_random_concepts',
+            'pitfalls_mnist_without_45',
+            'pitfalls_mnist_123456',
+            'pitfalls_synthetic',
+        ],
+        help='Dataset to use',
+    )
     parser.add_argument(
         '--mode',
         type=str,
@@ -85,6 +36,8 @@ if __name__ == '__main__':
         choices=['train', 'intervention', 'random'],
         help='Mode to run',
     )
+    parser.add_argument(
+        '--device', type=str, default='cpu', help='Device to use')
     parser.add_argument(
         '--save-dir', type=str, help='Directory to save models to')
     parser.add_argument(
@@ -98,6 +51,39 @@ if __name__ == '__main__':
     parser.add_argument(
         '--beta', type=float, default=1.0, help='Weight for residual loss')
     args = parser.parse_args()
+
+
+
+    ### Data
+
+    train_loader, test_loader, CONCEPT_DIM, NUM_CLASSES = get_data_loaders(
+        args.dataset, batch_size=64)
+
+
+
+    ### Models
+
+    def make_bottleneck_model(residual_dim):
+        return ConceptBottleneckModel(
+            concept_network=make_ffn(
+                CONCEPT_DIM, flatten_input=True, output_activation=nn.Sigmoid()),
+            residual_network=make_ffn(residual_dim, flatten_input=True),
+            target_network=make_ffn(NUM_CLASSES),
+        ).to(args.device)
+
+    def make_whitening_model(residual_dim):
+        bottleneck_dim = CONCEPT_DIM + residual_dim
+        return ConceptWhiteningModel(
+            base_network=make_ffn(bottleneck_dim, flatten_input=True),
+            target_network=make_ffn(NUM_CLASSES),
+            bottleneck_dim=bottleneck_dim,
+        ).to(args.device)
+
+
+
+    ### Experiments
+
+    RESIDUAL_DIM = 1 # if applicable
 
     if args.mode == 'train':
         models = train(
