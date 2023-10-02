@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import torch
 
 from torch.utils.data import Dataset
@@ -20,7 +22,7 @@ class MNIST_45(Dataset):
         mnist = datasets.MNIST(
             root='./data', train=train, transform=transform, download=True)
 
-        # Filter all digits except 4 and 5
+        # Use all digits except 4 and 5
         idx = torch.cat([
             torch.argwhere(mnist.targets == digit)[:, 0]
             for digit in set(range(10)) - {4, 5}

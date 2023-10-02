@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 
+from copy import deepcopy
 from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -9,10 +12,10 @@ from typing import Iterable
 from club import CLUB
 from models import ConceptBottleneckModel, ConceptWhiteningModel
 from utils import (
-    accuracy,
+    concept_model_accuracy,
     cross_correlation,
     to_device,
-    train_multiclass_classification,
+    Random,
 )
 
 
@@ -101,53 +104,70 @@ def test_negative_interventions(
 
         return num_correct / num_samples
 
-def test_residual_to_label(
+def test_random_concepts(
     model: ConceptBottleneckModel | ConceptWhiteningModel,
-    train_loader: DataLoader,
-    test_loader: DataLoader,
-    residual_dim: int,
-    num_classes: int):
+    data_loader: DataLoader,
+    residual_dim: int) -> float:
     """
-    Test the accuracy of a model trained to predict the label from the residual only.
+    Test the accuracy of a model with random concept values.
 
     Parameters
     ----------
     model : ConceptBottleneckModel or ConceptWhiteningModel
         Model to evaluate
-    train_loader : DataLoader
+    data_loader : DataLoader
         Train data loader
-    test_loader : DataLoader
-        Test data loader
     residual_dim : int
         Dimension of the residual vector
-    num_classes : int
-        Number of label classes
     """
-    model.eval()
-    residual_to_label_model = nn.Sequential(
-        nn.Linear(residual_dim, 256), nn.ReLU(),
-        nn.Linear(256, 256), nn.ReLU(),
-        nn.Linear(256, num_classes),
-    ).to(next(model.parameters()).device)
+    class Invert(nn.Module):
+        def forward(self, x):
+            return 1 - x
 
+    new_model = deepcopy(model)
     if isinstance(model, ConceptBottleneckModel):
-        def preprocess_fn(batch):
-            with torch.no_grad():
-                (X, c), y = batch
-                _, residual, _ = model(X)
-                return residual, y
+        new_model.concept_network = nn.Sequential(
+            new_model.concept_network,
+            #Invert(),
+            Random(random_fn=lambda x: torch.randint_like(x, 2)),
+        )
     elif isinstance(model, ConceptWhiteningModel):
-        def preprocess_fn(batch):
-            with torch.no_grad():
-                (X, c), y = batch
-                residual = model.activations(X)[:, c.shape[1]:]
-                return residual, y
+        new_model.bottleneck_layer = nn.Sequential(
+            new_model.bottleneck_layer,
+            Random(indices=slice(residual_dim)),
+        )
 
-    print('Training ...')
-    train_multiclass_classification(
-        residual_to_label_model, train_loader, preprocess_fn=preprocess_fn)
-    return accuracy(
-        residual_to_label_model, test_loader, preprocess_fn=preprocess_fn)
+    acc = concept_model_accuracy(new_model, data_loader)
+    print('Test Classification Accuracy (Random Concepts):', acc)
+    return acc
+
+def test_random_residual(
+    model: ConceptBottleneckModel | ConceptWhiteningModel,
+    data_loader: DataLoader,
+    residual_dim: int) -> float:
+    """
+    Test the accuracy of a model with random residual.
+
+    Parameters
+    ----------
+    model : ConceptBottleneckModel or ConceptWhiteningModel
+        Model to evaluate
+    data_loader : DataLoader
+        Data to evaluate on
+    residual_dim : int
+        Dimension of the residual vector
+    """
+    new_model = deepcopy(model)
+    if isinstance(model, ConceptBottleneckModel):
+        new_model.residual_network = nn.Sequential(
+            new_model.residual_network, Random())
+    elif isinstance(model, ConceptWhiteningModel):
+        new_model.bottleneck_layer = nn.Sequential(
+            new_model.bottleneck_layer, Random(indices=slice(-residual_dim, None)))
+
+    acc = concept_model_accuracy(new_model, data_loader)
+    print('Test Classification Accuracy (Random Residual):', acc)
+    return acc
 
 def test_concept_residual_correlation(
     model: ConceptBottleneckModel | ConceptWhiteningModel,

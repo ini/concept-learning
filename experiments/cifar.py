@@ -1,151 +1,160 @@
+import argparse
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 import torch.nn as nn
 
-from pathlib import Path
 from torchvision.models.resnet import resnet18, ResNet18_Weights
 
-from data import get_data_loaders
 from evaluation import (
     test_negative_interventions,
-    test_residual_to_label,
-    test_concept_residual_correlation,
+    test_random_concepts,
+    test_random_residual,
 )
+from loader import get_data_loaders
 from models import ConceptBottleneckModel, ConceptWhiteningModel
-from train import train
-
-
-
-### Data
-
-train_loader, test_loader, CONCEPT_DIM = get_data_loaders('cifar100', batch_size=128)
-OUTPUT_DIM = 100
-
-
-
-### Models
-
-def make_ffn(input_dim, output_dim, hidden_dim=256):
-    return nn.Sequential(
-        nn.Flatten(),
-        nn.Linear(input_dim, hidden_dim), nn.ReLU(),
-        nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-        nn.Linear(hidden_dim, output_dim),
-    )
-
-def make_resnet(output_dim):
-    resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
-    resnet.fc = nn.Linear(resnet.fc.in_features, output_dim)
-    return resnet
-
-def make_bottleneck_model(residual_dim):
-    return ConceptBottleneckModel(
-        concept_network=nn.Sequential(make_resnet(CONCEPT_DIM), nn.Sigmoid()),
-        residual_network=make_resnet(residual_dim),
-        target_network=make_ffn(CONCEPT_DIM + residual_dim, OUTPUT_DIM),
-    ).to('cuda')
-
-def make_whitening_model(residual_dim):
-    bottleneck_dim = CONCEPT_DIM + residual_dim
-    return ConceptWhiteningModel(
-        base_network=make_resnet(bottleneck_dim),
-        target_network=make_ffn(bottleneck_dim, OUTPUT_DIM),
-        bottleneck_dim=bottleneck_dim,
-    ).to('cuda')
-
-def load_models(load_dir: str | Path) -> list[nn.Module]:
-    models = []
-    load_dir = Path(load_dir)
-    print(f'Loading models from {load_dir} ...')
-
-    models.append(make_bottleneck_model(residual_dim=0))
-    models[-1].load_state_dict(
-        torch.load(load_dir / 'no_residual.pt'))
-    
-    models.append(make_bottleneck_model(residual_dim=32))
-    models[-1].load_state_dict(
-        torch.load(load_dir / 'latent_residual.pt'))
-    
-    models.append(make_bottleneck_model(residual_dim=32))
-    models[-1].load_state_dict(
-        torch.load(load_dir / 'decorrelated_residual.pt'))
-    
-    models.append(make_bottleneck_model(residual_dim=32))
-    models[-1].load_state_dict(
-        torch.load(load_dir / 'mi_residual.pt'))
-    
-    models.append(make_whitening_model(residual_dim=32))
-    models[-1].load_state_dict(
-        torch.load(load_dir / 'whitened_residual.pt'))
-
-    return models
+from train import train, load_models
+from utils import make_ffn, concept_model_accuracy
 
 
 
 if __name__ == '__main__':
-    # TODO: Add argparse
-    mode = 'train'
-    load_dir = None # 'saved_models/CIFAR100/2023-09-28_01_56_41/'
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--mode',
+        type=str,
+        default='train',
+        choices=['train', 'intervention', 'random'],
+        help='Mode to run',
+    )
+    parser.add_argument(
+        '--device', type=str, default='cpu', help='Device to use')
+    parser.add_argument(
+        '--save-dir', type=str, help='Directory to save models to')
+    parser.add_argument(
+        '--load-dir', type=str, help='Directory to load saved models from')
+    parser.add_argument(
+        '--num-epochs', type=int, default=100, help='Number of epochs to train for')
+    parser.add_argument(
+        '--lr', type=float, default=1e-4, help='Learning rate')
+    parser.add_argument(
+        '--alpha', type=float, default=1.0, help='Weight for concept loss')
+    parser.add_argument(
+        '--beta', type=float, default=1.0, help='Weight for residual loss')
+    args = parser.parse_args()
 
-    if mode == 'train':
-        train(
+
+
+    ### Data
+
+    train_loader, test_loader, CONCEPT_DIM, NUM_CLASSES = get_data_loaders(
+        'cifar100', batch_size=64)
+    
+
+
+    ### Models
+
+    def make_resnet(output_dim):
+        resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        resnet.fc = nn.Linear(resnet.fc.in_features, output_dim)
+        return resnet
+
+    def make_bottleneck_model(residual_dim):
+        return ConceptBottleneckModel(
+            concept_network=nn.Sequential(make_resnet(CONCEPT_DIM), nn.Sigmoid()),
+            residual_network=make_resnet(residual_dim),
+            target_network=make_ffn(NUM_CLASSES),
+        ).to(args.device)
+
+    def make_whitening_model(residual_dim):
+        bottleneck_dim = CONCEPT_DIM + residual_dim
+        return ConceptWhiteningModel(
+            base_network=make_resnet(bottleneck_dim),
+            target_network=make_ffn(NUM_CLASSES),
+            bottleneck_dim=bottleneck_dim,
+        ).to(args.device)
+
+
+
+    ### Experiments
+
+    RESIDUAL_DIM = 32 # if applicable
+
+    if args.mode == 'train':
+        models = train(
             make_bottleneck_model_fn=make_bottleneck_model,
             make_whitening_model_fn=make_whitening_model,
             concept_dim=CONCEPT_DIM,
-            residual_dim=32,
+            residual_dim=RESIDUAL_DIM,
             train_loader=train_loader,
             test_loader=test_loader,
             save_dir='./saved_models',
             save_interval=10,
-            lr=1e-4,
-            num_epochs=100,
-            bottleneck_alpha=1.0,
-            bottleneck_beta=1.0,
+            lr=args.lr,
+            num_epochs=args.num_epochs,
+            bottleneck_alpha=args.alpha,
+            bottleneck_beta=args.beta,
             mi_estimator_hidden_dim=256,
             mi_optimizer_lr=0.001,
             whitening_alignment_frequency=20,
         )
 
-    elif mode == 'intervention':
-        results = []
-        models = load_models(load_dir)
-        for model in models:
+    if args.mode == 'intervention':
+        results = {}
+        models = load_models(
+            args.load_dir, make_bottleneck_model, make_whitening_model, RESIDUAL_DIM)
+        for model_name, model in models.items():
             accuracies = test_negative_interventions(
                 model, test_loader, CONCEPT_DIM,
                 num_interventions=range(0, CONCEPT_DIM + 1),
             )
-            results.append(1 - np.array(accuracies))
+            results[model_name] = 1 - np.array(accuracies)
 
         # Plot
         x = list(range(0, CONCEPT_DIM + 1))
-        plt.plot(x, results[0], label='No residual')
-        plt.plot(x, results[1], label='Latent residual')
-        plt.plot(x, results[2], label='Decorrelated residual')
-        plt.plot(x, results[3], label='MI-minimized residual')
-        plt.plot(x, results[4], label='Concept-whitened residual')
+        for model_name, results in results.items():
+            plt.plot(x, results, label=model_name)
         plt.xlabel('# of Concepts Intervened')
         plt.ylabel('Classification Error')
         plt.legend()
         plt.show()
 
-    elif mode == 'residual_to_label':
-        results = []
-        models = load_models(load_dir)[1:]
-        for model in models:
-            accuracies = test_residual_to_label(
-                model,
-                train_loader,
-                test_loader,
-                residual_dim=32,
-                num_classes=OUTPUT_DIM,
-            )
-            results.append(1 - np.array(accuracies))
+    elif args.mode == 'random':
+        baseline_results, random_concepts_results, random_residual_results = [], [], []
+        models = load_models(
+            args.load_dir, make_bottleneck_model, make_whitening_model, RESIDUAL_DIM)
+        for model_name in sorted(models.keys()):
+            print('\n', 'Model:', model_name)
+            baseline_acc = concept_model_accuracy(models[model_name], test_loader)
+            random_concepts_acc = test_random_concepts(
+                models[model_name], test_loader, RESIDUAL_DIM)
+            random_residual_acc = test_random_residual(
+                models[model_name], test_loader, RESIDUAL_DIM)
+            baseline_results.append(1 - baseline_acc)
+            random_concepts_results.append(1 - random_concepts_acc)
+            random_residual_results.append(1 - random_residual_acc)
 
         # Plot
-        residual_types = ['Latent', 'Decorrelated', 'MI-Minimized', 'Concept-Whitened']
-        plt.bar(residual_types, results)
+        plt.bar(
+            np.arange(len(models)) - 0.25,
+            baseline_results,
+            label='Baseline',
+            width=0.25,
+        )
+        plt.bar(
+            np.arange(len(models)),
+            random_concepts_results,
+            label='Random Concepts',
+            width=0.25,
+        )
+        plt.bar(
+            np.arange(len(models)) + 0.25,
+            random_residual_results,
+            width=0.25,
+            label='Random Residual',
+        )
+        plt.xticks(np.arange(len(models)), sorted(models.keys()))
         plt.ylabel('Classification Error')
+        plt.legend()
         plt.show()
 
     elif mode == 'cross_correlation':

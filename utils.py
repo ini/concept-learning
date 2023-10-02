@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,22 +9,86 @@ from pathlib import Path
 from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from typing import Any
-from typing import Callable
+from typing import Any, Callable, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from models import ConceptModel
 
 
 
-def to_device(x: Any, device: torch.device | str):
+class Random(nn.Module):
     """
-    Move a tensor or collection of tensors to a device.
+    Replaces input data with random noise.
     """
-    if isinstance(x, Tensor):
-        return x.to(device)
-    elif isinstance(x, tuple):
-        return tuple(to_device(xi, device) for xi in x)
-    elif isinstance(x, list):
-        return [to_device(xi, device) for xi in x]
-    return x
+
+    def __init__(
+        self, random_fn=torch.randn_like, indices: slice | Sequence[int] = slice(None)):
+        """
+        Parameters
+        ----------
+        random_fn : Callable(Tensor) -> Tensor
+            Function to generate random noise
+        indices : slice or Sequence[int]
+            Feature indices to replace with random noise
+        """
+        super().__init__()
+        self.random_fn = random_fn
+        self.indices = indices
+
+    def forward(self, x: Tensor):
+        x[..., self.indices] = self.random_fn(x[..., self.indices])
+        return x
+
+
+def to_device(
+    data: Tensor | tuple[Tensor] | list[Tensor], device: torch.device | str) -> Any:
+    """
+    Move a tensor or collection of tensors to the given device.
+
+    Parameters
+    ----------
+    data : Tensor or tuple[Tensor] or list[Tensor]
+        Tensor or collection of tensors
+    device : torch.device or str
+        Device to move the tensor(s) to
+    """
+    if isinstance(data, Tensor):
+        return data.to(device)
+    elif isinstance(data, tuple):
+        return tuple(to_device(x, device) for x in data)
+    elif isinstance(data, list):
+        return [to_device(x, device) for x in data]
+
+    raise ValueError(f'Unsupported data type: {type(data)}')
+
+def make_ffn(
+    output_dim: int,
+    hidden_dim: int = 256,
+    num_hidden_layers: int = 2,
+    flatten_input: bool = False,
+    output_activation: nn.Module = nn.Identity()) -> nn.Module:
+    """
+    Create a feedforward network.
+
+    Parameters
+    ----------
+    output_dim : int
+        Dimension of the output
+    hidden_dim : int
+        Dimension of the hidden layers
+    num_hidden_layers : int
+        Number of hidden layers
+    output_activation : nn.Module
+        Activation function for the output layer
+    """
+    hidden_layers = []
+    for _ in range(num_hidden_layers):
+        hidden_layers.append(nn.LazyLinear(hidden_dim))
+        hidden_layers.append(nn.ReLU())
+
+    pre_input_layer = nn.Flatten() if flatten_input else nn.Identity()
+    return nn.Sequential(
+        pre_input_layer, *hidden_layers, nn.LazyLinear(output_dim), output_activation)
 
 def train_multiclass_classification(
     model: nn.Module,
@@ -130,10 +196,28 @@ def accuracy(
 
     return num_correct / num_samples
 
-def concepts_preprocess_fn(
-    batch: tuple[tuple[Tensor, Tensor], Tensor]) -> tuple[Tensor, Tensor]:
-    (X, concepts), y = batch
-    return X, y
+def concept_model_accuracy(model: 'ConceptModel', data_loader: DataLoader):
+    """
+    Compute accuracy for a concept model on the given data.
+
+    Parameters
+    ----------
+    model : ConceptModel
+        Model to evaluate
+    data_loader : DataLoader
+        Data to evaluate on
+    """
+    def predict_fn(outputs):
+        if isinstance(outputs, tuple):
+            return outputs[2].argmax(dim=-1)
+        else:
+            return outputs.argmax(dim=-1)
+
+    return accuracy(
+        model, data_loader,
+        preprocess_fn=lambda batch: (batch[0][0], batch[1]),
+        predict_fn=predict_fn,
+    )
 
 def cross_correlation(X: Tensor, Y: Tensor):
     """
@@ -171,18 +255,21 @@ def get_cw_callback_fn(
     alignment_frequency : int
         Frequency at which to align the concept whitening layer (i.e. every N batches)
     """
-    print('Creating concept loaders for whitening ...')
-    concept_loaders = [
-        torch.utils.data.DataLoader(
-            dataset=[
-                x for ((x, concepts), y) in data_loader.dataset
-                if concepts[concept_index] == 1 # assumes binary concepts
-            ],
-            batch_size=64,
-            shuffle=True,
-        )
-        for concept_index in range(concept_dim)
-    ]
+    try:
+        concept_loaders = [
+            torch.utils.data.DataLoader(
+                dataset=[
+                    x for ((x, concepts), y) in data_loader.dataset
+                    if concepts[concept_index] == 1 # assumes binary concepts
+                ],
+                batch_size=64,
+                shuffle=True,
+            )
+            for concept_index in range(concept_dim)
+        ]
+    except ValueError as e:
+        print('Error creating concept loaders:', e)
+        return lambda model, epoch, batch_index, batch: None
 
     def align_concepts(model, epoch, batch_index, batch):
         if (batch_index + 1) % alignment_frequency == 0:

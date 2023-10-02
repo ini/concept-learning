@@ -1,12 +1,22 @@
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 
+from abc import ABC
 from lib.iterative_normalization import IterNormRotation
 from torch import Tensor
 
 
 
-class ConceptBottleneckModel(nn.Module):
+class ConceptModel(nn.Module, ABC):
+    """
+    Abstract base class for concept models.
+    """
+    pass
+
+
+class ConceptBottleneckModel(ConceptModel):
     """
     Concept bottleneck model.
     """
@@ -50,12 +60,12 @@ class ConceptBottleneckModel(nn.Module):
             concept_preds = self.concept_network(x)
 
         residual = self.residual_network(x)
-        bottleneck = torch.cat([concept_preds.detach(), residual], dim=-1)
+        bottleneck = torch.cat([concept_preds, residual], dim=-1)
         target_preds = self.target_network(bottleneck)
         return concept_preds, residual, target_preds
 
 
-class ConceptWhiteningModel(nn.Module):
+class ConceptWhiteningModel(ConceptModel):
     """
     Concept whitening model.
     """

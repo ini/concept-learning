@@ -3,8 +3,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn as nn
 
-from torchvision.models.resnet import resnet18, ResNet18_Weights
-
 from evaluation import (
     test_negative_interventions,
     test_random_concepts,
@@ -20,6 +18,18 @@ from utils import make_ffn, concept_model_accuracy
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        '--dataset',
+        type=str,
+        default='pitfalls_random_concepts',
+        choices=[
+            'pitfalls_random_concepts',
+            'pitfalls_mnist_without_45',
+            'pitfalls_mnist_123456',
+            'pitfalls_synthetic',
+        ],
+        help='Dataset to use',
+    )
+    parser.add_argument(
         '--mode',
         type=str,
         default='train',
@@ -33,7 +43,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--load-dir', type=str, help='Directory to load saved models from')
     parser.add_argument(
-        '--num-epochs', type=int, default=200, help='Number of epochs to train for')
+        '--num-epochs', type=int, default=10, help='Number of epochs to train for')
     parser.add_argument(
         '--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument(
@@ -47,28 +57,24 @@ if __name__ == '__main__':
     ### Data
 
     train_loader, test_loader, CONCEPT_DIM, NUM_CLASSES = get_data_loaders(
-        'cub', batch_size=64)
-    
+        args.dataset, batch_size=64)
+
 
 
     ### Models
 
-    def make_resnet(output_dim):
-        resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
-        resnet.fc = nn.Linear(resnet.fc.in_features, output_dim)
-        return resnet
-
     def make_bottleneck_model(residual_dim):
         return ConceptBottleneckModel(
-            concept_network=nn.Sequential(make_resnet(CONCEPT_DIM), nn.Sigmoid()),
-            residual_network=make_resnet(residual_dim),
+            concept_network=make_ffn(
+                CONCEPT_DIM, flatten_input=True, output_activation=nn.Sigmoid()),
+            residual_network=make_ffn(residual_dim, flatten_input=True),
             target_network=make_ffn(NUM_CLASSES),
         ).to(args.device)
 
     def make_whitening_model(residual_dim):
         bottleneck_dim = CONCEPT_DIM + residual_dim
         return ConceptWhiteningModel(
-            base_network=make_resnet(bottleneck_dim),
+            base_network=make_ffn(bottleneck_dim, flatten_input=True),
             target_network=make_ffn(NUM_CLASSES),
             bottleneck_dim=bottleneck_dim,
         ).to(args.device)
@@ -77,7 +83,7 @@ if __name__ == '__main__':
 
     ### Experiments
 
-    RESIDUAL_DIM = 32 # if applicable
+    RESIDUAL_DIM = 1 # if applicable
 
     if args.mode == 'train':
         models = train(
