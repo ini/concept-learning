@@ -16,11 +16,11 @@ class MNIST_45(Dataset):
     (https://arxiv.org/pdf/2106.13314.pdf).
     """
 
-    def __init__(self, train: bool = True):
+    def __init__(self, root: str, train: bool = True):
         transform = transforms.Compose(
             [transforms.ToTensor(), transforms.Normalize(0.5, 0.5)])
         mnist = datasets.MNIST(
-            root='./data', train=train, transform=transform, download=True)
+            root=root, train=train, transform=transform, download=True)
 
         # Use all digits except 4 and 5
         idx = torch.cat([
@@ -44,11 +44,11 @@ class DatasetC(Dataset):
     Appendix C (https://arxiv.org/pdf/2106.13314.pdf).
     """
     
-    def __init__(self, num_concepts: int, train: bool = True):
+    def __init__(self, root: str, num_concepts: int, train: bool = True):
         transform = transforms.Compose(
             [transforms.ToTensor(), transforms.Normalize(0.5, 0.5)])
         mnist = datasets.MNIST(
-            root='./data', train=train, transform=transform, download=True)
+            root=root, train=train, transform=transform, download=True)
 
         # Filter digits (0, 1, 6, 7) and select 500 samples per digit
         idx = torch.cat([
@@ -103,11 +103,11 @@ class DatasetE(Dataset):
     Appendix E (https://arxiv.org/pdf/2106.13314.pdf).
     """
 
-    def __init__(self, train: bool = True):
+    def __init__(self, root: str, train: bool = True):
         transform = transforms.Compose(
             [transforms.ToTensor(), transforms.Normalize(0.5, 0.5)])
         mnist = datasets.MNIST(
-            root='./data', train=train, transform=transform, download=True)
+            root=root, train=train, transform=transform, download=True)
 
         # Filter digits 1-6
         idx = torch.cat([

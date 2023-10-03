@@ -7,7 +7,7 @@ from copy import deepcopy
 from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from club import CLUB
 from models import ConceptBottleneckModel, ConceptWhiteningModel
@@ -17,6 +17,31 @@ from utils import (
     to_device,
     Random,
 )
+
+
+
+class Random(nn.Module):
+    """
+    Replaces input data with random noise.
+    """
+
+    def __init__(
+        self, random_fn=torch.randn_like, indices: slice | Sequence[int] = slice(None)):
+        """
+        Parameters
+        ----------
+        random_fn : Callable(Tensor) -> Tensor
+            Function to generate random noise
+        indices : slice or Sequence[int]
+            Feature indices to replace with random noise
+        """
+        super().__init__()
+        self.random_fn = random_fn
+        self.indices = indices
+
+    def forward(self, x: Tensor):
+        x[..., self.indices] = self.random_fn(x[..., self.indices])
+        return x
 
 
 

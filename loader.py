@@ -9,15 +9,19 @@ from datasets.pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 
 def get_data_loaders(
     name: str = 'cifar100',
-    batch_size: int = 64,
-    data_dir: str = "./data") -> tuple[DataLoader, DataLoader, int, int]:
+    data_dir: str = './data',
+    batch_size: int = 64) -> tuple[DataLoader, DataLoader, DataLoader, int, int]:
     """
     Get data loaders for the specified dataset.
+
+    TODO: MNIST & CIFAR validation sets
 
     Parameters
     ----------
     name : str
         Name of the dataset
+    data_dir : str
+        Directory where data is stored (or will be downloaded to)
     batch_size : int
         Batch size
 
@@ -25,6 +29,8 @@ def get_data_loaders(
     -------
     train_loader : DataLoader
         Train data loader
+    val_loader : DataLoader
+        Validation data loader
     test_loader : DataLoader
         Test data loader
     concept_dim : int
@@ -34,20 +40,27 @@ def get_data_loaders(
     """
     if name == 'pitfalls_mnist_without_45':
         concept_dim, num_classes = 2, 2
-        train_dataset, test_dataset = MNIST_45(train=True), MNIST_45(train=False)
+        train_dataset = MNIST_45(root=data_dir, train=True)
+        val_dataset = MNIST_45(root=data_dir, train=False)
+        test_dataset = MNIST_45(root=data_dir, train=False)
 
     elif name == 'pitfalls_random_concepts':
         concept_dim, num_classes = 100, 2
-        train_dataset = DatasetC(num_concepts=100, train=True)
-        test_dataset = DatasetC(num_concepts=100, train=False)
+        train_dataset = DatasetC(root=data_dir, num_concepts=100, train=True)
+        val_dataset = DatasetC(root=data_dir, num_concepts=100, train=False)
+        test_dataset = DatasetC(root=data_dir, num_concepts=100, train=False)
 
     elif name == 'pitfalls_synthetic':
         concept_dim, num_classes = 3, 2
-        train_dataset, test_dataset = DatasetD(train=True), DatasetD(train=False)
+        train_dataset = DatasetD(train=True)
+        val_dataset = DatasetD(train=False)
+        test_dataset = DatasetD(train=False)
 
     elif name == 'pitfalls_mnist_123456':
         concept_dim, num_classes = 3, 2
-        train_dataset, test_dataset = DatasetE(train=True), DatasetE(train=False)
+        train_dataset = DatasetE(root=data_dir, train=True)
+        val_dataset = DatasetE(root=data_dir, train=False)
+        test_dataset = DatasetE(root=data_dir, train=False)
 
     elif name == 'cifar100':
         concept_dim, num_classes = 20, 100
@@ -63,6 +76,8 @@ def get_data_loaders(
         ])
         train_dataset = CIFAR100(
             root=data_dir, train=True, transform=transform_train, download=True)
+        val_dataset = CIFAR100(
+            root=data_dir, train=False, transform=transform_test, download=True)
         test_dataset = CIFAR100(
             root=data_dir, train=False, transform=transform_test, download=True)
 
@@ -82,11 +97,14 @@ def get_data_loaders(
         ])
         train_dataset = CUB(
             root=data_dir, split='train', transform=transform_train, download=True)
+        val_dataset = CUB(
+            root=data_dir, split='val', transform=transform_test, download=True)
         test_dataset = CUB(
             root=data_dir, split='test', transform=transform_test, download=True)
 
     # Make data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    return train_loader, test_loader, concept_dim, num_classes
+    return train_loader, val_loader, test_loader, concept_dim, num_classes
