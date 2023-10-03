@@ -15,8 +15,6 @@ def make_resnet(output_dim):
 
 def get_config(**kwargs) -> dict:
     config = {
-        'save_dir': './results',
-        'data_dir': './data',
         'dataset': 'cifar100',
         'model_type': ray.tune.grid_search([
             'no_residual',
@@ -28,12 +26,12 @@ def get_config(**kwargs) -> dict:
         'residual_dim': 32,
         'num_epochs': 100,
         'lr': 1e-4,
+        'batch_size': 64,
         'alpha': 1.0,
         'beta': 1.0,
         'mi_estimator_hidden_dim': 256,
         'mi_optimizer_lr': 1e-3,
         'whitening_alignment_frequency': 20,
-        'batch_size': 64,
         'checkpoint_frequency': 5,
     }
     config.update(kwargs)
