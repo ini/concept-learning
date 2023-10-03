@@ -7,9 +7,30 @@ from utils import make_mlp
 
 
 
+def make_bottleneck_model(config):
+    return ConceptBottleneckModel(
+        concept_network=make_mlp(
+            config['concept_dim'],
+            flatten_input=True,
+            output_activation=nn.Sigmoid(),
+        ),
+        residual_network=make_mlp(config['residual_dim'], flatten_input=True),
+        target_network=make_mlp(config['num_classes']),
+    )
+
+def make_whitening_model(config):
+    bottleneck_dim = config['concept_dim'] + config['residual_dim']
+    return ConceptWhiteningModel(
+        base_network=make_mlp(bottleneck_dim, flatten_input=True),
+        target_network=make_mlp(config['num_classes']),
+        bottleneck_dim=bottleneck_dim,
+    )
+
 def get_config(**config_override) -> dict:
     config = {
         'dataset': 'pitfalls_random_concepts',
+        'make_bottleneck_model_fn': make_bottleneck_model,
+        'make_whitening_model_fn': make_whitening_model,
         'model_type': ray.tune.grid_search([
             'no_residual',
             'latent_residual',
@@ -30,27 +51,8 @@ def get_config(**config_override) -> dict:
     }
     config.update(config_override)
 
-    _, _, _, config['concept_dim'], num_classes = get_data_loaders(
+    _, _, _, config['concept_dim'], config['num_classes'] = get_data_loaders(
         config['dataset'], data_dir=config['data_dir'], batch_size=config['batch_size'])
-
-    def make_bottleneck_model(residual_dim):
-        return ConceptBottleneckModel(
-            concept_network=make_mlp(
-                config['concept_dim'],
-                flatten_input=True,
-                output_activation=nn.Sigmoid(),
-            ),
-            residual_network=make_mlp(residual_dim, flatten_input=True),
-            target_network=make_mlp(num_classes),
-        )
-
-    def make_whitening_model(residual_dim):
-        bottleneck_dim = config['concept_dim'] + residual_dim
-        return ConceptWhiteningModel(
-            base_network=make_mlp(bottleneck_dim, flatten_input=True),
-            target_network=make_mlp(num_classes),
-            bottleneck_dim=bottleneck_dim,
-        )
 
     config['make_bottleneck_model_fn'] = make_bottleneck_model
     config['make_whitening_model_fn'] = make_whitening_model

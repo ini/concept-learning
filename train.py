@@ -130,17 +130,17 @@ def train(config: dict):
 
     # No residual
     if config['model_type'] == 'no_residual':
-        model = make_bottleneck_model_fn(residual_dim=0).to(device)
+        model = make_bottleneck_model_fn(dict(config, residual_dim=0)).to(device)
         train_concept_model(model, config)
 
     # With latent residual
     elif config['model_type'] == 'latent_residual':
-        model = make_bottleneck_model_fn(residual_dim=config['residual_dim']).to(device)
+        model = make_bottleneck_model_fn(config).to(device)
         train_concept_model(model, config)
 
     # With decorrelated residual
     elif config['model_type'] == 'decorrelated_residual':
-        model = make_bottleneck_model_fn(residual_dim=config['residual_dim']).to(device)
+        model = make_bottleneck_model_fn(config).to(device)
         train_concept_model(
             model, config,
             residual_loss_fn=lambda r, c: cross_correlation(r, c).square().mean(),
@@ -148,7 +148,7 @@ def train(config: dict):
 
     # With MI-minimized residual
     elif config['model_type'] == 'mi_residual':
-        model = make_bottleneck_model_fn(residual_dim=config['residual_dim']).to(device)
+        model = make_bottleneck_model_fn(config).to(device)
         device = next(model.parameters()).device
         mi_estimator = CLUB(
             config['residual_dim'],
@@ -165,7 +165,7 @@ def train(config: dict):
 
     # With concept-whitened residual
     elif config['model_type'] == 'whitened_residual':
-        model = make_whitening_model_fn(residual_dim=config['residual_dim']).to(device)
+        model = make_whitening_model_fn(config).to(device)
         train_concept_model(model, config)
 
     else:
@@ -202,29 +202,29 @@ if __name__ == '__main__':
         help='Model type',
     )
     parser.add_argument(
-        '--residual_dim', type=int, nargs='+', help='Dimensionality of the residual')
+        '--residual-dim', type=int, nargs='+', help='Dimensionality of the residual')
     parser.add_argument(
-        '--num_epochs', type=int, nargs='+', help='Number of epochs to train for')
+        '--num-epochs', type=int, nargs='+', help='Number of epochs to train for')
     parser.add_argument(
         '--lr', type=float, nargs='+', help='Learning rate')
     parser.add_argument(
-        '--batch_size', type=int, nargs='+', help='Batch size')
+        '--batch-size', type=int, nargs='+', help='Batch size')
     parser.add_argument(
         '--alpha', type=float, nargs='+', help='Weight of concept loss')
     parser.add_argument(
         '--beta', type=float, nargs='+', help='Weight of residual loss')
     parser.add_argument(
-        '--mi_estimator_hidden_dim', type=int, nargs='+',
+        '--mi-estimator-hidden-dim', type=int, nargs='+',
         help='Hidden dimension of the MI estimator',
     )
     parser.add_argument(
-        '--mi_optimizer_lr', type=float, nargs='+',
+        '--mi-optimizer-lr', type=float, nargs='+',
         help='Learning rate of the MI estimator optimizer')
     parser.add_argument(
-        '--whitening_alignment_frequency', type=int, nargs='+',
+        '--whitening-alignment-frequency', type=int, nargs='+',
         help='Frequency of whitening alignment')
     parser.add_argument(
-        '--checkpoint_frequency', type=int, nargs='+', help='Frequency of checkpointing')
+        '--checkpoint-frequency', type=int, nargs='+', help='Frequency of checkpointing')
 
     args = parser.parse_args()
 
