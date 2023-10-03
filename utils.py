@@ -14,39 +14,6 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from typing import Callable
 
-from typing import Any, Callable, Sequence, TYPE_CHECKING
-import tempfile
-import pickle
-if TYPE_CHECKING:
-    from models import ConceptModel
-
-from ray import train
-import ray
-import os
-from ray.train import Checkpoint, ScalingConfig
-
-class Random(nn.Module):
-    """
-    Replaces input data with random noise.
-    """
-
-    def __init__(
-        self, random_fn=torch.randn_like, indices: slice | Sequence[int] = slice(None)):
-        """
-        Parameters
-        ----------
-        random_fn : Callable(Tensor) -> Tensor
-            Function to generate random noise
-        indices : slice or Sequence[int]
-            Feature indices to replace with random noise
-        """
-        super().__init__()
-        self.random_fn = random_fn
-        self.indices = indices
-
-    def forward(self, x: Tensor):
-        x[..., self.indices] = self.random_fn(x[..., self.indices])
-        return x
 
 
 def to_device(
@@ -212,33 +179,6 @@ def train_multiclass_classification(
             if save_path:
                 unwrapped_model = getattr(model, 'module', model)
                 torch.save(unwrapped_model.state_dict(), save_path)
-
-    
-
-        metrics = {"loss": loss.item()}
-
-        if epoch % config.get("checkpoint_freq", 1) == 0:
-            #not sure why, but this is necessary to get the model to not break next training iteration
-            #when iter norm is used
-            test_acc = concept_model_accuracy(copy.deepcopy(model), test_loader)
-            metrics["test_acc"] = test_acc
-
-        with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
-            checkpoint = None
-
-            should_checkpoint = epoch % config.get("checkpoint_freq", 1) == 0
-
-            # In standard DDP training, where the model is the same across all ranks,
-            # only the global rank 0 worker needs to save and report the checkpoint
-            if should_checkpoint:
-                torch.save(
-                    model.state_dict(),  # NOTE: Unwrap the model.
-                    os.path.join(temp_checkpoint_dir, "model.pt"),
-                )
-                with open(os.path.join(temp_checkpoint_dir, "config.pkl"), "wb") as file:
-                    pickle.dump(config, file)
-                checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
-            train.report(metrics, checkpoint=checkpoint)
 
     # Save the trained model
     if save_path:
