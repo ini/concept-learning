@@ -1,4 +1,5 @@
 from __future__ import annotations
+from loader import get_data_loaders
 
 import torch
 import torch.nn as nn
@@ -16,7 +17,9 @@ from utils import (
     cross_correlation,
     get_cw_callback_fn,
     get_mi_callback_fn,
+    get_mi_callback_fn_ray,
     train_multiclass_classification,
+    train_multiclass_classification_ray,
 )
 
 
@@ -277,3 +280,152 @@ def load_models(
         torch.load(load_dir / 'whitened_residual.pt'))
 
     return models
+
+
+
+def train_bottleneck_joint_ray(
+    model: ConceptBottleneckModel,
+    callback_fn: Callable = lambda model, epoch, batch_index, batch: None,
+    residual_loss_fn: Callable = lambda r, c: torch.tensor(0),
+    config=dict()) -> ConceptBottleneckModel:
+    """
+    Joint training of a concept bottleneck model.
+
+    Parameters
+    ----------
+    model : ConceptBottleneckModel
+        Model to train
+    train_loader : DataLoader
+        Train data loader
+    test_loader : DataLoader
+        Test data loader
+    residual_loss_fn : Callable(residual, concept_preds) -> Tensor
+        Function to compute the residual loss
+    alpha : float
+        Weight of the concept loss
+    beta : float
+        Weight of the residual loss
+    **kwargs
+        Additional arguments to pass to `train_multiclass_classification()`
+    """
+    train_loader, test_loader, _, _ = get_data_loaders(
+       config["dataset_name"], batch_size=config["batch_size"], data_dir=config["data_dir"])
+    alpha = config["alpha"]
+    beta = config["beta"]
+    def loss_fn(data, output, target):
+        _, concepts = data
+        concept_preds, residual, target_preds = output
+        concept_target = concepts[..., :concept_preds.shape[-1]]
+        concept_loss = nn.BCELoss()(concept_preds, concept_target)
+        residual_loss = residual_loss_fn(residual, concept_preds)
+        target_loss = nn.CrossEntropyLoss()(target_preds, target)
+        return (alpha * concept_loss) + (beta * residual_loss) + target_loss
+
+    train_multiclass_classification_ray(
+        model,
+        train_loader,
+        test_loader,
+        preprocess_fn=lambda batch: (batch[0][0], batch[1]),
+        loss_fn=loss_fn,
+        callback_fn=callback_fn,
+        config=config
+    )
+
+    if test_loader is not None:
+        print(
+            'Test Classification Accuracy:', concept_model_accuracy(model, test_loader))
+
+def train_whitening_ray(
+    model: ConceptWhiteningModel,
+    concept_dim: int,
+    config=dict(),):
+    """
+    Train a concept whitening model.
+
+    Parameters
+    ----------
+    model : ConceptWhiteningModel
+        Model to train
+    concept_dim : int
+        Number of concepts
+    train_loader : DataLoader
+        Train data loader
+    test_loader : DataLoader
+        Test data loader
+    alignment_frequency : int
+        Frequency at which to align the concept whitening layer (i.e. every N batches)
+    **kwargs
+        Additional arguments to pass to `train_multiclass_classification()`
+    """
+    alignment_frequency = config["whitening_alignment_frequency"]
+    train_loader, test_loader, _, _ = get_data_loaders(
+       config["dataset_name"], batch_size=config["batch_size"], data_dir=config["data_dir"])
+    train_multiclass_classification_ray(
+        model,
+        train_loader,
+        test_loader,
+        preprocess_fn=lambda batch: (batch[0][0], batch[1]),
+        callback_fn=get_cw_callback_fn(
+            train_loader, concept_dim, alignment_frequency=alignment_frequency),
+    )
+
+    # if test_loader is not None:
+    #     print(
+    #         'Test Classification Accuracy:', concept_model_accuracy(model, test_loader))
+
+
+
+def train_ray(
+    config : dict, 
+    make_bottleneck_model_fn: Callable,
+    make_whitening_model_fn: Callable,
+    ):
+    '''
+    Train a model using Ray Tune.
+    '''
+    # Create save directory
+    
+
+    
+    if config["model_type"] == "bottleneck":
+        # Train without residual
+        model = make_bottleneck_model_fn(residual_dim=0)
+        train_bottleneck_joint_ray(
+            model,
+            config=config
+        )
+    elif config["model_type"] == "baseline":
+        model = make_bottleneck_model_fn(residual_dim=config["residual_dim"])
+        train_bottleneck_joint_ray(
+            model,
+            config=config
+        )
+    elif config["model_type"] == "corr":
+        # With decorrelated residual
+        model = make_bottleneck_model_fn(residual_dim=config["residual_dim"])
+        train_bottleneck_joint_ray(
+            model, 
+            residual_loss_fn=lambda r, c: cross_correlation(r, c).square().mean(),
+            config=config
+        )
+    elif config["model_type"] == "mi":
+        # With MI-minimized residual
+        model = make_bottleneck_model_fn(residual_dim=config["residual_dim"])
+        device = next(model.parameters()).device
+        mi_estimator = CLUB(config['residual_dim'], config["concept_dim"], config["mi_estimator_hidden_dim"]).to(device)
+        mi_optimizer = optim.Adam(mi_estimator.parameters(), lr=config["mi_optimizer_lr"])
+        train_bottleneck_joint_ray(
+            model,
+            residual_loss_fn=mi_estimator.forward,
+            callback_fn=get_mi_callback_fn_ray(mi_estimator, mi_optimizer),
+            config=config
+        )
+    elif config["model_type"] == "whitening":
+        # With concept-whitened residual
+        model = make_whitening_model_fn(residual_dim=config["residual_dim"])
+        train_whitening_ray(
+            model, config["concept_dim"],
+            config=config,
+        )
+
+

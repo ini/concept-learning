@@ -9,7 +9,8 @@ from datasets.pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 
 def get_data_loaders(
     name: str = 'cifar100',
-    batch_size: int = 64) -> tuple[DataLoader, DataLoader, int, int]:
+    batch_size: int = 64,
+    data_dir: str = "./data") -> tuple[DataLoader, DataLoader, int, int]:
     """
     Get data loaders for the specified dataset.
 
@@ -61,9 +62,9 @@ def get_data_loaders(
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2])
         ])
         train_dataset = CIFAR100(
-            root='./data', train=True, transform=transform_train, download=True)
+            root=data_dir, train=True, transform=transform_train, download=True)
         test_dataset = CIFAR100(
-            root='./data', train=False, transform=transform_test, download=True)
+            root=data_dir, train=False, transform=transform_test, download=True)
 
     elif name == 'cub':
         concept_dim, num_classes = 312, 200
@@ -80,9 +81,9 @@ def get_data_loaders(
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[2, 2, 2])
         ])
         train_dataset = CUB(
-            root='./data', split='train', transform=transform_train, download=True)
+            root=data_dir, split='train', transform=transform_train, download=True)
         test_dataset = CUB(
-            root='./data', split='test', transform=transform_test, download=True)
+            root=data_dir, split='test', transform=transform_test, download=True)
 
     # Make data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)

@@ -13,7 +13,8 @@ class ConceptModel(nn.Module, ABC):
     """
     Abstract base class for concept models.
     """
-    pass
+    def __init__(self):
+        super(ConceptModel, self).__init__()
 
 
 class ConceptBottleneckModel(ConceptModel):
