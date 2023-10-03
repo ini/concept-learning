@@ -367,11 +367,8 @@ def train_whitening_ray(
         preprocess_fn=lambda batch: (batch[0][0], batch[1]),
         callback_fn=get_cw_callback_fn(
             train_loader, concept_dim, alignment_frequency=alignment_frequency),
+        config=config
     )
-
-    # if test_loader is not None:
-    #     print(
-    #         'Test Classification Accuracy:', concept_model_accuracy(model, test_loader))
 
 
 
@@ -389,20 +386,20 @@ def train_ray(
     
     if config["model_type"] == "bottleneck":
         # Train without residual
-        model = make_bottleneck_model_fn(residual_dim=0)
+        model = make_bottleneck_model_fn(residual_dim=0, config=config)
         train_bottleneck_joint_ray(
             model,
             config=config
         )
     elif config["model_type"] == "baseline":
-        model = make_bottleneck_model_fn(residual_dim=config["residual_dim"])
+        model = make_bottleneck_model_fn(residual_dim=config["residual_dim"], config=config)
         train_bottleneck_joint_ray(
             model,
             config=config
         )
     elif config["model_type"] == "corr":
         # With decorrelated residual
-        model = make_bottleneck_model_fn(residual_dim=config["residual_dim"])
+        model = make_bottleneck_model_fn(residual_dim=config["residual_dim"], config=config)
         train_bottleneck_joint_ray(
             model, 
             residual_loss_fn=lambda r, c: cross_correlation(r, c).square().mean(),
@@ -410,7 +407,7 @@ def train_ray(
         )
     elif config["model_type"] == "mi":
         # With MI-minimized residual
-        model = make_bottleneck_model_fn(residual_dim=config["residual_dim"])
+        model = make_bottleneck_model_fn(residual_dim=config["residual_dim"], config=config)
         device = next(model.parameters()).device
         mi_estimator = CLUB(config['residual_dim'], config["concept_dim"], config["mi_estimator_hidden_dim"]).to(device)
         mi_optimizer = optim.Adam(mi_estimator.parameters(), lr=config["mi_optimizer_lr"])

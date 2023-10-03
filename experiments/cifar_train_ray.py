@@ -40,11 +40,12 @@ def main(args_dict):
         resnet.fc = nn.Linear(resnet.fc.in_features, output_dim)
         return resnet
 
-    def make_bottleneck_model(residual_dim):
+    def make_bottleneck_model(residual_dim, config={}):
         return ConceptBottleneckModel(
             concept_network=nn.Sequential(make_resnet(CONCEPT_DIM), nn.Sigmoid()),
             residual_network=make_resnet(residual_dim),
             target_network=make_ffn(NUM_CLASSES),
+            config = config
         )
 
     def make_whitening_model(residual_dim):
