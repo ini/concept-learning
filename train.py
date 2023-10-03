@@ -59,7 +59,7 @@ def train_concept_model(
     """
     # Get data loaders
     train_loader, val_loader, _, concept_dim, _ = get_data_loaders(
-        config['dataset'], batch_size=config['batch_size'], data_dir=config['data_dir'])
+        config['dataset'], data_dir=config['data_dir'], batch_size=config['batch_size'])
 
     # Get callback function
     if isinstance(model, ConceptWhiteningModel):
@@ -91,8 +91,6 @@ def train_concept_model(
             return outputs.argmax(dim=-1)
 
     # Train the model
-    save_path = config['save_dir']
-    save_path = save_path if save_path.endswith('.pt') else Path(save_path) / 'model.pt'
     train_multiclass_classification(
         model,
         train_loader,
@@ -103,9 +101,9 @@ def train_concept_model(
         callback_fn=callback_fn,
         loss_fn=loss_fn,
         predict_fn=predict_fn,
-        save_path=save_path,
+        save_path='./model.pt',
         checkpoint_frequency=config['checkpoint_frequency'],
-        verbose=config.get('verbose', True),
+        verbose=False,
     )
 
     # Test the model
@@ -178,40 +176,86 @@ def train(config: dict):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--config',
-        type=str,
-        default='experiments.pitfalls_random_concepts',
-        help='Experiment configuration module',
+        '--config', type=str, default='experiments.pitfalls_random_concepts',
+        help='Experiment configuration module')
+    parser.add_argument(
+        '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
+        help='Device to train on')
+    parser.add_argument(
+        '--num-gpus', type=float, default=1 if torch.cuda.is_available() else 0,
+        help='Number of GPUs to use (per model)')
+    parser.add_argument(
+        '--data-dir', type=Path, default='./data',
+        help='Directory where data is stored (or will be downloaded to)')
+    parser.add_argument(
+        '--save-dir', type=Path, default='./saved_models',
+        help='Directory to save models to')
+    parser.add_argument(
+        '--model_type', type=str, nargs='+',
+        choices=[
+            'no_residual',
+            'latent_residual',
+            'decorrelated_residual',
+            'mi_residual',
+            'whitened_residual',
+        ],
+        help='Model type',
     )
     parser.add_argument(
-        '--device',
-        type=str,
-        default='cuda' if torch.cuda.is_available() else 'cpu',
-        help='Device to train on',
+        '--residual_dim', type=int, nargs='+', help='Dimensionality of the residual')
+    parser.add_argument(
+        '--num_epochs', type=int, nargs='+', help='Number of epochs to train for')
+    parser.add_argument(
+        '--lr', type=float, nargs='+', help='Learning rate')
+    parser.add_argument(
+        '--batch_size', type=int, nargs='+', help='Batch size')
+    parser.add_argument(
+        '--alpha', type=float, nargs='+', help='Weight of concept loss')
+    parser.add_argument(
+        '--beta', type=float, nargs='+', help='Weight of residual loss')
+    parser.add_argument(
+        '--mi_estimator_hidden_dim', type=int, nargs='+',
+        help='Hidden dimension of the MI estimator',
     )
     parser.add_argument(
-        '--num-gpus',
-        type=float,
-        default=1 if torch.cuda.is_available() else 0,
-        help='Number of GPUs to use (per model)',
-    )
+        '--mi_optimizer_lr', type=float, nargs='+',
+        help='Learning rate of the MI estimator optimizer')
+    parser.add_argument(
+        '--whitening_alignment_frequency', type=int, nargs='+',
+        help='Frequency of whitening alignment')
+    parser.add_argument(
+        '--checkpoint_frequency', type=int, nargs='+', help='Frequency of checkpointing')
+
     args = parser.parse_args()
 
-    experiment_config = importlib.import_module(args.config).get_config()
-    experiment_config['device'] = args.device
-    experiment_config['data_dir'] = Path(experiment_config['data_dir']).resolve()
+    # Override experiment config with command line arguments
+    override_config = {}
+    for key, value in vars(args).items():
+        if isinstance(value, list):
+            override_config[key] = tune.grid_search(value)
+        elif value is not None:
+            override_config[key] = value
+
+    # Load provided experiment config
+    experiment_module = importlib.import_module(args.config)
+    experiment_config = experiment_module.get_config(**override_config)
+    experiment_config['data_dir'] = experiment_config['data_dir'].resolve()
+    experiment_config['save_dir'] = experiment_config['save_dir'].resolve()
     experiment_config['verbose'] = False
 
+    # Get experiment name
     date = datetime.today().strftime("%Y-%m-%d_%H_%M_%S")
-    dataset_name = experiment_config['dataset']
-    experiment_name = f'{dataset_name}/{date}'
+    experiment_name = experiment_module.__name__.split('.')[-1]
+    experiment_name = f'{experiment_name}/{date}'
+
+    # Train the model(s)
     tuner = tune.Tuner(
         tune.with_resources(train, resources={'cpu': 1, 'gpu': args.num_gpus}),
         param_space=experiment_config,
         tune_config=tune.TuneConfig(num_samples=1),
         run_config=air.RunConfig(
             name=experiment_name,
-            local_dir=Path(experiment_config['save_dir']).resolve(),
+            local_dir=experiment_config['save_dir'],
             checkpoint_config=air.CheckpointConfig(
                 checkpoint_score_attribute='val_acc',
                 checkpoint_score_order='max',
