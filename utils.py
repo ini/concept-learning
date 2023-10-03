@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from typing import Any, Callable, Sequence, TYPE_CHECKING
 import tempfile
-
+import pickle
 if TYPE_CHECKING:
     from models import ConceptModel
 
@@ -245,7 +245,9 @@ def train_multiclass_classification_ray(
         metrics = {"loss": loss.item()}
 
         if epoch % config.get("checkpoint_freq", 1) == 0:
-            test_acc = concept_model_accuracy(model, test_loader)
+            #not sure why, but this is necessary to get the model to not break next training iteration
+            #when iter norm is used
+            test_acc = concept_model_accuracy(copy.deepcopy(model), test_loader)
             metrics["test_acc"] = test_acc
 
         with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
@@ -255,14 +257,14 @@ def train_multiclass_classification_ray(
 
             # In standard DDP training, where the model is the same across all ranks,
             # only the global rank 0 worker needs to save and report the checkpoint
-            print(train.get_context().get_world_rank())
             if should_checkpoint:
                 torch.save(
                     model.state_dict(),  # NOTE: Unwrap the model.
                     os.path.join(temp_checkpoint_dir, "model.pt"),
                 )
+                with open(os.path.join(temp_checkpoint_dir, "config.pkl"), "wb") as file:
+                    pickle.dump(config, file)
                 checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
-            print(checkpoint)
             train.report(metrics, checkpoint=checkpoint)
 
     # Save the trained model

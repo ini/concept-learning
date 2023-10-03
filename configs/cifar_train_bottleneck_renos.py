@@ -8,7 +8,7 @@ if __name__ == '__main__':
         "mode" : "train",
         "model_type" : "bottleneck",
         "save_dir" : "/data/renos/supervised_concept_learning/",
-        "data_dir" : "/data/renos/tmp/",
+        "data_dir" : "/data/Datasets/cifar/",
         "ray_storage_dir" : "/data/renos/ray_results/",
         "residual_dim" : 32,
         "lr" : 1e-4,
