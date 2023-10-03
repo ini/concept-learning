@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import ray
+import tempfile
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
 from pathlib import Path
+from ray.train import Checkpoint
 from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from typing import Callable
+
 from typing import Any, Callable, Sequence, TYPE_CHECKING
 import tempfile
 import pickle
@@ -45,7 +50,8 @@ class Random(nn.Module):
 
 
 def to_device(
-    data: Tensor | tuple[Tensor] | list[Tensor], device: torch.device | str) -> Any:
+    data: Tensor | tuple[Tensor] | list[Tensor],
+    device: torch.device | str) -> Tensor | tuple[Tensor] | list[Tensor]:
     """
     Move a tensor or collection of tensors to the given device.
 
@@ -65,14 +71,14 @@ def to_device(
 
     raise ValueError(f'Unsupported data type: {type(data)}')
 
-def make_ffn(
+def make_mlp(
     output_dim: int,
     hidden_dim: int = 256,
     num_hidden_layers: int = 2,
     flatten_input: bool = False,
     output_activation: nn.Module = nn.Identity()) -> nn.Module:
     """
-    Create a feedforward network.
+    Create a multi-layer perceptron.
 
     Parameters
     ----------
@@ -97,14 +103,17 @@ def make_ffn(
 def train_multiclass_classification(
     model: nn.Module,
     train_loader: DataLoader,
+    val_loader: DataLoader | None = None,
     num_epochs: int = 10,
     lr: float = 0.001,
-    preprocess_fn: Callable = lambda batch: batch,
+    batch_transform_fn: Callable = lambda batch: batch,
+    preprocess_fn: Callable = lambda batch: batch[0],
     callback_fn: Callable = lambda model, epoch, batch_index, batch: None,
-    loss_fn: Callable = lambda data, output, target: F.cross_entropy(output, target),
+    loss_fn: Callable = lambda batch, outputs: F.cross_entropy(outputs, batch[1]),
+    predict_fn: Callable = lambda outputs: outputs.argmax(dim=-1),
     save_path: str | None = None,
-    save_interval: int | None = None,
-):
+    checkpoint_frequency: int | None = None,
+    verbose: bool = True):
     """
     Train a model for multiclass classification.
 
@@ -113,21 +122,29 @@ def train_multiclass_classification(
     model : nn.Module
         Model to train
     train_loader : DataLoader
-        Train data
+        Train data loader
+    val_loader : DataLoader
+        Validation data loader
     num_epochs : int
         Number of epochs to train for
     lr : float
         Learning rate
-    preprocess_fn : Callable(batch) -> (X, y)
-        Function to preprocess the batch before passing it to the model
+    batch_transform_fn : Callable(batch) -> (inputs, targets)
+        Function to transform a batch
+    preprocess_fn : Callable(batch) -> inputs
+        Function to preprocess model inputs
     callback_fn : Callable(model, epoch, batch_index, batch)
         Callback triggered before each training step on a batch
-    loss_fn : Callable(data, output, target) -> loss
+    loss_fn : Callable(batch, outputs) -> loss
         Loss function for the model
+    predict_fn : Callable(outputs) -> predictions
+        Function to convert model outputs to predictions
     save_path : str
         Path to save the model to
-    save_interval : int
-        Epoch interval at which to save the model during training
+    checkpoint_frequency : int
+        Epoch interval at which to create model checkpoints
+    verbose : bool
+        Whether to print training progress
     """
     device = next(model.parameters()).device
 
@@ -136,109 +153,65 @@ def train_multiclass_classification(
         Path(save_path).resolve().parent.mkdir(parents=True, exist_ok=True)
 
     # Train the model
-    model.train()
     optimizer = optim.Adam(model.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
-    for epoch in tqdm(range(num_epochs), desc='Epochs'):
+    epoch_loop = tqdm(range(num_epochs), desc='Epochs') if verbose else range(num_epochs)
+    for epoch in epoch_loop:
         epoch_losses = []
         batch_index = 0
-        with tqdm(train_loader, desc='Batches', leave=False) as batches_loop:
-            for batch in batches_loop:
-                batch = to_device(batch, device)
-                callback_fn(model, epoch, batch_index, batch)
-                X, y = preprocess_fn(batch)
+        batch_loop = tqdm(
+            train_loader, desc='Batches', leave=False) if verbose else train_loader
+        for batch in batch_loop:
+            batch = to_device(batch_transform_fn(batch), device)
+            callback_fn(model, epoch, batch_index, batch)
 
-                # Update the model
-                optimizer.zero_grad()
-                output = model(X)
-                loss = loss_fn(batch[0], output, y)
-                loss.backward()
-                optimizer.step()
+            # Update the model
+            model.train()
+            optimizer.zero_grad()
+            output = model(preprocess_fn(batch))
+            loss = loss_fn(batch, output)
+            loss.backward()
+            optimizer.step()
 
-                # Update the progress bar description with the loss
-                epoch_losses.append(loss.item())
-                batches_loop.set_postfix(loss=sum(epoch_losses) / len(epoch_losses))
-                batch_index += 1
-
-        scheduler.step()
-        if save_path and save_interval and (epoch % save_interval) == 0:
-            torch.save(model.state_dict(), save_path)
-
-    # Save the trained model
-    if save_path:
-        torch.save(model.state_dict(), save_path)
-
-
-
-def train_multiclass_classification_ray(
-    model: nn.Module,
-    train_loader: DataLoader,
-    test_loader: DataLoader,
-    preprocess_fn: Callable = lambda batch: batch,
-    callback_fn: Callable = lambda model, epoch, batch_index, batch: None,
-    loss_fn: Callable = lambda data, output, target: F.cross_entropy(output, target),
-    config = None,
-):
-    """
-    Train a model for multiclass classification.
-
-    Parameters
-    ----------
-    model : nn.Module
-        Model to train
-    train_loader : DataLoader
-        Train data
-    num_epochs : int
-        Number of epochs to train for
-    lr : float
-        Learning rate
-    preprocess_fn : Callable(batch) -> (X, y)
-        Function to preprocess the batch before passing it to the model
-    callback_fn : Callable(model, epoch, batch_index, batch)
-        Callback triggered before each training step on a batch
-    loss_fn : Callable(data, output, target) -> loss
-        Loss function for the model
-    save_path : str
-        Path to save the model to
-    save_interval : int
-        Epoch interval at which to save the model during training
-    """
-    num_epochs = config["num_epochs"]
-    lr =  config["lr"]
-    save_path = config["save_dir"]
-    use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
-
-
-    # Train the model
-    model.train()
-    model = model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
-    for epoch in tqdm(range(num_epochs), desc='Epochs'):
-        epoch_losses = []
-        batch_index = 0
-        with tqdm(train_loader, desc='Batches', leave=False) as batches_loop:
-            for batch in batches_loop:
-                callback_fn(model, epoch, batch_index, batch)
-                X, y = preprocess_fn(batch)
-                X = X.to(device)
-                y = y.to(device)
-
-                # Update the model
-                optimizer.zero_grad()
-                output = model(X)
-                dat_cuda = [d.to(device) for d in batch[0]] if type(batch[0]) == list else batch[0].to(device)
-                loss = loss_fn(dat_cuda, output, y)
-                loss.backward()
-                optimizer.step()
-
-                # Update the progress bar description with the loss
-                epoch_losses.append(loss.item())
-                batches_loop.set_postfix(loss=sum(epoch_losses) / len(epoch_losses))
-                batch_index += 1
+            # Update the progress bar description with the loss
+            epoch_losses.append(loss.item())
+            batch_index += 1
+            if verbose:
+                batch_loop.set_postfix(loss=sum(epoch_losses) / len(epoch_losses))
 
         scheduler.step()
+        epoch_loss = sum(epoch_losses) / len(epoch_losses)
+
+        if checkpoint_frequency is not None and (epoch % checkpoint_frequency) == 0:
+            metrics = {'loss': epoch_loss}
+
+            # Compute validation accuracy
+            if val_loader:
+                metrics['val_acc'] = accuracy(
+                    model, val_loader,
+                    batch_transform_fn=batch_transform_fn,
+                    preprocess_fn=preprocess_fn,
+                    predict_fn=predict_fn,
+                )
+
+            # Create Ray Air checkpoint
+            with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
+                if ray.train.get_context().get_world_rank() in {0, None}:
+                    # In standard DDP training, where the model is the same
+                    # across all ranks, only the global rank 0 worker needs
+                    # to save and report the checkpoint
+                    unwrapped_model = getattr(model, 'module', model)
+                    torch.save(
+                        unwrapped_model.state_dict(),
+                        Path(temp_checkpoint_dir) / 'model.pt',
+                    )
+                    checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
+                    ray.train.report(metrics, checkpoint=checkpoint)
+
+            # Save the current model weights
+            if save_path:
+                unwrapped_model = getattr(model, 'module', model)
+                torch.save(unwrapped_model.state_dict(), save_path)
 
     
 
@@ -269,62 +242,44 @@ def train_multiclass_classification_ray(
 
     # Save the trained model
     if save_path:
-        torch.save(model.state_dict(), save_path)
+        unwrapped_model = getattr(model, 'module', model)
+        torch.save(unwrapped_model.state_dict(), save_path)
 
 def accuracy(
     model: nn.Module,
     data_loader: DataLoader,
-    preprocess_fn: Callable = lambda batch: batch,
-    predict_fn: Callable = lambda output: output.argmax(dim=-1)) -> float:
+    batch_transform_fn: Callable = lambda batch: batch,
+    preprocess_fn: Callable = lambda batch: batch[0],
+    predict_fn: Callable = lambda outputs: outputs.argmax(dim=-1)) -> float:
     """
+    Compute accuracy for a model on the given data.
+
     Parameters
     ----------
     model : nn.Module
         Model to evaluate
     data_loader : DataLoader
         Data to evaluate on
-    preprocess_fn : Callable(batch) -> (X, y)
-        Function to preprocess the batch before passing it to the model
-    predict_fn : Callable(output) -> prediction
-        Function to convert the model's output to a prediction
+    batch_transform_fn : Callable(batch) -> (inputs, targets)
+        Function to transform a batch
+    preprocess_fn : Callable(batch) -> inputs
+        Function to preprocess model inputs
+    predict_fn : Callable(outputs) -> predictions
+        Function to convert model outputs to predictions
     """
     device = next(model.parameters()).device
-
-    # Test
-    model.eval()
     num_correct, num_samples = 0, 0
+    model.eval()    
     with torch.no_grad():
         for batch in data_loader:
-            X, y = preprocess_fn(to_device(batch, device))
-            output = model(X)
-            prediction = predict_fn(output)
-            num_correct += (prediction == y).sum().item()
-            num_samples += y.numel()
+            batch = to_device(batch_transform_fn(batch), device)
+            output = model(preprocess_fn(batch))
+            predictions = predict_fn(output)
+            targets = batch[1]
+            num_correct += (predictions == targets).sum().item()
+            num_samples += targets.numel()
 
     return num_correct / num_samples
-
-def concept_model_accuracy(model: 'ConceptModel', data_loader: DataLoader):
-    """
-    Compute accuracy for a concept model on the given data.
-
-    Parameters
-    ----------
-    model : ConceptModel
-        Model to evaluate
-    data_loader : DataLoader
-        Data to evaluate on
-    """
-    def predict_fn(outputs):
-        if isinstance(outputs, tuple):
-            return outputs[2].argmax(dim=-1)
-        else:
-            return outputs.argmax(dim=-1)
-
-    return accuracy(
-        model, data_loader,
-        preprocess_fn=lambda batch: (batch[0][0], batch[1]),
-        predict_fn=predict_fn,
-    )
 
 def cross_correlation(X: Tensor, Y: Tensor):
     """
@@ -336,7 +291,7 @@ def cross_correlation(X: Tensor, Y: Tensor):
         X samples
     Y : Tensor of shape (num_samples, y_dim)
         Y samples
-    
+
     Returns
     -------
     R : Tensor of shape (x_dim, y_dim)
@@ -409,8 +364,9 @@ def get_mi_callback_fn(
     mi_optimizer : optim.Optimizer
         Mutual information optimizer
     """
-    def mi_training_step(model: nn.Module, epoch, batch_index, batch):
-        (X, concepts), y = batch
+    def mi_training_step(model, epoch, batch_index, batch):
+        device = next(model.parameters()).device
+        (X, concepts), y = to_device(batch, device)
         mi_optimizer.zero_grad()
         with torch.no_grad():
             residual = model.residual_network(X)
@@ -423,41 +379,9 @@ def get_mi_callback_fn(
     return mi_training_step
 
 
-def get_mi_callback_fn_ray(
-    mi_estimator: nn.Module, mi_optimizer: optim.Optimizer) -> Callable:
-    """
-    Return a callback function for training the mutual information estimator
-    (i.e. the `callback_fn` argument in `train_multiclass_classification`).
 
-    Parameters
-    ----------
-    mi_estimator : nn.Module
-        Mutual information estimator
-    mi_optimizer : optim.Optimizer
-        Mutual information optimizer
-    """
-    use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
-    mi_estimator = mi_estimator.to(device)
-    def mi_training_step_(model: nn.Module, epoch, batch_index, batch):
-        use_cuda = torch.cuda.is_available()
-        device = torch.device("cuda" if use_cuda else "cpu")
-        (X, concepts), y = batch
-        X, y = X.to(device), y.to(device)
-        model = model.to(device)
-        mi_optimizer.zero_grad()
-        with torch.no_grad():
-            residual = model.residual_network(X)
-            concept_preds = model.concept_network(X)
-        mi_loss = mi_estimator.learning_loss(residual, concept_preds)
-        mi_loss.backward()
-        mi_optimizer.step()
-
-    return mi_training_step_
-
-
-
-
+"""
+"""
 
 from collections.abc import MutableMapping
 import functools
@@ -469,6 +393,8 @@ import scipy.stats
 
 # https://stackoverflow.com/questions/3232943/update-value-of-a-nested-dictionary-of-varying-depth
 def grid_search_update(d, u):
+    """
+    """
     for k, v in u.items():
         if isinstance(v, collections.abc.Mapping):
             d[k] = grid_search_update(d.get(k, {}), v)

@@ -2,14 +2,6 @@
 
 Promises and Pitfalls of Black-Box Concept Learning Models:
 
-    python -m experiments.pitfalls
-
-CIFAR:
-
-    python -m experiments.cifar
-
-CUB:
-
-    python -m experiments.cub
+    python -m train --config experiments.pitfalls_random_concepts
 
 Run with `--help` for more options.
