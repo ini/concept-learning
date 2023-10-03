@@ -21,7 +21,7 @@ if __name__ == '__main__':
         "num_gpus" : 0.2,
         "num_samples" : 1,
         "batch_size" : 64,
-        "checkpoint_freq" : 5,
+        "checkpoint_freq" : 1,
     }
     main(experiment_config)
 

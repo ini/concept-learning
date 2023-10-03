@@ -252,15 +252,17 @@ def train_multiclass_classification_ray(
             checkpoint = None
 
             should_checkpoint = epoch % config.get("checkpoint_freq", 1) == 0
+
             # In standard DDP training, where the model is the same across all ranks,
             # only the global rank 0 worker needs to save and report the checkpoint
-            if train.get_context().get_world_rank() == 0 and should_checkpoint:
+            print(train.get_context().get_world_rank())
+            if should_checkpoint:
                 torch.save(
-                    model.module.state_dict(),  # NOTE: Unwrap the model.
+                    model.state_dict(),  # NOTE: Unwrap the model.
                     os.path.join(temp_checkpoint_dir, "model.pt"),
                 )
                 checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
-
+            print(checkpoint)
             train.report(metrics, checkpoint=checkpoint)
 
     # Save the trained model
