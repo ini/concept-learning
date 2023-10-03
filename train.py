@@ -12,7 +12,7 @@ from ray import air, tune
 from typing import Any, Callable
 
 from lib.club import CLUB
-from loader import get_data_loaders
+from loader import get_data_loaders, DATASET_NAMES
 from models import ConceptModel, ConceptBottleneckModel, ConceptWhiteningModel
 from utils import (
     accuracy,
@@ -190,6 +190,8 @@ if __name__ == '__main__':
     parser.add_argument(
         '--save-dir', type=Path, default='./saved_models',
         help='Directory to save models to')
+    parser.add_argument(
+        '--dataset', type=str, choices=DATASET_NAMES, help='Dataset to train on')
     parser.add_argument(
         '--model_type', type=str, nargs='+',
         choices=[

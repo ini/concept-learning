@@ -7,6 +7,12 @@ from datasets.pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 
 
 
+DATASET_NAMES = [
+    'pitfalls_mnist_without_45', 'pitfalls_random_concepts',
+    'pitfalls_synthetic', 'pitfalls_mnist_123456',
+    'cifar100', 'cub',
+]
+
 def get_data_loaders(
     name: str = 'cifar100',
     data_dir: str = './data',

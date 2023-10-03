@@ -25,6 +25,7 @@ def make_bottleneck_model(config):
             InceptionV3(config['concept_dim']), nn.Sigmoid()),
         residual_network=InceptionV3(config['residual_dim']),
         target_network=make_mlp(config['num_classes']),
+        config=config,
     )
 
 def make_whitening_model(config):

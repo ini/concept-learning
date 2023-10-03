@@ -16,6 +16,7 @@ def make_bottleneck_model(config):
         ),
         residual_network=make_mlp(config['residual_dim'], flatten_input=True),
         target_network=make_mlp(config['num_classes']),
+        config=config,
     )
 
 def make_whitening_model(config):
