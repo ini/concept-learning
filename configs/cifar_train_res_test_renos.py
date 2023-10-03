@@ -10,7 +10,7 @@ if __name__ == '__main__':
         "save_dir" : "/data/renos/supervised_concept_learning/",
         "data_dir" : "/data/Datasets/cifar/",
         "ray_storage_dir" : "/data/renos/ray_results/",
-        "residual_dim" : tune.grid_search([1, 2, 4, 8, 16, 32]),
+        "residual_dim" : 1,
         "lr" : 1e-4,
         "num_epochs" : 1000,
         "alpha" : 1.0,
@@ -22,7 +22,7 @@ if __name__ == '__main__':
         "num_samples" : 1,
         "batch_size" : 64,
         "checkpoint_freq" : 5,
-        "norm_type" : tune.grid_search(["none", "layer_norm", "iter_norm"]),
+        "norm_type" : "iter_norm",
         "T_whitening" : 3,
     }
     main(experiment_config)
