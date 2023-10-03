@@ -13,9 +13,26 @@ def make_resnet(output_dim):
     resnet.fc = nn.Linear(resnet.fc.in_features, output_dim)
     return resnet
 
+def make_bottleneck_model(config):
+    return ConceptBottleneckModel(
+        concept_network=nn.Sequential(make_resnet(config['concept_dim']), nn.Sigmoid()),
+        residual_network=make_resnet(config['residual_dim']),
+        target_network=make_mlp(config['num_classes']),
+    )
+
+def make_whitening_model(config):
+    bottleneck_dim = config['concept_dim'] + config['residual_dim']
+    return ConceptWhiteningModel(
+        base_network=make_resnet(bottleneck_dim),
+        target_network=make_mlp(config['num_classes']),
+        bottleneck_dim=bottleneck_dim,
+    )
+
 def get_config(**kwargs) -> dict:
     config = {
         'dataset': 'cifar100',
+        'make_bottleneck_model_fn': make_bottleneck_model,
+        'make_whitening_model_fn': make_whitening_model,
         'model_type': ray.tune.grid_search([
             'no_residual',
             'latent_residual',
@@ -36,26 +53,7 @@ def get_config(**kwargs) -> dict:
     }
     config.update(kwargs)
 
-    _, _, _, config['concept_dim'], num_classes = get_data_loaders(
+    _, _, _, config['concept_dim'], config['num_classes'] = get_data_loaders(
         config['dataset'], config['data_dir'])
-
-    def make_bottleneck_model(residual_dim):
-        return ConceptBottleneckModel(
-            concept_network=nn.Sequential(
-                make_resnet(config['concept_dim']), nn.Sigmoid()),
-            residual_network=make_resnet(residual_dim),
-            target_network=make_mlp(num_classes),
-        )
-
-    def make_whitening_model(residual_dim):
-        bottleneck_dim = config['concept_dim'] + residual_dim
-        return ConceptWhiteningModel(
-            base_network=make_resnet(bottleneck_dim),
-            target_network=make_mlp(num_classes),
-            bottleneck_dim=bottleneck_dim,
-        )
-
-    config['make_bottleneck_model_fn'] = make_bottleneck_model
-    config['make_whitening_model_fn'] = make_whitening_model
 
     return config
