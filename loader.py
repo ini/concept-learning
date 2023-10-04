@@ -1,4 +1,6 @@
-from torch.utils.data import DataLoader
+import torch
+
+from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
 from datasets.cifar import CIFAR100
@@ -19,8 +21,6 @@ def get_data_loaders(
     batch_size: int = 64) -> tuple[DataLoader, DataLoader, DataLoader, int, int]:
     """
     Get data loaders for the specified dataset.
-
-    TODO: MNIST & CIFAR validation sets
 
     Parameters
     ----------
@@ -44,28 +44,26 @@ def get_data_loaders(
     num_classes : int
         Number of label classes
     """
+    train_dataset, val_dataset, test_dataset = None, None, None
+
     if name == 'pitfalls_mnist_without_45':
         concept_dim, num_classes = 2, 2
         train_dataset = MNIST_45(root=data_dir, train=True)
-        val_dataset = MNIST_45(root=data_dir, train=False)
         test_dataset = MNIST_45(root=data_dir, train=False)
 
     elif name == 'pitfalls_random_concepts':
         concept_dim, num_classes = 100, 2
         train_dataset = DatasetC(root=data_dir, num_concepts=100, train=True)
-        val_dataset = DatasetC(root=data_dir, num_concepts=100, train=False)
         test_dataset = DatasetC(root=data_dir, num_concepts=100, train=False)
 
     elif name == 'pitfalls_synthetic':
         concept_dim, num_classes = 3, 2
         train_dataset = DatasetD(train=True)
-        val_dataset = DatasetD(train=False)
         test_dataset = DatasetD(train=False)
 
     elif name == 'pitfalls_mnist_123456':
         concept_dim, num_classes = 3, 2
         train_dataset = DatasetE(root=data_dir, train=True)
-        val_dataset = DatasetE(root=data_dir, train=False)
         test_dataset = DatasetE(root=data_dir, train=False)
 
     elif name == 'cifar100':
@@ -82,8 +80,6 @@ def get_data_loaders(
         ])
         train_dataset = CIFAR100(
             root=data_dir, train=True, transform=transform_train, download=True)
-        val_dataset = CIFAR100(
-            root=data_dir, train=False, transform=transform_test, download=True)
         test_dataset = CIFAR100(
             root=data_dir, train=False, transform=transform_test, download=True)
 
@@ -108,7 +104,16 @@ def get_data_loaders(
         test_dataset = CUB(
             root=data_dir, split='test', transform=transform_test, download=True)
 
-    # Make data loaders
+    # Get validation set
+    if val_dataset is None:
+        N = len(train_dataset)
+        train_dataset, val_dataset = random_split(
+            train_dataset,
+            [N - int(0.15 * N), int(0.15 * N)],
+            generator=torch.Generator().manual_seed(42),
+        )
+
+    # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
