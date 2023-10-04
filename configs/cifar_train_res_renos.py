@@ -1,12 +1,14 @@
-from experiments.cifar import get_config as get_cifar_config
 from ray import tune
+from experiments.cifar import (
+    get_config as get_cifar_config,
+    make_bottleneck_model,
+    make_whitening_model,
+)
 
 
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        **kwargs,
-        "mode" : "train",
         "model_type" : tune.grid_search([
             "latent_residual", "decorrelated_residual", "mi_residual",
         ]),
@@ -28,5 +30,6 @@ def get_config(**kwargs) -> dict:
         "norm_type" : tune.grid_search(["none", "layer_norm", "iter_norm"]),
         "T_whitening" : 3,
     }
+    experiment_config.update(kwargs)
     experiment_config = get_cifar_config(**experiment_config)
     return experiment_config

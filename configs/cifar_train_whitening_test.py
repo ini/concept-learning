@@ -1,12 +1,14 @@
-from experiments.cifar import get_config as get_cifar_config
 from ray import tune
+from experiments.cifar import (
+    get_config as get_cifar_config,
+    make_bottleneck_model,
+    make_whitening_model,
+)
 
 
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        **kwargs,
-        "mode" : "train",
         "model_type" : "whitened_residual",
         "save_dir" : "/data/renos/supervised_concept_learning/",
         "data_dir" : "/data/Datasets/cifar/",
@@ -25,5 +27,5 @@ def get_config(**kwargs) -> dict:
         "checkpoint_freq" : 5,
     }
     experiment_config.update(kwargs)
-    experiment_config  = get_cifar_config(**experiment_config)
+    experiment_config = get_cifar_config(**experiment_config)
     return experiment_config

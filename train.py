@@ -22,7 +22,6 @@ from utils import (
     train_multiclass_classification,
 )
 
-from experiments.make_model import bottleneck_model_fn, whitening_model_fn
 
 
 def chain_fns(*fns: Callable) -> Callable:
@@ -129,8 +128,9 @@ def train(config: dict):
     config : dict
         Configuration dictionary
     """
-    make_bottleneck_model_fn = bottleneck_model_fn(config)
-    make_whitening_model_fn =  whitening_model_fn(config)
+    experiment_module = importlib.import_module(config['experiment_module_name'])
+    make_bottleneck_model_fn = experiment_module.make_bottleneck_model
+    make_whitening_model_fn = experiment_module.make_whitening_model
     device = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
 
     # No residual
@@ -235,6 +235,7 @@ if __name__ == '__main__':
     # Load provided experiment config
     experiment_module = importlib.import_module(args.config)
     experiment_config = experiment_module.get_config()
+    experiment_config['experiment_module_name'] = args.config
 
     # Override experiment config with command line arguments
     for key, value in vars(args).items():
