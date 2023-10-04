@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import argparse
+import importlib
+import json
+import numpy as np
 import torch
 import torch.nn as nn
 
 from copy import deepcopy
+from pathlib import Path
 from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from typing import Iterable, Sequence
 
-from lib.club import CLUB
+from loader import get_data_loaders
 from models import ConceptBottleneckModel, ConceptWhiteningModel
 from utils import (
     accuracy,
@@ -44,6 +49,8 @@ class Random(nn.Module):
 
 
 
+
+
 def negative_intervention(
     model: ConceptBottleneckModel | ConceptWhiteningModel,
     concept_preds: Tensor,
@@ -72,6 +79,36 @@ def negative_intervention(
     concept_preds[:, intervention_idx] = incorrect_concepts[:, intervention_idx]
     return concept_preds
 
+def test_positive_interventions(
+    model: ConceptBottleneckModel | ConceptWhiteningModel,
+    test_loader: DataLoader):
+
+    device = next(model.parameters()).device
+    model.eval()
+    num_correct, num_samples = 0, 0
+    with torch.no_grad():
+        for batch in test_loader:
+            (X, c), y = to_device(batch, device)
+
+            if isinstance(model, ConceptBottleneckModel):
+                _, _, original_preds = model(X)
+                _, _, intervened_preds = model(X, concept_preds=c)
+
+            elif isinstance(model, ConceptWhiteningModel):
+                original_preds = model(X)
+                activations = model.activations(X)
+                activations[:, :c.shape[-1]] = c
+                intervened_preds = model.target_network(activations)
+
+            original_incorrect = (original_preds.argmax(-1) != y)
+            intervened_correct = (intervened_preds.argmax(-1) == y)
+
+            num_correct += (original_incorrect & intervened_correct).sum().item()
+            num_samples += original_incorrect.sum().item()
+
+        return num_correct / num_samples
+
+
 def test_negative_interventions(
     model: ConceptBottleneckModel | ConceptWhiteningModel,
     test_loader: DataLoader,
@@ -92,11 +129,11 @@ def test_negative_interventions(
         Number of concepts to intervene on
     """
     if isinstance(num_interventions, Iterable):
-        return [
+        return np.array([
             test_negative_interventions(
                 model, test_loader, concept_dim, num_interventions=n)
             for n in tqdm(num_interventions)
-        ]
+        ])
 
     device = next(model.parameters()).device
     model.eval()
@@ -216,3 +253,123 @@ def test_concept_residual_correlation(
             correlations.append(R.abs().mean().item())
 
     return sum(correlations) / len(correlations)
+
+
+
+def get_config(model_dir):
+    with open(Path(model_dir) / 'params.json') as file:
+        return json.load(file)
+
+def get_concept_dim(config):
+    _, _, _, concept_dim, _ = get_data_loaders(
+        config['dataset'], data_dir=config['data_dir'], batch_size=1)
+    return concept_dim
+
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--modes', nargs='+', default=['pos_intervention', 'neg_intervention'],
+        help='Evaluation modes')
+    parser.add_argument(
+        '--load_dir', type=Path, default='saved/pitfalls/2023-10-04_00_14_53',
+        help='Experiment configuration module')
+    parser.add_argument(
+        '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
+        help='Device to run on')
+    args = parser.parse_args()
+
+    results = {mode: {} for mode in args.modes}
+    model_dirs = [
+        path for path in args.load_dir.iterdir() if (path / 'params.json').exists()]
+
+    for model_dir in model_dirs:
+        config = get_config(model_dir)
+        experiment_module = importlib.import_module(config['experiment_module_name'])
+
+        # Load data
+        _, _, test_loader, concept_dim, num_classes = get_data_loaders(
+            config['dataset'],
+            data_dir=config['data_dir'],
+            batch_size=config['batch_size']
+        )
+
+        # Update config with dataset information
+        config['concept_dim'] = concept_dim
+        config['num_classes'] = num_classes
+
+        # Create model
+        make_bottleneck_model = experiment_module.make_bottleneck_model
+        make_whitening_model = experiment_module.make_whitening_model
+        if config['model_type'] == 'no_residual':
+            model = make_bottleneck_model(dict(config, residual_dim=0)).to(args.device)
+        elif config['model_type'] == 'whitened_residual':
+            model = make_whitening_model(config).to(args.device)
+        else:
+            model = make_bottleneck_model(config).to(args.device)
+
+        # Load trained model parameters
+        model.load_state_dict(torch.load(model_dir / 'model.pt'))
+
+        # Evaluate model
+        for mode in args.modes:
+            if mode == 'pos_intervention':
+                results[mode][model_dir] = test_positive_interventions(
+                    model, test_loader)
+            elif mode == 'neg_intervention':
+                results[mode][model_dir] = test_negative_interventions(
+                    model, test_loader, concept_dim,
+                    num_interventions=range(0, concept_dim + 1),
+                )
+
+
+
+    ### Plotting
+
+    import matplotlib.pyplot as plt
+    from collections import defaultdict
+
+    for mode in args.modes:
+        if mode == 'pos_intervention':
+            # Group results by dataset
+            results_by_dataset = defaultdict(dict)
+            for model_dir in results['pos_intervention']:
+                config = get_config(model_dir)
+                results_by_dataset[config['dataset']][model_dir] = results[mode][model_dir]
+
+            # Plot results for each dataset
+            for dataset_name in results_by_dataset:
+                x, y = [], []
+                for model_dir in sorted(results_by_dataset[dataset_name].keys()):
+                    config = get_config(model_dir)
+                    x.append(config['model_type'])
+                    y.append(results_by_dataset[dataset_name][model_dir])
+                    plt.bar(x, y)
+
+                plt.ylabel('Re-Classification Accuracy')
+                plt.title(
+                    f'Positive Interventions: {dataset_name.replace("_", " ").title()}')
+                plt.show()
+
+        elif mode == 'neg_intervention':
+            # Group results by dataset
+            results_by_dataset = defaultdict(dict)
+            for model_dir in results['pos_intervention']:
+                config = get_config(model_dir)
+                results_by_dataset[config['dataset']][model_dir] = results[mode][model_dir]
+
+            # Plot results for each dataset
+            for dataset_name in results_by_dataset:
+                for model_dir in sorted(results_by_dataset[dataset_name].keys()):
+                    config = get_config(model_dir)
+                    num_interventions = np.arange(get_concept_dim(config) + 1)
+                    accuracies = results_by_dataset[dataset_name][model_dir]
+                    plt.plot(num_interventions, 1 - accuracies, label=config['model_type'])
+
+                plt.xlabel('# of Concepts Intervened')
+                plt.ylabel('Classification Error')
+                plt.title(
+                    f'Negative Interventions: {dataset_name.replace("_", " ").title()}')
+                plt.legend()
+                plt.show()
