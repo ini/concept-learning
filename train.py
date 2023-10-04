@@ -251,8 +251,6 @@ if __name__ == '__main__':
     experiment_name = f'{experiment_name}/{date}'
 
     # Train the model(s)
-    print(experiment_config["num_gpus"])
-    exit()
     tuner = tune.Tuner(
         tune.with_resources(train, resources={'cpu': 1, 'gpu': experiment_config["num_gpus"]}),
         param_space=experiment_config,
