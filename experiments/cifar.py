@@ -53,8 +53,4 @@ def get_config(**kwargs) -> dict:
         'checkpoint_frequency': 5,
     }
     config.update(kwargs)
-
-    _, _, _, config['concept_dim'], config['num_classes'] = get_data_loaders(
-        config['dataset'], config['data_dir'])
-
     return config

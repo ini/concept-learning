@@ -9,6 +9,7 @@ import torch.optim as optim
 from datetime import datetime
 from pathlib import Path
 from ray import air, tune
+from torch.utils.data import DataLoader
 from typing import Any, Callable
 
 from lib.club import CLUB
@@ -42,6 +43,8 @@ def chain_fns(*fns: Callable) -> Callable:
 
 def train_concept_model(
     model: ConceptModel,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
     config: dict[str, Any],
     callback_fn: Callable = lambda model, epoch, batch_index, batch: None,
     residual_loss_fn: Callable = lambda r, c: torch.tensor(0)):
@@ -52,6 +55,10 @@ def train_concept_model(
     ----------
     model : ConceptModel
         Model to train
+    train_loader : DataLoader
+        Train data loader
+    val_loader : DataLoader
+        Validation data loader
     config : dict[str, Any]
         Configuration dictionary
     callback_fn : Callable(model, epoch, batch_index, batch)
@@ -59,14 +66,10 @@ def train_concept_model(
     residual_loss_fn : Callable(residual, concept_preds) -> Tensor
         Function to compute the residual loss
     """
-    # Get data loaders
-    train_loader, val_loader, _, concept_dim, _ = get_data_loaders(
-        config['dataset'], data_dir=config['data_dir'], batch_size=config['batch_size'])
-
     # Get callback function
     if isinstance(model, ConceptWhiteningModel):
         cw_callback_fn = get_cw_callback_fn(
-            train_loader, concept_dim,
+            train_loader, config['concept_dim'],
             alignment_frequency=config['whitening_alignment_frequency'],
         )
         callback_fn = chain_fns(callback_fn, cw_callback_fn)
@@ -131,21 +134,29 @@ def train(config: dict):
     make_whitening_model_fn = experiment_module.make_whitening_model
     device = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
 
+    # Get data loaders
+    train_loader, val_loader, _, concept_dim, num_classes = get_data_loaders(
+        config['dataset'], data_dir=config['data_dir'], batch_size=config['batch_size'])
+
+    # Update config
+    config['concept_dim'] = concept_dim
+    config['num_classes'] = num_classes
+
     # No residual
     if config['model_type'] == 'no_residual':
         model = make_bottleneck_model_fn(dict(config, residual_dim=0)).to(device)
-        train_concept_model(model, config)
+        train_concept_model(model, train_loader, val_loader, config)
 
     # With latent residual
     elif config['model_type'] == 'latent_residual':
         model = make_bottleneck_model_fn(config).to(device)
-        train_concept_model(model, config)
+        train_concept_model(model, train_loader, val_loader, config)
 
     # With decorrelated residual
     elif config['model_type'] == 'decorrelated_residual':
         model = make_bottleneck_model_fn(config).to(device)
         train_concept_model(
-            model, config,
+            model, train_loader, val_loader, config,
             residual_loss_fn=lambda r, c: cross_correlation(r, c).square().mean(),
         )
 
@@ -160,7 +171,7 @@ def train(config: dict):
         mi_optimizer = optim.Adam(
             mi_estimator.parameters(), lr=config['mi_optimizer_lr'])
         train_concept_model(
-            model, config,
+            model, train_loader, val_loader, config,
             residual_loss_fn=mi_estimator.forward,
             callback_fn=get_mi_callback_fn(mi_estimator, mi_optimizer),
         )
@@ -168,7 +179,7 @@ def train(config: dict):
     # With concept-whitened residual
     elif config['model_type'] == 'whitened_residual':
         model = make_whitening_model_fn(config).to(device)
-        train_concept_model(model, config)
+        train_concept_model(model, train_loader, val_loader, config)
 
     else:
         raise ValueError('Unknown model type:', config['model_type'])
@@ -184,8 +195,7 @@ if __name__ == '__main__':
         '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
         help='Device to train on')
     parser.add_argument(
-        '--num-gpus', type=float,
-        help='Number of GPUs to use (per model)')
+        '--num-gpus', type=float, help='Number of GPUs to use (per model)')
     parser.add_argument(
         '--data-dir', type=str, help='Directory where data is stored')
     parser.add_argument(
@@ -252,7 +262,13 @@ if __name__ == '__main__':
 
     # Train the model(s)
     tuner = tune.Tuner(
-        tune.with_resources(train, resources={'cpu': 1, 'gpu': experiment_config["num_gpus"]}),
+        tune.with_resources(
+            train,
+            resources={
+                'cpu': 1,
+                'gpu': experiment_config['num_gpus'] if torch.cuda.is_available() else 0,
+            }
+        ),
         param_space=experiment_config,
         tune_config=tune.TuneConfig(num_samples=1),
         run_config=air.RunConfig(

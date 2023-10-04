@@ -51,8 +51,4 @@ def get_config(**config_override) -> dict:
         'checkpoint_frequency': 1,
     }
     config.update(config_override)
-
-    _, _, _, config['concept_dim'], config['num_classes'] = get_data_loaders(
-        config['dataset'], data_dir=config['data_dir'], batch_size=config['batch_size'])
-
     return config
