@@ -106,8 +106,6 @@ def train_concept_model(
         save_path='./model.pt',
         checkpoint_frequency=config['checkpoint_frequency'],
         verbose=config.get('verbose', False),
-        # we need to save the config so we pass it along
-        config=config,
     )
 
     # Test the model
