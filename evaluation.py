@@ -9,13 +9,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from typing import Iterable, Sequence
 
-from club import CLUB
+from lib.club import CLUB
 from models import ConceptBottleneckModel, ConceptWhiteningModel
 from utils import (
-    concept_model_accuracy,
+    accuracy,
     cross_correlation,
     to_device,
-    Random,
 )
 
 
@@ -162,7 +161,7 @@ def test_random_concepts(
             Random(indices=slice(residual_dim)),
         )
 
-    acc = concept_model_accuracy(new_model, data_loader)
+    acc = accuracy(new_model, data_loader)
     print('Test Classification Accuracy (Random Concepts):', acc)
     return acc
 
@@ -190,7 +189,7 @@ def test_random_residual(
         new_model.bottleneck_layer = nn.Sequential(
             new_model.bottleneck_layer, Random(indices=slice(-residual_dim, None)))
 
-    acc = concept_model_accuracy(new_model, data_loader)
+    acc = accuracy(new_model, data_loader)
     print('Test Classification Accuracy (Random Residual):', acc)
     return acc
 

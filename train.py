@@ -22,6 +22,7 @@ from utils import (
     train_multiclass_classification,
 )
 
+from experiments.make_model import bottleneck_model_fn, whitening_model_fn
 
 
 def chain_fns(*fns: Callable) -> Callable:
@@ -106,6 +107,8 @@ def train_concept_model(
         save_path='./model.pt',
         checkpoint_frequency=config['checkpoint_frequency'],
         verbose=config.get('verbose', False),
+        # we need to save the config so we pass it along
+        config=config,
     )
 
     # Test the model
@@ -126,8 +129,8 @@ def train(config: dict):
     config : dict
         Configuration dictionary
     """
-    make_bottleneck_model_fn = config['make_bottleneck_model_fn']
-    make_whitening_model_fn = config['make_whitening_model_fn']
+    make_bottleneck_model_fn = bottleneck_model_fn(config)
+    make_whitening_model_fn =  whitening_model_fn(config)
     device = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
 
     # No residual

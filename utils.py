@@ -13,7 +13,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from typing import Callable
-
+import pickle
 
 
 def to_device(
@@ -80,7 +80,8 @@ def train_multiclass_classification(
     predict_fn: Callable = lambda outputs: outputs.argmax(dim=-1),
     save_path: str | None = None,
     checkpoint_frequency: int | None = None,
-    verbose: bool = True):
+    verbose: bool = True,
+    config={}):
     """
     Train a model for multiclass classification.
 
@@ -163,29 +164,17 @@ def train_multiclass_classification(
 
             # Create Ray Air checkpoint
             with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
-                if ray.train.get_context().get_world_rank() in {0, None}:
-                    # In standard DDP training, where the model is the same
-                    # across all ranks, only the global rank 0 worker needs
-                    # to save and report the checkpoint
-                    unwrapped_model = getattr(model, 'module', model)
-                    torch.save(
-                        unwrapped_model.state_dict(),
-                        Path(temp_checkpoint_dir) / 'model.pt',
-                    )
-                    checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
+                torch.save(
+                    model.state_dict(),
+                    Path(temp_checkpoint_dir) / 'model.pt',
+                )
+                with open(Path(temp_checkpoint_dir) / 'config.pkl', "wb") as file:
+                    pickle.dump(config, file)
+                checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
 
-            # Save the current model weights
-            if save_path:
-                unwrapped_model = getattr(model, 'module', model)
-                torch.save(unwrapped_model.state_dict(), save_path)
+                # Report metrics to Ray Tune
+                ray.train.report(metrics, checkpoint=checkpoint)
 
-        # Report metrics to Ray Tune
-        ray.train.report(metrics, checkpoint=checkpoint)
-
-    # Save the trained model
-    if save_path:
-        unwrapped_model = getattr(model, 'module', model)
-        torch.save(unwrapped_model.state_dict(), save_path)
 
 def accuracy(
     model: nn.Module,

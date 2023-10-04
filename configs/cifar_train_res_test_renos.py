@@ -5,7 +5,7 @@ from ray import tune
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        **get_cifar_config(**kwargs),
+        **kwargs,
         "mode" : "train",
         "model_type" : tune.grid_search([
             "latent_residual", "decorrelated_residual", "mi_residual",
@@ -29,4 +29,5 @@ def get_config(**kwargs) -> dict:
         "T_whitening" : 3,
     }
     experiment_config.update(kwargs)
+    experiment_config  = get_cifar_config(**experiment_config)
     return experiment_config

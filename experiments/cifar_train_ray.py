@@ -13,7 +13,7 @@ from evaluation import (
 )
 from loader import get_data_loaders
 from models import ConceptBottleneckModel, ConceptWhiteningModel
-from train import train, load_models, train_ray
+from train import train
 from utils import make_ffn, concept_model_accuracy
 from datetime import datetime
 from pathlib import Path
@@ -64,7 +64,7 @@ def main(args_dict):
     name = f"{str(dataset_name)}/{str(date)}"
 
     def trainable(config):
-        train_ray(
+        train(
             config=config,
             make_bottleneck_model_fn=make_bottleneck_model,
             make_whitening_model_fn=make_whitening_model,

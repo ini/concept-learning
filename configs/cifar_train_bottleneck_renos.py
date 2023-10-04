@@ -5,7 +5,7 @@ from ray import tune
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        **get_cifar_config(**kwargs),
+        **kwargs,
         "mode" : "train",
         "model_type" : "no_residual",
         "save_dir" : "/data/renos/supervised_concept_learning/",
@@ -25,4 +25,5 @@ def get_config(**kwargs) -> dict:
         "checkpoint_freq" : 1,
     }
     experiment_config.update(kwargs)
+    experiment_config  = get_cifar_config(**experiment_config)
     return experiment_config
