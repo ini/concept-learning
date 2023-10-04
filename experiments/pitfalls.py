@@ -29,7 +29,12 @@ def make_whitening_model(config):
 
 def get_config(**config_override) -> dict:
     config = {
-        'dataset': 'pitfalls_random_concepts',
+        'dataset': ray.tune.grid_search([
+            'pitfalls_mnist_without_45',
+            'pitfalls_random_concepts',
+            'pitfalls_synthetic',
+            'pitfalls_mnist_123456',
+        ]),
         'data_dir': './data',
         'save_dir': './saved',
         'model_type': ray.tune.grid_search([
