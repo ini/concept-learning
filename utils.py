@@ -149,10 +149,10 @@ def train_multiclass_classification(
 
         scheduler.step()
         epoch_loss = sum(epoch_losses) / len(epoch_losses)
-        metrics = {'loss': epoch_loss}
-        checkpoint = None
 
         if checkpoint_frequency is not None and (epoch % checkpoint_frequency) == 0:
+            metrics = {'epoch': epoch, 'loss': epoch_loss}
+
             # Compute validation accuracy
             if val_loader:
                 metrics['val_acc'] = accuracy(
