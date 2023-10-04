@@ -1,12 +1,13 @@
-
-from experiments.cifar_train_ray import main
+from experiments.cifar import get_config as get_cifar_config
 from ray import tune
-if __name__ == '__main__':
 
 
+
+def get_config(**kwargs) -> dict:
     experiment_config = {
+        **get_cifar_config(),
         "mode" : "train",
-        "model_type" : "bottleneck",
+        "model_type" : "no_residual",
         "save_dir" : "/data/renos/supervised_concept_learning/",
         "data_dir" : "/data/Datasets/cifar/",
         "ray_storage_dir" : "/data/renos/ray_results/",
@@ -23,6 +24,5 @@ if __name__ == '__main__':
         "batch_size" : 64,
         "checkpoint_freq" : 1,
     }
-    main(experiment_config)
-
-
+    experiment_config.update(kwargs)
+    return experiment_config

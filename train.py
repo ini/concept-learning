@@ -185,11 +185,9 @@ if __name__ == '__main__':
         '--num-gpus', type=float, default=1 if torch.cuda.is_available() else 0,
         help='Number of GPUs to use (per model)')
     parser.add_argument(
-        '--data-dir', type=Path, default='./data',
-        help='Directory where data is stored (or will be downloaded to)')
+        '--data-dir', type=str, help='Directory where data is stored')
     parser.add_argument(
-        '--save-dir', type=Path, default='./saved_models',
-        help='Directory to save models to')
+        '--save-dir', type=str, help='Directory to save models to')
     parser.add_argument(
         '--dataset', type=str, choices=DATASET_NAMES, help='Dataset to train on')
     parser.add_argument(
@@ -230,19 +228,19 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # Override experiment config with command line arguments
-    override_config = {}
-    for key, value in vars(args).items():
-        if isinstance(value, list):
-            override_config[key] = tune.grid_search(value)
-        elif value is not None:
-            override_config[key] = value
-
     # Load provided experiment config
     experiment_module = importlib.import_module(args.config)
-    experiment_config = experiment_module.get_config(**override_config)
-    experiment_config['data_dir'] = experiment_config['data_dir'].resolve()
-    experiment_config['save_dir'] = experiment_config['save_dir'].resolve()
+    experiment_config = experiment_module.get_config()
+
+    # Override experiment config with command line arguments
+    for key, value in vars(args).items():
+        if isinstance(value, list):
+            experiment_config[key] = tune.grid_search(value)
+        elif value is not None:
+            experiment_config[key] = value
+
+    experiment_config['data_dir'] = Path(experiment_config['data_dir']).resolve()
+    experiment_config['save_dir'] = Path(experiment_config['save_dir']).resolve()
     experiment_config['verbose'] = False
 
     # Get experiment name

@@ -32,6 +32,8 @@ def make_whitening_model(config):
 def get_config(**kwargs) -> dict:
     config = {
         'dataset': 'cifar100',
+        'data_dir': './data',
+        'save_dir': './saved',
         'make_bottleneck_model_fn': make_bottleneck_model,
         'make_whitening_model_fn': make_whitening_model,
         'model_type': ray.tune.grid_search([
