@@ -59,6 +59,7 @@ def get_data_loaders(
     elif name == 'pitfalls_synthetic':
         concept_dim, num_classes = 3, 2
         train_dataset = DatasetD(train=True)
+        val_dataset = DatasetD(train=False)
         test_dataset = DatasetD(train=False)
 
     elif name == 'pitfalls_mnist_123456':
