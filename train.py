@@ -251,6 +251,7 @@ if __name__ == '__main__':
             experiment_config[key] = tune.grid_search(value)
         elif value is not None:
             experiment_config[key] = value
+
     # Use absolute paths
     experiment_config['data_dir'] = Path(experiment_config['data_dir']).resolve()
     experiment_config['save_dir'] = Path(experiment_config['save_dir']).resolve()

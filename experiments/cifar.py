@@ -1,7 +1,6 @@
 import ray
 import torch.nn as nn
 
-from loader import get_data_loaders
 from models import ConceptBottleneckModel, ConceptWhiteningModel
 from torchvision.models.resnet import resnet18, ResNet18_Weights
 from utils import make_mlp

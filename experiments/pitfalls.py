@@ -1,7 +1,6 @@
 import ray
 import torch.nn as nn
 
-from loader import get_data_loaders
 from models import ConceptBottleneckModel, ConceptWhiteningModel
 from utils import make_mlp
 
@@ -27,7 +26,7 @@ def make_whitening_model(config):
         bottleneck_dim=bottleneck_dim,
     )
 
-def get_config(**config_override) -> dict:
+def get_config(**kwargs) -> dict:
     config = {
         'dataset': ray.tune.grid_search([
             'pitfalls_mnist_without_45',
@@ -55,5 +54,5 @@ def get_config(**config_override) -> dict:
         'whitening_alignment_frequency': 20,
         'checkpoint_frequency': 1,
     }
-    config.update(config_override)
+    config.update(kwargs)
     return config
