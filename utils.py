@@ -13,7 +13,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from typing import Callable
-import pickle
+
 
 
 def to_device(
@@ -80,8 +80,7 @@ def train_multiclass_classification(
     predict_fn: Callable = lambda outputs: outputs.argmax(dim=-1),
     save_path: str | None = None,
     checkpoint_frequency: int | None = None,
-    verbose: bool = True,
-    config={}):
+    verbose: bool = True):
     """
     Train a model for multiclass classification.
 
@@ -164,17 +163,20 @@ def train_multiclass_classification(
 
             # Create Ray Air checkpoint
             with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
+                unwrapped_model = getattr(model, 'module', model)
                 torch.save(
-                    model.state_dict(),
+                    unwrapped_model.state_dict(),
                     Path(temp_checkpoint_dir) / 'model.pt',
                 )
-                with open(Path(temp_checkpoint_dir) / 'config.pkl', "wb") as file:
-                    pickle.dump(config, file)
                 checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
 
                 # Report metrics to Ray Tune
                 ray.train.report(metrics, checkpoint=checkpoint)
 
+    # Save the final model weights
+    if save_path:
+        unwrapped_model = getattr(model, 'module', model)
+        torch.save(unwrapped_model.state_dict(), save_path)
 
 def accuracy(
     model: nn.Module,

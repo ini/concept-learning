@@ -32,8 +32,6 @@ def get_config(**config_override) -> dict:
         'dataset': 'pitfalls_random_concepts',
         'data_dir': './data',
         'save_dir': './saved',
-        'make_bottleneck_model_fn': make_bottleneck_model,
-        'make_whitening_model_fn': make_whitening_model,
         'model_type': ray.tune.grid_search([
             'no_residual',
             'latent_residual',
@@ -56,8 +54,5 @@ def get_config(**config_override) -> dict:
 
     _, _, _, config['concept_dim'], config['num_classes'] = get_data_loaders(
         config['dataset'], data_dir=config['data_dir'], batch_size=config['batch_size'])
-
-    config['make_bottleneck_model_fn'] = make_bottleneck_model
-    config['make_whitening_model_fn'] = make_whitening_model
 
     return config
