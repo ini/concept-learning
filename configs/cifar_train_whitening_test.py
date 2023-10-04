@@ -5,7 +5,7 @@ from ray import tune
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        **get_cifar_config(),
+        **get_cifar_config(**kwargs),
         "mode" : "train",
         "model_type" : "whitened_residual",
         "save_dir" : "/data/renos/supervised_concept_learning/",
