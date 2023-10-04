@@ -148,10 +148,10 @@ def train_multiclass_classification(
 
         scheduler.step()
         epoch_loss = sum(epoch_losses) / len(epoch_losses)
+        metrics = {'loss': epoch_loss}
+        checkpoint = None
 
         if checkpoint_frequency is not None and (epoch % checkpoint_frequency) == 0:
-            metrics = {'loss': epoch_loss}
-
             # Compute validation accuracy
             if val_loader:
                 metrics['val_acc'] = accuracy(
@@ -173,12 +173,14 @@ def train_multiclass_classification(
                         Path(temp_checkpoint_dir) / 'model.pt',
                     )
                     checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
-                    ray.train.report(metrics, checkpoint=checkpoint)
 
             # Save the current model weights
             if save_path:
                 unwrapped_model = getattr(model, 'module', model)
                 torch.save(unwrapped_model.state_dict(), save_path)
+
+        # Report metrics to Ray Tune
+        ray.train.report(metrics, checkpoint=checkpoint)
 
     # Save the trained model
     if save_path:
