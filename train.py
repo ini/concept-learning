@@ -138,7 +138,7 @@ def train(config: dict):
     train_loader, val_loader, _, concept_dim, num_classes = get_data_loaders(
         config['dataset'], data_dir=config['data_dir'], batch_size=config['batch_size'])
 
-    # Update config
+    # Update config with dataset information
     config['concept_dim'] = concept_dim
     config['num_classes'] = num_classes
 
@@ -189,7 +189,7 @@ def train(config: dict):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--config', type=str, default='experiments.pitfalls_random_concepts',
+        '--config', type=str, default='experiments.pitfalls',
         help='Experiment configuration module')
     parser.add_argument(
         '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',

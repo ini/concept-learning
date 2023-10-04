@@ -97,7 +97,7 @@ def test_positive_interventions(
             elif isinstance(model, ConceptWhiteningModel):
                 original_preds = model(X)
                 activations = model.activations(X)
-                activations[:, :c.shape[-1]] = c
+                activations[:, :c.shape[-1]] = 2 * c - 1
                 intervened_preds = model.target_network(activations)
 
             original_incorrect = (original_preds.argmax(-1) != y)
@@ -107,7 +107,6 @@ def test_positive_interventions(
             num_samples += original_incorrect.sum().item()
 
         return num_correct / num_samples
-
 
 def test_negative_interventions(
     model: ConceptBottleneckModel | ConceptWhiteningModel,
