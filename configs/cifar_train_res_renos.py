@@ -21,12 +21,13 @@ def get_config(**kwargs) -> dict:
         "mi_estimator_hidden_dim": 256,
         "mi_optimizer_lr" : 0.001,
         "whitening_alignment_frequency": 20,
-        "num_gpus" : 0.2,
+        "num_gpus" : 0.15,
         "num_samples" : 1,
         "batch_size" : 64,
         "checkpoint_freq" : 5,
         "norm_type" : tune.grid_search(["none", "layer_norm", "iter_norm"]),
         "T_whitening" : 3,
     }
-    experiment_config = get_cifar_config(**experiment_config)
+    experiment_config.update(kwargs)
+    experiment_config  = get_cifar_config(**experiment_config)
     return experiment_config

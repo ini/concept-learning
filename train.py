@@ -186,7 +186,7 @@ if __name__ == '__main__':
         '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
         help='Device to train on')
     parser.add_argument(
-        '--num-gpus', type=float, default=1 if torch.cuda.is_available() else 0,
+        '--num-gpus', type=float,
         help='Number of GPUs to use (per model)')
     parser.add_argument(
         '--data-dir', type=str, help='Directory where data is stored')
@@ -235,14 +235,12 @@ if __name__ == '__main__':
     # Load provided experiment config
     experiment_module = importlib.import_module(args.config)
     experiment_config = experiment_module.get_config()
-
     # Override experiment config with command line arguments
     for key, value in vars(args).items():
         if isinstance(value, list):
             experiment_config[key] = tune.grid_search(value)
         elif value is not None:
             experiment_config[key] = value
-
     # Use absolute paths
     experiment_config['data_dir'] = Path(experiment_config['data_dir']).resolve()
     experiment_config['save_dir'] = Path(experiment_config['save_dir']).resolve()
@@ -253,8 +251,10 @@ if __name__ == '__main__':
     experiment_name = f'{experiment_name}/{date}'
 
     # Train the model(s)
+    print(experiment_config["num_gpus"])
+    exit()
     tuner = tune.Tuner(
-        tune.with_resources(train, resources={'cpu': 1, 'gpu': args.num_gpus}),
+        tune.with_resources(train, resources={'cpu': 1, 'gpu': experiment_config["num_gpus"]}),
         param_space=experiment_config,
         tune_config=tune.TuneConfig(num_samples=1),
         run_config=air.RunConfig(
