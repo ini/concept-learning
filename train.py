@@ -22,6 +22,8 @@ from utils import (
     train_multiclass_classification,
 )
 
+
+
 def chain_fns(*fns: Callable) -> Callable:
     """
     Return a chained function that sequentially calls
@@ -103,7 +105,7 @@ def train_concept_model(
         predict_fn=predict_fn,
         save_path='./model.pt',
         checkpoint_frequency=config['checkpoint_frequency'],
-        verbose=False,
+        verbose=config.get('verbose', False),
     )
 
     # Test the model
@@ -112,8 +114,8 @@ def train_concept_model(
         preprocess_fn=lambda batch: batch[0][0],
         predict_fn=predict_fn,
     )
-    if config.get('verbose', True):
-        print('Test Classification Accuracy:', acc)
+    if config.get('verbose', False):
+        print('Validation Classification Accuracy:', acc)
 
 def train(config: dict):
     """
@@ -149,7 +151,6 @@ def train(config: dict):
     # With MI-minimized residual
     elif config['model_type'] == 'mi_residual':
         model = make_bottleneck_model_fn(config).to(device)
-        device = next(model.parameters()).device
         mi_estimator = CLUB(
             config['residual_dim'],
             config['concept_dim'],
@@ -239,9 +240,9 @@ if __name__ == '__main__':
         elif value is not None:
             experiment_config[key] = value
 
+    # Use absolute paths
     experiment_config['data_dir'] = Path(experiment_config['data_dir']).resolve()
     experiment_config['save_dir'] = Path(experiment_config['save_dir']).resolve()
-    experiment_config['verbose'] = False
 
     # Get experiment name
     date = datetime.today().strftime("%Y-%m-%d_%H_%M_%S")
