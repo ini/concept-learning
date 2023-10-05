@@ -172,7 +172,7 @@ def test_random_residual(
             new_model.residual_network, Randomize())
     elif isinstance(model, ConceptWhiteningModel):
         new_model.bottleneck_layer = Extend(
-            new_model.bottleneck_layer, Randomize(idx=slice(concept_dim)))
+            new_model.bottleneck_layer, Randomize(idx=slice(concept_dim, None)))
 
     return accuracy(new_model, test_loader, predict_fn=concept_model_predict_fn)
 
