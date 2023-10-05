@@ -250,12 +250,16 @@ def evaluate(config: dict):
             model, test_loader, predict_fn=concept_model_predict_fn)
 
     if config['eval_mode'] == 'neg_intervention':
-        metrics['neg_intervention_acc'] = test_interventions(
-            model, test_loader, NegativeIntervention, config['num_interventions'])
+        metrics['neg_intervention_accs'] = [
+            test_interventions(model, test_loader, NegativeIntervention, n)
+            for n in range(train_result.config['concept_dim'] + 1)
+        ]
 
     elif config['eval_mode'] == 'pos_intervention':
-        metrics['pos_intervention_acc'] = test_interventions(
-            model, test_loader, PositiveIntervention, config['num_interventions'])
+        metrics['pos_intervention_accs'] = [
+            test_interventions(model, test_loader, PositiveIntervention, n)
+            for n in range(train_result.config['concept_dim'] + 1)
+        ]
 
     elif config['eval_mode'] == 'random_concepts':
         metrics['random_concept_acc'] = test_random_concepts(
@@ -304,15 +308,10 @@ if __name__ == '__main__':
         {
             'train_result': result,
             'eval_mode': mode,
-            'num_interventions': num_interventions,
             'device': args.device,
         }
         for result in results
         for mode in args.mode
-        for num_interventions in (
-            range(result.config['concept_dim'] + 1)
-            if mode in INTERVENTION_MODES else [None]
-        )
     ]
 
     # Run evaluations

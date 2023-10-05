@@ -101,15 +101,9 @@ def plot_negative_interventions(dataset_results: Results, dataset_name: str):
         Name of the dataset
     """
     for model_type, model_results in dataset_results.items():
-        intervention_results = model_results['neg_intervention']
-        intervention_results = group_results(
-            intervention_results, lambda result: result.config['num_interventions'])
-        num_interventions = sorted(intervention_results.keys())
-        accuracies = np.array([
-            intervention_results[n][0].metrics['neg_intervention_acc']
-            for n in num_interventions
-        ])
-        plt.plot(num_interventions, 1 - accuracies, label=model_type)
+        result = model_results['neg_intervention'][0]
+        accuracies = np.array(result.metrics['neg_intervention_accs'])
+        plt.plot(range(len(accuracies)), 1 - accuracies, label=model_type)
 
     plt.xlabel('# of Concepts Intervened')
     plt.ylabel('Classification Error')
@@ -129,19 +123,13 @@ def plot_positive_interventions(dataset_results: Results, dataset_name: str):
         Name of the dataset
     """
     for model_type, model_results in dataset_results.items():
-        intervention_results = model_results['pos_intervention']
-        intervention_results = group_results(
-            intervention_results, lambda result: result.config['num_interventions'])
-        num_interventions = sorted(intervention_results.keys())
-        accuracies = np.array([
-            intervention_results[n][0].metrics['pos_intervention_acc']
-            for n in num_interventions
-        ])
-        plt.plot(num_interventions, accuracies, label=model_type)
+        result = model_results['pos_intervention'][0]
+        accuracies = np.array(result.metrics['pos_intervention_accs'])
+        plt.plot(range(len(accuracies)), accuracies, label=model_type)
 
     plt.xlabel('# of Concepts Intervened')
     plt.ylabel('Classification Accuracy')
-    plt.title(f'Negative Interventions: {get_dataset_title(dataset_name)}')
+    plt.title(f'Positive Interventions: {get_dataset_title(dataset_name)}')
     plt.legend()
     plt.show()
 
