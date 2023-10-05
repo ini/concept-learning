@@ -65,7 +65,7 @@ class PositiveIntervention(nn.Module):
     def forward(self, x: Tensor, concepts: Tensor):
         if self.model_type == ConceptWhiteningModel:
             concepts = 2 * concepts - 1
-        
+
         concept_dim = concepts.shape[-1]
         intervention_idx = torch.randperm(concept_dim)[:self.num_interventions]
         x[:, intervention_idx] = concepts[:, intervention_idx]
@@ -204,37 +204,37 @@ def load_model(result: ray.train.Result) -> ConceptModel:
     return model
 
 def evaluate(config: dict):
-    result = config['result']
+    train_result = config['train_result']
     metrics = {}
 
     # Get data loaders
     _, _, test_loader, concept_dim, _ = get_data_loaders(
-        result.config['dataset'],
-        data_dir=result.config['data_dir'],
-        batch_size=result.config['batch_size'],
+        train_result.config['dataset'],
+        data_dir=train_result.config['data_dir'],
+        batch_size=train_result.config['batch_size'],
     )
 
     # Load model
-    model = load_model(result).to(config['device'])
+    model = load_model(train_result).to(config['device'])
 
     # Evaluate model
-    if config['mode'] == 'accuracy':
+    if config['eval_mode'] == 'accuracy':
         metrics['test_acc'] = accuracy(
             model, test_loader, predict_fn=concept_model_predict_fn)
 
-    if config['mode'] == 'neg_intervention':
+    if config['eval_mode'] == 'neg_intervention':
         metrics['neg_intervention_acc'] = test_interventions(
             model, test_loader, NegativeIntervention, config['num_interventions'])
 
-    elif config['mode'] == 'pos_intervention':
+    elif config['eval_mode'] == 'pos_intervention':
         metrics['pos_intervention_acc'] = test_interventions(
             model, test_loader, PositiveIntervention, config['num_interventions'])
 
-    elif config['mode'] == 'random_concepts':
+    elif config['eval_mode'] == 'random_concepts':
         metrics['random_concept_acc'] = test_random_concepts(
             model, test_loader, concept_dim)
     
-    elif config['mode'] == 'random_residual':
+    elif config['eval_mode'] == 'random_residual':
         metrics['random_residual_acc'] = test_random_residual(
             model, test_loader, concept_dim)
 
@@ -258,7 +258,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--exp-dir', type=str, help='Experiment directory')
     parser.add_argument(
-        '--modes', nargs='+', default=MODES, help='Evaluation modes')
+        '--mode', nargs='+', default=MODES, help='Evaluation modes')
     parser.add_argument(
         '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
         help='Device to use for model inference',
@@ -278,16 +278,20 @@ if __name__ == '__main__':
         best_results.append(best_result)
 
     # Create evaluation configs
+    INTERVENTION_MODES = ['neg_intervention', 'pos_intervention']
     eval_configs = [
         {
-            'result': result,
-            'mode': mode,
+            'train_result': result,
+            'eval_mode': mode,
             'num_interventions': num_interventions,
             'device': args.device,
         }
         for result in best_results
-        for mode in args.modes
-        for num_interventions in range(result.config['concept_dim'] + 1)
+        for mode in args.mode
+        for num_interventions in (
+            range(result.config['concept_dim'] + 1)
+            if mode in INTERVENTION_MODES else [None]
+        )
     ]
 
     # Run evaluations
