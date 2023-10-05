@@ -18,6 +18,7 @@ from models import ConceptModel, ConceptBottleneckModel, ConceptWhiteningModel
 from utils import (
     accuracy,
     cross_correlation,
+    disable_ray_storage_context,
     get_cw_callback_fn,
     get_mi_callback_fn,
     train_multiclass_classification,
@@ -262,6 +263,7 @@ if __name__ == '__main__':
     experiment_name = f'{experiment_name}/{date}'
 
     # Train the model(s)
+    disable_ray_storage_context()
     num_gpus = experiment_config.get('num_gpus', 1)
     tuner = tune.Tuner(
         tune.with_resources(
@@ -269,10 +271,10 @@ if __name__ == '__main__':
             resources={'cpu': 1, 'gpu': num_gpus if torch.cuda.is_available() else 0},
         ),
         param_space=experiment_config,
-        tune_config=tune.TuneConfig(num_samples=1),
+        tune_config=tune.TuneConfig(metric='val_acc', mode='max', num_samples=1),
         run_config=air.RunConfig(
             name=experiment_name,
-            local_dir=experiment_config['save_dir'],
+            storage_path=experiment_config['save_dir'],
             checkpoint_config=air.CheckpointConfig(
                 checkpoint_score_attribute='val_acc',
                 checkpoint_score_order='max',

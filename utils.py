@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import ray
 import tempfile
 import torch
@@ -9,6 +10,7 @@ import torch.optim as optim
 
 from pathlib import Path
 from ray.train import Checkpoint
+from ray.train.constants import RAY_AIR_NEW_PERSISTENCE_MODE
 from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -311,6 +313,12 @@ def get_mi_callback_fn(
 
     return mi_training_step
 
+def disable_ray_storage_context():
+    """
+    Disable Ray Air's new persistence mode.
+    Call this function before instantiating `ray.tune.Tuner`.
+    """
+    os.environ.setdefault(RAY_AIR_NEW_PERSISTENCE_MODE, '0')
 
 
 """
