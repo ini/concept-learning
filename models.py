@@ -3,10 +3,29 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from abc import ABC
+from abc import ABC, abstractmethod
 from lib.iterative_normalization import IterNorm, IterNormRotation
 from torch import Tensor
 
+
+
+class ArgsWrapper(nn.Module):
+    """
+    Wrapper to allow model to take additional arguments.
+    """
+
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        self.model = model
+
+    def __getattr__(self, name):
+        if name == 'model':
+            return super().__getattr__(name)
+        else:
+            return getattr(self.model, name)
+
+    def forward(self, *args, **kwargs):
+        return self.model.forward(args[0])
 
 
 class ConceptModel(nn.Module, ABC):
@@ -15,6 +34,18 @@ class ConceptModel(nn.Module, ABC):
     """
     def __init__(self):
         super(ConceptModel, self).__init__()
+
+    @abstractmethod
+    def forward(self, x: Tensor, concepts: Tensor | None = None):
+        """
+        Parameters
+        ----------
+        x : Tensor
+            Input tensor
+        concepts : Tensor or None
+            Ground truth concept values
+        """
+        pass
 
 
 class ConceptBottleneckModel(ConceptModel):
@@ -33,7 +64,7 @@ class ConceptBottleneckModel(ConceptModel):
         super().__init__()
         self.config = config
         self.base_network = base_network
-        self.concept_network = concept_network
+        self.concept_network = ArgsWrapper(concept_network)
         self.residual_network = residual_network
         self.target_network = target_network
         self.norm_type = config.get("norm_type", "none")
@@ -63,16 +94,16 @@ class ConceptBottleneckModel(ConceptModel):
             self.ItN = nn.Identity()
 
     def forward(
-        self, x: Tensor,
-        concept_preds: Tensor | None = None) -> tuple[Tensor, Tensor, Tensor]:
+        self,
+        x: Tensor,
+        concepts: Tensor | None = None) -> tuple[Tensor, Tensor, Tensor]:
         """
         Parameters
         ----------
         x : Tensor
             Input tensor
-        concept_preds : Tensor or None
-            Concept values to override the model's concept predictor
-            (e.g. for interventions)
+        concepts : Tensor or None
+            Ground truth concept values
 
         Returns
         -------
@@ -84,9 +115,7 @@ class ConceptBottleneckModel(ConceptModel):
             Target predictions
         """
         x = self.base_network(x)
-        if concept_preds is None:
-            concept_preds = self.concept_network(x)
-
+        concept_preds = self.concept_network(x, concepts=concepts)
         residual = self.residual_network(x)
         bottleneck_ = torch.cat([concept_preds, residual], dim=-1)
         bottleneck = self.ItN(bottleneck_)
@@ -111,27 +140,38 @@ class ConceptWhiteningModel(ConceptModel):
         super().__init__()
         self.base_network = base_network
         self.target_network = target_network
-        self.bottleneck_layer = IterNormRotation(
-            bottleneck_dim, activation_mode=whitening_activation_mode)
 
-    def forward(self, x: Tensor) -> Tensor:
+        class CW(IterNormRotation):
+            def forward(self, x):
+                bottleneck = x
+                while bottleneck.ndim < 4:
+                    bottleneck = bottleneck.unsqueeze(-1)
+                return super().forward(bottleneck).view(*x.shape)
+
+        self.bottleneck_layer = CW(
+            bottleneck_dim, activation_mode=whitening_activation_mode)
+        self.bottleneck_layer = ArgsWrapper(self.bottleneck_layer)
+
+    def forward(self, x: Tensor, concepts: Tensor | None = None) -> Tensor:
         """
         Parameters
         ----------
         x : Tensor
             Input tensor
+        concepts : Tensor or None
+            Ground truth concept values
         """
-        bottleneck = self.activations(x)
+        bottleneck = self.activations(x, concepts=concepts)
         return self.target_network(bottleneck)
 
-    def activations(self, x: Tensor) -> Tensor:
+    def activations(self, x: Tensor, concepts: Tensor | None = None) -> Tensor:
         """
-        Return the output of the concept whitening layer.
+        Parameters
+        ----------
+        x : Tensor
+            Input tensor
+        concepts : Tensor or None
+            Ground truth concept values
         """
         x = self.base_network(x)
-
-        bottleneck = x
-        while bottleneck.ndim < 4:
-            bottleneck = bottleneck.unsqueeze(-1)
-
-        return self.bottleneck_layer(bottleneck).view(x.shape)
+        return self.bottleneck_layer(x, concepts=concepts)

@@ -192,6 +192,8 @@ def train(config: dict):
 
 
 if __name__ == '__main__':
+    disable_ray_storage_context()
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '--config', type=str, default='experiments.pitfalls',
@@ -286,7 +288,6 @@ if __name__ == '__main__':
         if args.groupby in experiment_config:
             experiment_config[args.groupby] = group
 
-        disable_ray_storage_context()
         num_gpus = experiment_config.get('num_gpus', 1)
         tuner = tune.Tuner(
             tune.with_resources(
