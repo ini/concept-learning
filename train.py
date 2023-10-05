@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import itertools
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -204,7 +205,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--num-gpus', type=float, help='Number of GPUs to use (per model)')
     parser.add_argument(
-        '--groupby', type=str, help='Configuration key to group results by')
+        '--groupby', type=str, nargs='+', help='Configuration key to group results by')
     parser.add_argument(
         '--data-dir', type=str, help='Directory where data is stored')
     parser.add_argument(
@@ -212,7 +213,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--dataset', type=str, choices=DATASET_NAMES, help='Dataset to train on')
     parser.add_argument(
-        '--model_type', type=str, nargs='+',
+        '--model-type', type=str, nargs='+',
         choices=[
             'no_residual',
             'latent_residual',
@@ -256,7 +257,9 @@ if __name__ == '__main__':
 
     # Override experiment config with command line arguments
     for key, value in vars(args).items():
-        if isinstance(value, list):
+        if key == 'groupby':
+            continue
+        elif isinstance(value, list):
             experiment_config[key] = tune.grid_search(value)
         elif value is not None:
             experiment_config[key] = value
@@ -270,24 +273,24 @@ if __name__ == '__main__':
     experiment_name = experiment_module.__name__.split('.')[-1]
     experiment_name = f'{experiment_name}/{date}/train'
 
-    # Group by grid search key
-    is_grid_search = lambda x: (
-        isinstance(x, dict)
-        and 'grid_search' in x
-        and len(x) == 1
-    )
+    # Create experiment groups by config keys in `args.groupby`,
+    # where for each group in `groups`, `group[i]` is the value for the i-th config key.
+    # This will run a separate Ray Tune experiment for each group.
+    is_grid_search = lambda x: isinstance(x, dict) and 'grid_search' in x and len(x) == 1
+    list_values = lambda x: x['grid_search'] if is_grid_search(x) else [x]
     if args.groupby is None:
         groups = [None]
-    elif is_grid_search(experiment_config[args.groupby]):
-        groups = list(experiment_config[args.groupby]['grid_search'])
     else:
-        groups = [experiment_config[args.groupby]]
+        groups = list(itertools.product(*(
+            list_values(experiment_config[key]) for key in args.groupby)))
 
     # Train the model(s)
     for group in groups:
-        if args.groupby in experiment_config:
-            experiment_config[args.groupby] = group
+        if group is not None:
+            for i, key in enumerate(args.groupby):
+                experiment_config[key] = group[i]
 
+        group_name = '/'.join(group) if group else None
         num_gpus = experiment_config.get('num_gpus', 1)
         tuner = tune.Tuner(
             tune.with_resources(
@@ -300,7 +303,7 @@ if __name__ == '__main__':
             param_space=experiment_config,
             tune_config=tune.TuneConfig(metric='val_acc', mode='max', num_samples=1),
             run_config=air.RunConfig(
-                name=f'{experiment_name}/{group}' if group else experiment_name,
+                name=f'{experiment_name}/{group_name}' if group else experiment_name,
                 storage_path=experiment_config['save_dir'],
                 checkpoint_config=air.CheckpointConfig(
                     checkpoint_score_attribute='val_acc',

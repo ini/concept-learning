@@ -198,7 +198,7 @@ def load_train_results(
         tuner = tune.Tuner.restore(str(path), trainable=train)
         group_results = tuner.get_results()
         if best_only:
-            best_result = results.get_best_result(metric='val_acc', mode='max')
+            best_result = group_results.get_best_result(metric='val_acc', mode='max')
             results.append(best_result)
         else:
             results.extend(group_results)
