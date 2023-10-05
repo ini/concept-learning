@@ -1,5 +1,6 @@
 import argparse
 import importlib
+import pyarrow.fs
 import torch
 import torch.nn as nn
 import ray.train
@@ -200,7 +201,6 @@ def load_train_results(
     experiment_path = Path(experiment_path).resolve()
     tuner = tune.Tuner.restore(str(experiment_path / 'train'), trainable=train)
     results = tuner.get_results()
-    import pyarrow.fs
     
     if not best_only:
         return list(results)
