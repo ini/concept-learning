@@ -137,7 +137,9 @@ def train_multiclass_classification(
             # Update the model
             model.train()
             optimizer.zero_grad()
-            output = model(preprocess_fn(batch))
+            inputs = preprocess_fn(batch)
+            inputs = inputs if isinstance(inputs, (tuple, list)) else (inputs,)
+            output = model(*inputs)
             loss = loss_fn(batch, output)
             loss.backward()
             optimizer.step()
@@ -208,7 +210,9 @@ def accuracy(
     with torch.no_grad():
         for batch in data_loader:
             batch = to_device(batch_transform_fn(batch), device)
-            output = model(preprocess_fn(batch))
+            inputs = preprocess_fn(batch)
+            inputs = inputs if isinstance(inputs, (tuple, list)) else (inputs,)
+            output = model(*inputs)
             predictions = predict_fn(output)
             targets = batch[1]
             num_correct += (predictions == targets).sum().item()

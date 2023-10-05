@@ -9,6 +9,7 @@ import torch.optim as optim
 from datetime import datetime
 from pathlib import Path
 from ray import air, tune
+from torch import Tensor
 from torch.utils.data import DataLoader
 from typing import Any, Callable
 
@@ -41,6 +42,18 @@ def chain_fns(*fns: Callable) -> Callable:
             fn(*args, **kwargs)
 
     return chained_fn
+
+def concept_model_predict_fn(outputs: Tensor | tuple[Tensor]) -> Tensor:
+    """
+    Prediction function for concept models.
+
+    Parameters
+    ----------
+    outputs : Tensor or tuple[Tensor]
+        Model outputs
+    """
+    outputs = outputs[-1] if isinstance(outputs, tuple) else outputs
+    return outputs.argmax(dim=-1)
 
 def train_concept_model(
     model: ConceptModel,
@@ -89,13 +102,6 @@ def train_concept_model(
     else:
         loss_fn = lambda batch, outputs: nn.CrossEntropyLoss()(outputs, batch[1])
 
-    # Define prediction function
-    def predict_fn(outputs):
-        if isinstance(outputs, tuple):
-            return outputs[2].argmax(dim=-1)
-        else:
-            return outputs.argmax(dim=-1)
-
     # Train the model
     train_multiclass_classification(
         model,
@@ -103,10 +109,9 @@ def train_concept_model(
         val_loader,
         num_epochs=config['num_epochs'],
         lr=config['lr'],
-        preprocess_fn=lambda batch: batch[0][0],
         callback_fn=callback_fn,
         loss_fn=loss_fn,
-        predict_fn=predict_fn,
+        predict_fn=concept_model_predict_fn,
         save_path='./model.pt',
         checkpoint_frequency=config['checkpoint_frequency'],
         verbose=config.get('verbose', False),
@@ -115,8 +120,7 @@ def train_concept_model(
     # Test the model
     acc = accuracy(
         model, val_loader,
-        preprocess_fn=lambda batch: batch[0][0],
-        predict_fn=predict_fn,
+        predict_fn=concept_model_predict_fn,
     )
     if config.get('verbose', False):
         print('Validation Classification Accuracy:', acc)
