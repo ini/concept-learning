@@ -262,13 +262,11 @@ if __name__ == '__main__':
     experiment_name = f'{experiment_name}/{date}'
 
     # Train the model(s)
+    num_gpus = experiment_config.get('num_gpus', 1)
     tuner = tune.Tuner(
         tune.with_resources(
             train,
-            resources={
-                'cpu': 1,
-                'gpu': experiment_config['num_gpus'] if torch.cuda.is_available() else 0,
-            }
+            resources={'cpu': 1, 'gpu': num_gpus if torch.cuda.is_available() else 0},
         ),
         param_space=experiment_config,
         tune_config=tune.TuneConfig(num_samples=1),

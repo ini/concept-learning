@@ -272,7 +272,7 @@ if __name__ == '__main__':
         '--modes', nargs='+', default=['pos_intervention', 'neg_intervention'],
         help='Evaluation modes')
     parser.add_argument(
-        '--load_dir', type=Path, default='saved/pitfalls/2023-10-04_00_14_53',
+        '--load-dir', type=Path, default='saved/pitfalls/2023-10-04_00_14_53',
         help='Experiment configuration module')
     parser.add_argument(
         '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
