@@ -256,6 +256,14 @@ def load_model(result: ray.train.Result) -> ConceptModel:
     return model
 
 def evaluate(config: dict):
+    """
+    Evaluate a trained model.
+
+    Parameters
+    ----------
+    config : dict
+        Evaluation configuration dictionary
+    """
     train_result = config['train_result']
     metrics = {}
 
@@ -309,7 +317,6 @@ if __name__ == '__main__':
         'random_concepts',
         'random_residual',
     ]
-    INTERVENTION_MODES = ['neg_intervention', 'pos_intervention']
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -354,7 +361,6 @@ if __name__ == '__main__':
             },
         ),
         param_space=tune.grid_search(eval_configs),
-        tune_config=tune.TuneConfig(num_samples=1),
         run_config=air.RunConfig(name='eval', storage_path=Path(args.exp_dir).resolve()),
     )
     eval_results = tuner.fit()

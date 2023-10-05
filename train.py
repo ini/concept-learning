@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import importlib
-import itertools
 import torch
 import torch.nn as nn
 import torch.optim as optim

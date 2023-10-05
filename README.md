@@ -2,7 +2,9 @@
 
 Promises and Pitfalls of Black-Box Concept Learning Models:
 
-    python -m train --config experiments.pitfalls
+    python train.py --config experiments.pitfalls
+    python evaluate.py --exp-dir <GENERATED_EXPERIMENT_DIR>
+    python plot.py --exp-dir <GENERATED_EXPERIMENT_DIR>
 
 CIFAR 100:
 
