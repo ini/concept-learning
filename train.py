@@ -198,6 +198,8 @@ if __name__ == '__main__':
     parser.add_argument(
         '--num-gpus', type=float, help='Number of GPUs to use (per model)')
     parser.add_argument(
+        '--groupby', type=str, help='Configuration key to group results by')
+    parser.add_argument(
         '--data-dir', type=str, help='Directory where data is stored')
     parser.add_argument(
         '--save-dir', type=str, help='Directory to save models to')
@@ -260,26 +262,46 @@ if __name__ == '__main__':
     # Get experiment name
     date = datetime.today().strftime("%Y-%m-%d_%H_%M_%S")
     experiment_name = experiment_module.__name__.split('.')[-1]
-    experiment_name = f'{experiment_name}/{date}'
+    experiment_name = f'{experiment_name}/{date}/train'
+
+    # Group by grid search key
+    is_grid_search = lambda x: (
+        isinstance(x, dict)
+        and 'grid_search' in x
+        and len(x) == 1
+    )
+    if args.groupby is None:
+        groups = [None]
+    elif is_grid_search(experiment_config[args.groupby]):
+        groups = list(experiment_config[args.groupby]['grid_search'])
+    else:
+        groups = [experiment_config[args.groupby]]
 
     # Train the model(s)
-    disable_ray_storage_context()
-    num_gpus = experiment_config.get('num_gpus', 1)
-    tuner = tune.Tuner(
-        tune.with_resources(
-            train,
-            resources={'cpu': 1, 'gpu': num_gpus if torch.cuda.is_available() else 0},
-        ),
-        param_space=experiment_config,
-        tune_config=tune.TuneConfig(metric='val_acc', mode='max', num_samples=1),
-        run_config=air.RunConfig(
-            name=experiment_name,
-            storage_path=experiment_config['save_dir'],
-            checkpoint_config=air.CheckpointConfig(
-                checkpoint_score_attribute='val_acc',
-                checkpoint_score_order='max',
-                num_to_keep=5,
+    for group in groups:
+        if args.groupby in experiment_config:
+            experiment_config[args.groupby] = group
+
+        disable_ray_storage_context()
+        num_gpus = experiment_config.get('num_gpus', 1)
+        tuner = tune.Tuner(
+            tune.with_resources(
+                train,
+                resources={
+                    'cpu': 1,
+                    'gpu': num_gpus if torch.cuda.is_available() else 0
+                },
             ),
-        ),
-    )
-    results = tuner.fit()
+            param_space=experiment_config,
+            tune_config=tune.TuneConfig(metric='val_acc', mode='max', num_samples=1),
+            run_config=air.RunConfig(
+                name=f'{experiment_name}/{group}' if group else experiment_name,
+                storage_path=experiment_config['save_dir'],
+                checkpoint_config=air.CheckpointConfig(
+                    checkpoint_score_attribute='val_acc',
+                    checkpoint_score_order='max',
+                    num_to_keep=5,
+                ),
+            ),
+        )
+        results = tuner.fit()
