@@ -3,7 +3,9 @@ import importlib
 import torch
 import torch.nn as nn
 import ray.train
+import ray.train.context
 
+from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
 from ray import air, tune
@@ -179,31 +181,54 @@ def test_random_residual(
 ### Loading & Execution
 
 def load_train_results(
-    experiment_path: Path | str, best_only: bool = False) -> list[ray.train.Result]:
+    experiment_path: Path | str,
+    best_only: bool = False,
+    groupby: list[str] = ['dataset', 'model_type']) -> list[ray.train.Result]:
     """
     Load train results for the given experiment.
 
     Parameters
     ----------
-    experiment_path : str
+    experiment_path : Path or str
         Path to the experiment directory
     best_only : bool
-        Whether to keep only the best result for each group
+        Whether to return only the best result (for each group)
+    groupby : list[str]
+        List of config keys to group by when selecting best results
     """
-    results = []
+    # Load all results
     experiment_path = Path(experiment_path).resolve()
-    group_paths = [path.parent for path in experiment_path.glob('./train/**/tuner.pkl')]
+    tuner = tune.Tuner.restore(str(experiment_path / 'train'), trainable=train)
+    results = tuner.get_results()
+    import pyarrow.fs
+    
+    if not best_only:
+        return list(results)
 
-    for path in group_paths:
-        tuner = tune.Tuner.restore(str(path), trainable=train)
-        group_results = tuner.get_results()
-        if best_only:
-            best_result = group_results.get_best_result(metric='val_acc', mode='max')
-            results.append(best_result)
-        else:
-            results.extend(group_results)
+    # Group results by config keys in `groupby`
+    trials = defaultdict(list)
+    for trial in results._experiment_analysis.trials:
+        trial.storage = ray.train.context.StorageContext(
+            trial.path,
+            trial.experiment_dir_name,
+            trial_dir_name=trial.path,
+        )
+        group_key = tuple(trial.config[key] for key in groupby)
+        trials[group_key].append(trial)
 
-    return results
+    # Get best result for each group
+    return [
+        tune.ResultGrid(
+            tune.ExperimentAnalysis(
+                results._experiment_analysis.experiment_path,
+                storage_filesystem=pyarrow.fs.LocalFileSystem(),
+                trials=trials[group_key],
+                default_metric=results._experiment_analysis.default_metric,
+                default_mode=results._experiment_analysis.default_mode,
+            )
+        ).get_best_result()
+        for group_key in trials
+    ]
 
 def load_model(result: ray.train.Result) -> ConceptModel:
     """
@@ -299,9 +324,14 @@ if __name__ == '__main__':
     parser.add_argument(
         '--best-only', action='store_true',
         help='Only evaluate best trial result per experiment group')
+    parser.add_argument(
+        '--groupby', nargs='+', default=['dataset', 'model_type'],
+        help='Config keys to group by when selecting best trial results'
+    )
 
     args = parser.parse_args()
-    results = load_train_results(args.exp_dir, best_only=args.best_only)
+    results = load_train_results(
+        args.exp_dir, best_only=args.best_only, groupby=args.groupby)
 
     # Create evaluation configs
     eval_configs = [

@@ -205,8 +205,6 @@ if __name__ == '__main__':
     parser.add_argument(
         '--num-gpus', type=float, help='Number of GPUs to use (per model)')
     parser.add_argument(
-        '--groupby', type=str, nargs='+', help='Configuration key to group results by')
-    parser.add_argument(
         '--data-dir', type=str, help='Directory where data is stored')
     parser.add_argument(
         '--save-dir', type=str, help='Directory to save models to')
@@ -257,9 +255,7 @@ if __name__ == '__main__':
 
     # Override experiment config with command line arguments
     for key, value in vars(args).items():
-        if key == 'groupby':
-            continue
-        elif isinstance(value, list):
+        if isinstance(value, list):
             experiment_config[key] = tune.grid_search(value)
         elif value is not None:
             experiment_config[key] = value
@@ -273,43 +269,26 @@ if __name__ == '__main__':
     experiment_name = experiment_module.__name__.split('.')[-1]
     experiment_name = f'{experiment_name}/{date}/train'
 
-    # Create experiment groups by config keys in `args.groupby`,
-    # where for each group in `groups`, `group[i]` is the value for the i-th config key.
-    # This will run a separate Ray Tune experiment for each group.
-    is_grid_search = lambda x: isinstance(x, dict) and 'grid_search' in x and len(x) == 1
-    list_values = lambda x: x['grid_search'] if is_grid_search(x) else [x]
-    if args.groupby is None:
-        groups = [None]
-    else:
-        groups = list(itertools.product(*(
-            list_values(experiment_config[key]) for key in args.groupby)))
-
     # Train the model(s)
-    for group in groups:
-        if group is not None:
-            for i, key in enumerate(args.groupby):
-                experiment_config[key] = group[i]
-
-        group_name = '/'.join(group) if group else None
-        num_gpus = experiment_config.get('num_gpus', 1)
-        tuner = tune.Tuner(
-            tune.with_resources(
-                train,
-                resources={
-                    'cpu': 1,
-                    'gpu': num_gpus if torch.cuda.is_available() else 0
-                },
+    num_gpus = experiment_config.get('num_gpus', 1)
+    tuner = tune.Tuner(
+        tune.with_resources(
+            train,
+            resources={
+                'cpu': 1,
+                'gpu': num_gpus if torch.cuda.is_available() else 0
+            },
+        ),
+        param_space=experiment_config,
+        tune_config=tune.TuneConfig(metric='val_acc', mode='max', num_samples=1),
+        run_config=air.RunConfig(
+            name=experiment_name,
+            storage_path=experiment_config['save_dir'],
+            checkpoint_config=air.CheckpointConfig(
+                checkpoint_score_attribute='val_acc',
+                checkpoint_score_order='max',
+                num_to_keep=5,
             ),
-            param_space=experiment_config,
-            tune_config=tune.TuneConfig(metric='val_acc', mode='max', num_samples=1),
-            run_config=air.RunConfig(
-                name=f'{experiment_name}/{group_name}' if group else experiment_name,
-                storage_path=experiment_config['save_dir'],
-                checkpoint_config=air.CheckpointConfig(
-                    checkpoint_score_attribute='val_acc',
-                    checkpoint_score_order='max',
-                    num_to_keep=5,
-                ),
-            ),
-        )
-        results = tuner.fit()
+        ),
+    )
+    results = tuner.fit()
