@@ -178,6 +178,33 @@ def test_random_residual(
 
 ### Loading & Execution
 
+def load_train_results(
+    experiment_path: Path | str, best_only: bool = False) -> list[ray.train.Result]:
+    """
+    Load train results for the given experiment.
+
+    Parameters
+    ----------
+    experiment_path : str
+        Path to the experiment directory
+    best_only : bool
+        Whether to keep only the best result for each group
+    """
+    results = []
+    experiment_path = Path(experiment_path).resolve()
+    group_paths = [path.parent for path in experiment_path.glob('./train/**/tuner.pkl')]
+
+    for path in group_paths:
+        tuner = tune.Tuner.restore(str(path), trainable=train)
+        group_results = tuner.get_results()
+        if best_only:
+            best_result = results.get_best_result(metric='val_acc', mode='max')
+            results.append(best_result)
+        else:
+            results.extend(group_results)
+
+    return results
+
 def load_model(result: ray.train.Result) -> ConceptModel:
     """
     Load a trained model from a Ray Tune result.
@@ -253,6 +280,7 @@ if __name__ == '__main__':
         'random_concepts',
         'random_residual',
     ]
+    INTERVENTION_MODES = ['neg_intervention', 'pos_intervention']
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -261,24 +289,17 @@ if __name__ == '__main__':
         '--mode', nargs='+', default=MODES, help='Evaluation modes')
     parser.add_argument(
         '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-        help='Device to use for model inference',
-    )
+        help='Device to use for model inference')
     parser.add_argument(
         '--num-gpus', type=float, default=1, help='Number of GPUs to use (per model)')
-    args = parser.parse_args()
+    parser.add_argument(
+        '--best-only', action='store_true',
+        help='Only evaluate best trial result per experiment group')
 
-    # Get best trial results
-    best_results = []
-    experiment_path = Path(args.exp_dir).resolve()
-    group_paths = [path.parent for path in experiment_path.glob('./train/**/tuner.pkl')]
-    for path in group_paths:
-        train_tuner = tune.Tuner.restore(str(path), trainable=train)
-        results = train_tuner.get_results()
-        best_result = results.get_best_result(metric='val_acc', mode='max')
-        best_results.append(best_result)
+    args = parser.parse_args()
+    results = load_train_results(args.exp_dir, best_only=args.best_only)
 
     # Create evaluation configs
-    INTERVENTION_MODES = ['neg_intervention', 'pos_intervention']
     eval_configs = [
         {
             'train_result': result,
@@ -286,7 +307,7 @@ if __name__ == '__main__':
             'num_interventions': num_interventions,
             'device': args.device,
         }
-        for result in best_results
+        for result in results
         for mode in args.mode
         for num_interventions in (
             range(result.config['concept_dim'] + 1)
@@ -305,6 +326,6 @@ if __name__ == '__main__':
         ),
         param_space=tune.grid_search(eval_configs),
         tune_config=tune.TuneConfig(num_samples=1),
-        run_config=air.RunConfig(name='eval', storage_path=experiment_path),
+        run_config=air.RunConfig(name='eval', storage_path=Path(args.exp_dir).resolve()),
     )
     eval_results = tuner.fit()

@@ -55,7 +55,7 @@ def group_results(results: Results, get_group: Callable) -> dict[str, Results]:
 
     return results_by_group
 
-def get_eval_results(experiment_path: str) -> Results:
+def load_eval_results(experiment_path: str) -> Results:
     """
     Get evaluation results for the given experiment.
 
@@ -212,7 +212,7 @@ if __name__ == '__main__':
         '--mode', nargs='+', default=MODES, help='Evaluation modes')
 
     args = parser.parse_args()
-    eval_results = get_eval_results(args.exp_dir)
+    eval_results = load_eval_results(args.exp_dir)
 
     # Plot results for each dataset
     for dataset_name, dataset_results in eval_results.items():
