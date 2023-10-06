@@ -23,7 +23,19 @@ from utils import accuracy, disable_ray_storage_context
 
 ### Helper Modules
 
-class Extend(nn.Sequential):
+class Subscriptable(type):
+    """
+    Subscriptable metaclass.
+    """
+
+    def __getitem__(cls, key):
+        return cls(key)
+
+
+class Chain(nn.Sequential):
+    """
+    Sequential module that supports additional arguments in forward pass.
+    """
 
     def forward(self, input, *args, **kwargs):
         for module in self:
@@ -46,7 +58,7 @@ class NegativeIntervention(nn.Module):
         if self.model_type == ConceptWhiteningModel:
             incorrect_concepts = 1 - 2 * concepts   # concept activations
         else:
-            incorrect_concepts = 1 - concepts   # concepts values
+            incorrect_concepts = 1 - concepts   # binary concept values
 
         concept_dim = concepts.shape[-1]
         intervention_idx = torch.randperm(concept_dim)[:self.num_interventions]
@@ -75,7 +87,7 @@ class PositiveIntervention(nn.Module):
         return x
 
 
-class Randomize(nn.Module):
+class Randomize(nn.Module, metaclass=Subscriptable):
     """
     Shuffle data along the batch dimension.
     """
@@ -115,12 +127,12 @@ def test_interventions(
     new_model = deepcopy(model)
 
     if isinstance(model, ConceptBottleneckModel):
-        new_model.concept_network = Extend(
+        new_model.concept_network = Chain(
             new_model.concept_network,
             intervention_cls(num_interventions, type(model)),
         )
     elif isinstance(model, ConceptWhiteningModel):
-        new_model.bottleneck_layer = Extend(
+        new_model.bottleneck_layer = Chain(
             new_model.bottleneck_layer,
             intervention_cls(num_interventions, type(model)),
         )
@@ -144,11 +156,11 @@ def test_random_concepts(
     new_model = deepcopy(model)
 
     if isinstance(model, ConceptBottleneckModel):
-        new_model.concept_network = Extend(
+        new_model.concept_network = Chain(
             new_model.concept_network, Randomize())
     elif isinstance(model, ConceptWhiteningModel):
-        new_model.bottleneck_layer = Extend(
-            new_model.bottleneck_layer, Randomize(idx=slice(concept_dim)))
+        new_model.bottleneck_layer = Chain(
+            new_model.bottleneck_layer, Randomize[:concept_dim])
 
     return accuracy(new_model, test_loader, predict_fn=concept_model_predict_fn)
 
@@ -169,11 +181,11 @@ def test_random_residual(
     new_model = deepcopy(model)
 
     if isinstance(model, ConceptBottleneckModel):
-        new_model.residual_network = Extend(
+        new_model.residual_network = Chain(
             new_model.residual_network, Randomize())
     elif isinstance(model, ConceptWhiteningModel):
-        new_model.bottleneck_layer = Extend(
-            new_model.bottleneck_layer, Randomize(idx=slice(concept_dim, None)))
+        new_model.bottleneck_layer = Chain(
+            new_model.bottleneck_layer, Randomize[concept_dim:])
 
     return accuracy(new_model, test_loader, predict_fn=concept_model_predict_fn)
 
