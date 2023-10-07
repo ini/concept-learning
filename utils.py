@@ -308,8 +308,7 @@ def get_mi_callback_fn(
         (X, concepts), y = to_device(batch, device)
         mi_optimizer.zero_grad()
         with torch.no_grad():
-            residual = model.residual_network(X)
-            concept_preds = model.concept_network(X)
+            concept_preds, residual, _ = model(X)
 
         mi_loss = mi_estimator.learning_loss(residual, concept_preds)
         mi_loss.backward()
