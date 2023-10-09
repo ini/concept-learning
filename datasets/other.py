@@ -22,11 +22,11 @@ class MNISTModulo(Dataset):
         * digit % 5 == 4
     """
 
-    def __init__(self, train: bool = True):
+    def __init__(self, root: str, train: bool = True):
         transform = transforms.Compose(
             [transforms.ToTensor(), transforms.Normalize(0.5, 0.5)])
         mnist = datasets.MNIST(
-            root='./data', train=train, transform=transform, download=True)
+            root=root, train=train, transform=transform, download=True)
 
         self.data = mnist.data.float()
         self.targets = mnist.targets.long()

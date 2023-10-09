@@ -5,11 +5,13 @@ from torchvision import transforms
 
 from datasets.cifar import CIFAR100
 from datasets.cub import CUB
+from datasets.other import MNISTModulo
 from datasets.pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 
 
 
 DATASET_NAMES = [
+    'mnist_modulo',
     'pitfalls_mnist_without_45', 'pitfalls_random_concepts',
     'pitfalls_synthetic', 'pitfalls_mnist_123456',
     'cifar100', 'cub',
@@ -46,7 +48,12 @@ def get_data_loaders(
     """
     train_dataset, val_dataset, test_dataset = None, None, None
 
-    if name == 'pitfalls_mnist_without_45':
+    if name == 'mnist_modulo':
+        concept_dim, num_classes = 5, 10
+        train_dataset = MNISTModulo(root=data_dir, train=True)
+        test_dataset = MNISTModulo(root=data_dir, train=False)
+
+    elif name == 'pitfalls_mnist_without_45':
         concept_dim, num_classes = 2, 2
         train_dataset = MNIST_45(root=data_dir, train=True)
         test_dataset = MNIST_45(root=data_dir, train=False)
