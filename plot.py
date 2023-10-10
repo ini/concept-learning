@@ -18,6 +18,20 @@ Results = Iterable[ray.train.Result] | dict[str, 'Results'] # typing
 
 ### Helper Functions
 
+def get_group_key(result: ray.train.Result, groupby: list[str]):
+    """
+    Get the group key for the given result.
+
+    Parameters
+    ----------
+    result : ray.train.Result
+        Evaluation result
+    groupby : list[str]
+        List of train config keys to group by
+    """
+    group_key = tuple(result.config['train_result'].config[key] for key in groupby)
+    return group_key[0] if len(group_key) == 1 else group_key
+
 def get_dataset_title(dataset_name: str) -> str:
     """
     Get a nicely-formatted title for the given dataset.
@@ -68,8 +82,8 @@ def load_eval_results(path: str) -> Results:
     Returns
     -------
     results : Results
-        Evaluation results, grouped by dataset, model type, and evaluation mode,
-        where `results[dataset][model_type][eval_mode]` is a list
+        Evaluation results, grouped by dataset and evaluation mode,
+        where `results[dataset][eval_mode]` is a list
         of `ray.train.Result` instances
     """
     disable_ray_storage_context()
@@ -86,8 +100,6 @@ def load_eval_results(path: str) -> Results:
     results = group_results(
         results, lambda result: result.config['train_result'].config['dataset'])
     results = group_results(
-        results, lambda result: result.config['train_result'].config['model_type'])
-    results = group_results(
         results, lambda result: result.config['eval_mode'])
 
     return results
@@ -96,7 +108,8 @@ def load_eval_results(path: str) -> Results:
 
 ### Plotting
 
-def plot_negative_interventions(dataset_results: Results, dataset_name: str):
+def plot_negative_interventions(
+    dataset_results: Results, dataset_name: str, groupby: list[str] = ['model_type']):
     """
     Plot negative intervention results.
 
@@ -106,11 +119,16 @@ def plot_negative_interventions(dataset_results: Results, dataset_name: str):
         Results for the given dataset, grouped by model type and evaluation mode
     dataset_name : str
         Name of the dataset
+    groupby : list[str]
+        List of train config keys to group by
     """
-    for model_type, model_results in dataset_results.items():
-        result = model_results['neg_intervention'][0]
+    for result in dataset_results['neg_intervention']:
         accuracies = np.array(result.metrics['neg_intervention_accs'])
-        plt.plot(range(len(accuracies)), 1 - accuracies, label=model_type)
+        plt.plot(
+            range(len(accuracies)),
+            1 - accuracies,
+            label=get_group_key(result, groupby)
+        )
 
     plt.xlabel('# of Concepts Intervened')
     plt.ylabel('Classification Error')
@@ -118,9 +136,10 @@ def plot_negative_interventions(dataset_results: Results, dataset_name: str):
     plt.legend()
     plt.show()
 
-def plot_positive_interventions(dataset_results: Results, dataset_name: str):
+def plot_positive_interventions(
+    dataset_results: Results, dataset_name: str, groupby: list[str] = ['model_type']):
     """
-    Plot positive intervention results.
+    Plot negative intervention results.
 
     Parameters
     ----------
@@ -128,11 +147,16 @@ def plot_positive_interventions(dataset_results: Results, dataset_name: str):
         Results for the given dataset, grouped by model type and evaluation mode
     dataset_name : str
         Name of the dataset
+    groupby : list[str]
+        List of train config keys to group by
     """
-    for model_type, model_results in dataset_results.items():
-        result = model_results['pos_intervention'][0]
+    for result in dataset_results['pos_intervention']:
         accuracies = np.array(result.metrics['pos_intervention_accs'])
-        plt.plot(range(len(accuracies)), accuracies, label=model_type)
+        plt.plot(
+            range(len(accuracies)),
+            accuracies,
+            label=get_group_key(result, groupby)
+        )
 
     plt.xlabel('# of Concepts Intervened')
     plt.ylabel('Classification Accuracy')
@@ -140,7 +164,8 @@ def plot_positive_interventions(dataset_results: Results, dataset_name: str):
     plt.legend()
     plt.show()
 
-def plot_random_concepts_residual(dataset_results: Results, dataset_name: str):
+def plot_random_concepts_residual(
+    dataset_results: Results, dataset_name: str, groupby: list[str] = ['model_type']):
     """
     Plot results with randomized concepts and residuals.
 
@@ -150,34 +175,37 @@ def plot_random_concepts_residual(dataset_results: Results, dataset_name: str):
         Results for the given dataset, grouped by model type and evaluation mode
     dataset_name : str
         Name of the dataset
+    groupby : list[str]
+        List of train config keys to group by
     """
+    groups = []
     baseline_accuracies = []
     random_concept_accuracies = []
     random_residual_accuracies = []
-    for model_type in sorted(dataset_results.keys()):
-        model_results = dataset_results[model_type]
+    for i in range(len(dataset_results['accuracy'])):
+        groups.append(get_group_key(dataset_results['accuracy'][i], groupby))
         baseline_accuracies.append(
-            model_results['accuracy'][0].metrics['test_acc'])
+            dataset_results['accuracy'][i].metrics['test_acc'])
         random_concept_accuracies.append(
-            model_results['random_concepts'][0].metrics['random_concept_acc'])
+            dataset_results['random_concepts'][i].metrics['random_concept_acc'])
         random_residual_accuracies.append(
-            model_results['random_residual'][0].metrics['random_residual_acc'])
+            dataset_results['random_residual'][i].metrics['random_residual_acc'])
 
     # Plot
     plt.bar(
-        np.arange(len(dataset_results)) - 0.25,
+        np.arange(len(groups)) - 0.25,
         baseline_accuracies,
         label='Baseline',
         width=0.25,
     )
     plt.bar(
-        np.arange(len(dataset_results)),
+        np.arange(len(groups)),
         random_concept_accuracies,
         label='Random Concepts',
         width=0.25,
     )
     plt.bar(
-        np.arange(len(dataset_results)) + 0.25,
+        np.arange(len(groups)) + 0.25,
         random_residual_accuracies,
         width=0.25,
         label='Random Residual',
@@ -188,7 +216,7 @@ def plot_random_concepts_residual(dataset_results: Results, dataset_name: str):
         *random_concept_accuracies,
         *random_residual_accuracies,
     ])
-    plt.xticks(np.arange(len(dataset_results)), sorted(dataset_results.keys()))
+    plt.xticks(np.arange(len(groups)), groups)
     plt.ylim(max(0, y_min - 0.1), 1)
     plt.ylabel('Classification Accuracy')
     plt.title(f'Random Concepts & Residual: {get_dataset_title(dataset_name)}')
@@ -205,6 +233,10 @@ if __name__ == '__main__':
         '--exp-dir', type=str, help='Experiment directory')
     parser.add_argument(
         '--mode', nargs='+', default=MODES, help='Evaluation modes')
+    parser.add_argument(
+        '--groupby', nargs='+', default=['model_type'],
+        help='Train config keys to group plots by'
+    )
 
     args = parser.parse_args()
     eval_results = load_eval_results(args.exp_dir)
@@ -213,8 +245,11 @@ if __name__ == '__main__':
     for dataset_name, dataset_results in eval_results.items():
         for mode in args.mode:
             if mode == 'neg_intervention':
-                plot_negative_interventions(dataset_results, dataset_name)
+                plot_negative_interventions(
+                    dataset_results, dataset_name, args.groupby)
             elif mode == 'pos_intervention':
-                plot_positive_interventions(dataset_results, dataset_name)
+                plot_positive_interventions(
+                    dataset_results, dataset_name, args.groupby)
             elif mode == 'random':
-                plot_random_concepts_residual(dataset_results, dataset_name)
+                plot_random_concepts_residual(
+                    dataset_results, dataset_name, args.groupby)
