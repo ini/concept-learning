@@ -17,7 +17,7 @@ def make_bottleneck_model(config):
         concept_network=nn.Sequential(make_resnet(config['concept_dim']), nn.Sigmoid()),
         residual_network=make_resnet(config['residual_dim']),
         target_network=make_mlp(config['num_classes']),
-        config=config,
+        **config,
     )
 
 def make_whitening_model(config):
@@ -26,6 +26,7 @@ def make_whitening_model(config):
         base_network=make_resnet(bottleneck_dim),
         target_network=make_mlp(config['num_classes']),
         bottleneck_dim=bottleneck_dim,
+        **config,
     )
 
 def get_config(**kwargs) -> dict:

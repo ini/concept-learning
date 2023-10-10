@@ -3,39 +3,31 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from abc import ABC, abstractmethod
-from lib.iterative_normalization import IterNorm, IterNormRotation
 from torch import Tensor
 
+from lib.iterative_normalization import IterNorm, IterNormRotation
+from nn_extensions import Apply
+from utils import unwrap
 
 
-class ArgsWrapper(nn.Module):
+
+### Helper Modules
+
+class ConceptModuleWrapper(nn.Module):
     """
-    Wrapper to allow model to take additional arguments.
+    Wrapper to allow module to optionally take in ground truth concepts.
     """
 
-    def __init__(self, model: nn.Module):
+    def __init__(self, module: nn.Module):
         super().__init__()
-        self.model = model
+        self.module = module
 
-    def __getattr__(self, name):
-        if name == 'model':
+    def __getattr__(self, name: str):
+        if name == 'module':
             return super().__getattr__(name)
         else:
-            return getattr(self.model, name)
+            return getattr(self.module, name)
 
-    def forward(self, *args, **kwargs):
-        return self.model.forward(args[0])
-
-
-class ConceptModel(nn.Module, ABC):
-    """
-    Abstract base class for concept models.
-    """
-    def __init__(self):
-        super(ConceptModel, self).__init__()
-
-    @abstractmethod
     def forward(self, x: Tensor, concepts: Tensor | None = None):
         """
         Parameters
@@ -45,12 +37,43 @@ class ConceptModel(nn.Module, ABC):
         concepts : Tensor or None
             Ground truth concept values
         """
-        pass
+        return self.module(x)
 
 
-class ConceptBottleneckModel(ConceptModel):
+class ConceptWhitening(IterNormRotation):
     """
-    Concept bottleneck model.
+    Concept whitening layer (with support for arbitrary number of input dimensions).
+    """
+    def forward(self, x: Tensor):
+        bottleneck = x
+        while bottleneck.ndim < 4:
+            bottleneck = bottleneck.unsqueeze(-1)
+        return super().forward(bottleneck).view(*x.shape)
+
+
+
+### Concept Models
+
+class ConceptModel(nn.Module):
+    """
+    Base class for concept models.
+
+    Attributes
+    ----------
+    base_network : nn.Module
+        Network that pre-processes input
+    concept_network : nn.Module
+        Network that takes the output of `base_network` and
+        generates concept predictions
+    residual_network : nn.Module
+        Network that takes the output of `base_network` and
+        generates a residual vector
+    bottleneck_layer : nn.Module
+        Network that post-processes the concatenated output of
+        `concept_network` and `residual_network`
+    target_network : nn.Module
+        Network that takes the output of `bottleneck_layer` and
+        generates target predictions
     """
 
     def __init__(
@@ -59,39 +82,27 @@ class ConceptBottleneckModel(ConceptModel):
         residual_network: nn.Module,
         target_network: nn.Module,
         base_network: nn.Module = nn.Identity(),
-        config = {},
-        **kwargs):
+        bottleneck_layer: nn.Module = nn.Identity()):
+        """
+        Parameters
+        ----------
+        concept_network : nn.Module -> (..., concept_dim)
+            Concept prediction network
+        residual_network : nn.Module -> (..., residual_dim)
+            Residual network
+        target_network : nn.Module (..., bottleneck_dim) -> (..., num_classes)
+            Target network 
+        base_network : nn.Module
+            Optional base network
+        bottleneck_layer : nn.Module (..., bottleneck_dim) -> (..., bottleneck_dim)
+            Optional bottleneck layer
+        """
         super().__init__()
-        self.config = config
-        self.base_network = base_network
-        self.concept_network = ArgsWrapper(concept_network)
-        self.residual_network = residual_network
-        self.target_network = target_network
-        self.norm_type = config.get("norm_type", "none")
-        self.T_whitening = config.get("T_whitening", 0)
-        self.combineddim = config["concept_dim"] + config["residual_dim"]
-        self.affine_whitening = True
-        if self.norm_type == "batch_norm":
-            self.ItN = nn.BatchNorm1d(self.combineddim)
-        elif self.norm_type == "layer_norm":
-            self.ItN = nn.LayerNorm(self.combineddim)
-        elif self.norm_type == "instance_norm":
-            self.ItN = nn.InstanceNorm1d(self.combineddim, affine=self.affine_whitening)
-        elif self.norm_type == "spectral_norm":
-            self.ItN = nn.utils.spectral_norm(
-                nn.Linear(self.combineddim, self.combineddim)
-            )
-        elif self.norm_type == "iter_norm" and self.T_whitening > 0:
-            self.ItN = IterNorm(
-                self.combineddim,
-                num_channels=self.combineddim,
-                dim=2,
-                T=self.T_whitening,
-                momentum=1,
-                affine=self.affine_whitening,
-            )
-        else:
-            self.ItN = nn.Identity()
+        self.base_network = ConceptModuleWrapper(base_network)
+        self.concept_network = ConceptModuleWrapper(concept_network)
+        self.residual_network = ConceptModuleWrapper(residual_network)
+        self.bottleneck_layer = ConceptModuleWrapper(bottleneck_layer)
+        self.target_network = ConceptModuleWrapper(target_network)
 
     def forward(
         self,
@@ -114,13 +125,72 @@ class ConceptBottleneckModel(ConceptModel):
         target_preds : Tensor
             Target predictions
         """
-        x = self.base_network(x)
+        # Get concept predictions & residual
+        x = self.base_network(x, concepts=concepts)
         concept_preds = self.concept_network(x, concepts=concepts)
-        residual = self.residual_network(x)
-        bottleneck_ = torch.cat([concept_preds, residual], dim=-1)
-        bottleneck = self.ItN(bottleneck_)
-        target_preds = self.target_network(bottleneck)
+        residual = self.residual_network(x, concepts=concepts)
+
+        # Process concept predictions & residual via bottleneck layer
+        if not isinstance(unwrap(self.bottleneck_layer), nn.Identity):
+            x = torch.cat([concept_preds, residual], dim=-1)
+            x = self.bottleneck_layer(x, concepts=concepts)
+            concept_preds, residual = x.split(
+                [concept_preds.shape[-1], residual.shape[-1]], dim=-1)
+
+        # Get target predictions
+        bottleneck = torch.cat([concept_preds.detach(), residual], dim=-1)
+        target_preds = self.target_network(bottleneck, concepts=concepts)
+
         return concept_preds, residual, target_preds
+
+
+class ConceptBottleneckModel(ConceptModel):
+    """
+    Concept bottleneck model.
+    """
+
+    def __init__(
+        self,
+        concept_network: nn.Module,
+        residual_network: nn.Module,
+        target_network: nn.Module,
+        concept_dim: int,
+        residual_dim: int,
+        base_network: nn.Module = nn.Identity(),
+        norm_type: str | None = None,
+        T_whitening: int = 0,
+        affine_whitening: bool = True,
+        **kwargs):
+
+        bottleneck_dim = concept_dim + residual_dim
+        if norm_type == 'batch_norm':
+            bottleneck_layer = nn.BatchNorm1d(bottleneck_dim)
+        elif norm_type == 'layer_norm':
+            bottleneck_layer = nn.LayerNorm(bottleneck_dim)
+        elif norm_type == 'instance_norm':
+            bottleneck_layer = nn.InstanceNorm1d(bottleneck_dim, affine=affine_whitening)
+        elif norm_type == 'spectral_norm':
+            bottleneck_layer = nn.utils.spectral_norm(
+                nn.Linear(bottleneck_dim, bottleneck_dim))
+        elif norm_type == 'iter_norm' and T_whitening > 0:
+            bottleneck_layer = IterNorm(
+                bottleneck_dim,
+                num_channels=bottleneck_dim,
+                T=T_whitening,
+                dim=2,
+                momentum=1,
+                affine=affine_whitening,
+            )
+        else:
+            bottleneck_layer = nn.Identity()
+
+        super().__init__(
+            concept_network=concept_network,
+            residual_network=residual_network,
+            target_network=target_network,
+            base_network=base_network,
+            bottleneck_layer=bottleneck_layer,
+        )
 
 
 class ConceptWhiteningModel(ConceptModel):
@@ -132,46 +202,27 @@ class ConceptWhiteningModel(ConceptModel):
         self,
         base_network: nn.Module,
         target_network: nn.Module,
-        bottleneck_dim: int,
-        whitening_activation_mode: str = 'mean',
+        concept_dim: int,
+        residual_dim: int,
+        T_whitening: int = 0,
+        affine_whitening: bool = True,
+        activation_mode: str = 'mean',
         **kwargs):
-        """
-        """
-        super().__init__()
-        self.base_network = base_network
-        self.target_network = target_network
 
-        class CW(IterNormRotation):
-            def forward(self, x):
-                bottleneck = x
-                while bottleneck.ndim < 4:
-                    bottleneck = bottleneck.unsqueeze(-1)
-                return super().forward(bottleneck).view(*x.shape)
+        bottleneck_layer = ConceptWhitening(
+            concept_dim + residual_dim,
+            num_channels=concept_dim + residual_dim,
+            T=T_whitening,
+            dim=4,
+            momentum=1.0,
+            affine=affine_whitening,
+            activation_mode=activation_mode,
+        )
 
-        self.bottleneck_layer = CW(
-            bottleneck_dim, activation_mode=whitening_activation_mode)
-        self.bottleneck_layer = ArgsWrapper(self.bottleneck_layer)
-
-    def forward(self, x: Tensor, concepts: Tensor | None = None) -> Tensor:
-        """
-        Parameters
-        ----------
-        x : Tensor
-            Input tensor
-        concepts : Tensor or None
-            Ground truth concept values
-        """
-        bottleneck = self.activations(x, concepts=concepts)
-        return self.target_network(bottleneck)
-
-    def activations(self, x: Tensor, concepts: Tensor | None = None) -> Tensor:
-        """
-        Parameters
-        ----------
-        x : Tensor
-            Input tensor
-        concepts : Tensor or None
-            Ground truth concept values
-        """
-        x = self.base_network(x)
-        return self.bottleneck_layer(x, concepts=concepts)
+        super().__init__(
+            concept_network=Apply(lambda x: x[..., :concept_dim]),
+            residual_network=Apply(lambda x: x[..., -residual_dim:]),
+            target_network=target_network,
+            base_network=base_network,
+            bottleneck_layer=bottleneck_layer,
+        )

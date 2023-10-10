@@ -40,6 +40,17 @@ def to_device(
 
     raise ValueError(f'Unsupported data type: {type(data)}')
 
+def unwrap(model: nn.Module) -> nn.Module:
+    """
+    Unwrap a model.
+
+    Parameters
+    ----------
+    model : nn.Module
+        Model to unwrap
+    """
+    return getattr(model, 'module', model)
+
 def make_mlp(
     output_dim: int,
     hidden_dim: int = 256,
@@ -167,9 +178,8 @@ def train_multiclass_classification(
 
             # Create Ray Air checkpoint
             with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
-                unwrapped_model = getattr(model, 'module', model)
                 torch.save(
-                    unwrapped_model.state_dict(),
+                    unwrap(model).state_dict(),
                     Path(temp_checkpoint_dir) / 'model.pt',
                 )
                 checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
@@ -179,8 +189,7 @@ def train_multiclass_classification(
 
     # Save the final model weights
     if save_path:
-        unwrapped_model = getattr(model, 'module', model)
-        torch.save(unwrapped_model.state_dict(), save_path)
+        torch.save(unwrap(model).state_dict(), save_path)
 
 def accuracy(
     model: nn.Module,

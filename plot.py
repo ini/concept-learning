@@ -1,6 +1,7 @@
 import argparse
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import ray
 
 from collections import defaultdict
@@ -55,13 +56,13 @@ def group_results(results: Results, get_group: Callable) -> dict[str, Results]:
 
     return results_by_group
 
-def load_eval_results(experiment_path: str) -> Results:
+def load_eval_results(path: str) -> Results:
     """
     Get evaluation results for the given experiment.
 
     Parameters
     ----------
-    experiment_path : str
+    path : str
         Path to the experiment directory
 
     Returns
@@ -73,8 +74,14 @@ def load_eval_results(experiment_path: str) -> Results:
     """
     disable_ray_storage_context()
 
-    experiment_path = Path(experiment_path).resolve()
-    tuner = tune.Tuner.restore(str(experiment_path / 'eval'), trainable=evaluate)
+    # Recursively search for 'tuner.pkl' file within the provided directory
+    # If multiple are found, use the most recently modified one
+    experiment_paths = Path(path).resolve().glob('**/eval/tuner.pkl')
+    experiment_path = sorted(experiment_paths, key=os.path.getmtime)[-1].parent
+
+    # Load evaluation results
+    print('Loading evaluation results from', experiment_path)
+    tuner = tune.Tuner.restore(str(experiment_path), trainable=evaluate)
     results = tuner.get_results()
     results = group_results(
         results, lambda result: result.config['train_result'].config['dataset'])

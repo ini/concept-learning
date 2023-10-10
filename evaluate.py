@@ -1,5 +1,6 @@
 import argparse
 import importlib
+import os
 import pyarrow.fs
 import torch
 import torch.nn as nn
@@ -15,9 +16,11 @@ from torch.utils.data import DataLoader
 from typing import Sequence
 
 from loader import get_data_loaders
-from models import ConceptModel, ConceptBottleneckModel, ConceptWhiteningModel
-from train import concept_model_predict_fn, train
+from models import ConceptModel, ConceptWhiteningModel
+from train import train
 from utils import accuracy, disable_ray_storage_context
+
+import nn_extensions # enable '+' operator for chaining modules
 
 
 
@@ -32,15 +35,19 @@ class Subscriptable(type):
         return cls(key)
 
 
-class Chain(nn.Sequential):
+class Randomize(nn.Module, metaclass=Subscriptable):
     """
-    Sequential module that supports additional arguments in forward pass.
+    Shuffle data along the batch dimension.
     """
 
-    def forward(self, input, *args, **kwargs):
-        for module in self:
-            input = module(input, *args, **kwargs)
-        return input
+    def __init__(self, idx: slice | Sequence[int] = slice(None)):
+        super().__init__()
+        self.idx = idx
+
+    def forward(self, x: Tensor, *args, **kwargs):
+        order = torch.randperm(x.shape[0])
+        x[..., self.idx] = x[order][..., self.idx]
+        return x
 
 
 class NegativeIntervention(nn.Module):
@@ -55,10 +62,9 @@ class NegativeIntervention(nn.Module):
         self.model_type = model_type
 
     def forward(self, x: Tensor, concepts: Tensor):
+        incorrect_concepts = 1 - concepts   # flip binary concept values
         if self.model_type == ConceptWhiteningModel:
-            incorrect_concepts = 1 - 2 * concepts   # concept activations
-        else:
-            incorrect_concepts = 1 - concepts   # binary concept values
+            incorrect_concepts = 2 * incorrect_concepts - 1  # concept activations
 
         concept_dim = concepts.shape[-1]
         intervention_idx = torch.randperm(concept_dim)[:self.num_interventions]
@@ -79,26 +85,11 @@ class PositiveIntervention(nn.Module):
 
     def forward(self, x: Tensor, concepts: Tensor):
         if self.model_type == ConceptWhiteningModel:
-            concepts = 2 * concepts - 1
+            concepts = 2 * concepts - 1  # convert to concept activations
 
         concept_dim = concepts.shape[-1]
         intervention_idx = torch.randperm(concept_dim)[:self.num_interventions]
         x[:, intervention_idx] = concepts[:, intervention_idx]
-        return x
-
-
-class Randomize(nn.Module, metaclass=Subscriptable):
-    """
-    Shuffle data along the batch dimension.
-    """
-
-    def __init__(self, idx: slice | Sequence[int] = slice(None)):
-        super().__init__()
-        self.idx = idx
-
-    def forward(self, x: Tensor, **kwargs):
-        order = torch.randperm(x.shape[0])
-        x[..., self.idx] = x[order][..., self.idx]
         return x
 
 
@@ -125,19 +116,9 @@ def test_interventions(
         Number of concepts to intervene on
     """
     new_model = deepcopy(model)
-
-    if isinstance(model, ConceptBottleneckModel):
-        new_model.concept_network = Chain(
-            new_model.concept_network,
-            intervention_cls(num_interventions, type(model)),
-        )
-    elif isinstance(model, ConceptWhiteningModel):
-        new_model.bottleneck_layer = Chain(
-            new_model.bottleneck_layer,
-            intervention_cls(num_interventions, type(model)),
-        )
-
-    return accuracy(new_model, test_loader, predict_fn=concept_model_predict_fn)
+    new_model.bottleneck_layer += intervention_cls(num_interventions, type(model))
+    return accuracy(
+        new_model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
 
 def test_random_concepts(
     model: ConceptModel, test_loader: DataLoader, concept_dim: int) -> float:
@@ -154,15 +135,9 @@ def test_random_concepts(
         Size of concept vector
     """
     new_model = deepcopy(model)
-
-    if isinstance(model, ConceptBottleneckModel):
-        new_model.concept_network = Chain(
-            new_model.concept_network, Randomize())
-    elif isinstance(model, ConceptWhiteningModel):
-        new_model.bottleneck_layer = Chain(
-            new_model.bottleneck_layer, Randomize[:concept_dim])
-
-    return accuracy(new_model, test_loader, predict_fn=concept_model_predict_fn)
+    new_model.bottleneck_layer += Randomize[:concept_dim]
+    return accuracy(
+        new_model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
 
 def test_random_residual(
     model: ConceptModel, test_loader: DataLoader, concept_dim: int) -> float:
@@ -179,22 +154,16 @@ def test_random_residual(
         Size of concept vector
     """
     new_model = deepcopy(model)
-
-    if isinstance(model, ConceptBottleneckModel):
-        new_model.residual_network = Chain(
-            new_model.residual_network, Randomize())
-    elif isinstance(model, ConceptWhiteningModel):
-        new_model.bottleneck_layer = Chain(
-            new_model.bottleneck_layer, Randomize[concept_dim:])
-
-    return accuracy(new_model, test_loader, predict_fn=concept_model_predict_fn)
+    new_model.bottleneck_layer += Randomize[concept_dim:]
+    return accuracy(
+        new_model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
 
 
 
 ### Loading & Execution
 
 def load_train_results(
-    experiment_path: Path | str,
+    path: Path | str,
     best_only: bool = False,
     groupby: list[str] = ['dataset', 'model_type']) -> list[ray.train.Result]:
     """
@@ -202,16 +171,18 @@ def load_train_results(
 
     Parameters
     ----------
-    experiment_path : Path or str
+    path : Path or str
         Path to the experiment directory
     best_only : bool
         Whether to return only the best result (for each group)
     groupby : list[str]
         List of config keys to group by when selecting best results
     """
+    results_path = Path(path).resolve() / 'train'
+
     # Load all results
-    experiment_path = Path(experiment_path).resolve()
-    tuner = tune.Tuner.restore(str(experiment_path / 'train'), trainable=train)
+    print('Loading training results from', results_path)
+    tuner = tune.Tuner.restore(str(results_path), trainable=train)
     results = tuner.get_results()
     
     if not best_only:
@@ -283,7 +254,7 @@ def evaluate(config: dict):
     _, _, test_loader, concept_dim, _ = get_data_loaders(
         train_result.config['dataset'],
         data_dir=train_result.config['data_dir'],
-        batch_size=train_result.config['batch_size'],
+        batch_size=10000,
     )
 
     # Load model
@@ -292,7 +263,7 @@ def evaluate(config: dict):
     # Evaluate model
     if config['eval_mode'] == 'accuracy':
         metrics['test_acc'] = accuracy(
-            model, test_loader, predict_fn=concept_model_predict_fn)
+            model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
 
     if config['eval_mode'] == 'neg_intervention':
         metrics['neg_intervention_accs'] = [
@@ -349,8 +320,15 @@ if __name__ == '__main__':
     )
 
     args = parser.parse_args()
+
+    # Recursively search for 'tuner.pkl' file within the provided directory
+    # If multiple are found, use the most recently modified one
+    experiment_paths = Path(args.exp_dir).resolve().glob('**/train/tuner.pkl')
+    experiment_path = sorted(experiment_paths, key=os.path.getmtime)[-1].parent.parent
+
+    # Load train results
     results = load_train_results(
-        args.exp_dir, best_only=args.best_only, groupby=args.groupby)
+        experiment_path, best_only=args.best_only, groupby=args.groupby)
 
     # Create evaluation configs
     eval_configs = [
@@ -373,6 +351,6 @@ if __name__ == '__main__':
             },
         ),
         param_space=tune.grid_search(eval_configs),
-        run_config=air.RunConfig(name='eval', storage_path=Path(args.exp_dir).resolve()),
+        run_config=air.RunConfig(name='eval', storage_path=experiment_path),
     )
     eval_results = tuner.fit()

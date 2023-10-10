@@ -9,13 +9,10 @@ from utils import make_mlp
 def make_bottleneck_model(config):
     return ConceptBottleneckModel(
         concept_network=make_mlp(
-            config['concept_dim'],
-            flatten_input=True,
-            output_activation=nn.Sigmoid(),
-        ),
+            config['concept_dim'], flatten_input=True, output_activation=nn.Sigmoid()),
         residual_network=make_mlp(config['residual_dim'], flatten_input=True),
         target_network=make_mlp(config['num_classes']),
-        config=config,
+        **config,
     )
 
 def make_whitening_model(config):
@@ -23,7 +20,7 @@ def make_whitening_model(config):
     return ConceptWhiteningModel(
         base_network=make_mlp(bottleneck_dim, flatten_input=True),
         target_network=make_mlp(config['num_classes']),
-        bottleneck_dim=bottleneck_dim,
+        **config,
     )
 
 def get_config(**kwargs) -> dict:
