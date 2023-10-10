@@ -264,6 +264,11 @@ def evaluate(config: dict):
     if config['eval_mode'] == 'accuracy':
         metrics['test_acc'] = accuracy(
             model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
+        metrics['test_concept_acc'] = accuracy(
+            model, test_loader,
+            batch_transform_fn=lambda batch: (batch[0][0], batch[0][1]),
+            predict_fn=lambda outputs: outputs[0] > 0.5,
+        )
 
     if config['eval_mode'] == 'neg_intervention':
         metrics['neg_intervention_accs'] = [
