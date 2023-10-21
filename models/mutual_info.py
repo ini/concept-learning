@@ -34,6 +34,21 @@ class MutualInfoCallback(pl.Callback):
         self.mi_optimizer = torch.optim.Adam(
             self.mi_estimator.parameters(), lr=mi_optimizer_lr)
 
+    def setup(self, trainer: pl.Trainer, pl_module: pl.LightningModule, stage: str):
+        """
+        Move callback modules to model device.
+
+        Parameters
+        ----------
+        trainer : pl.Trainer
+            PyTorch Lightning trainer
+        pl_module : ConceptLightningModel
+            Concept model
+        stage : str
+            Trainer stage
+        """
+        self.mi_estimator.to(pl_module.device)
+
     def on_train_batch_start(
         self,
         trainer: pl.Trainer,

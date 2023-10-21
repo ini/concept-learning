@@ -49,7 +49,7 @@ class ConceptModuleWrapper(nn.Module):
 
 
 
-### Concept Model
+### Concept Models
 
 class ConceptModel(nn.Module):
     """
@@ -142,7 +142,7 @@ class ConceptModel(nn.Module):
 
 
 
-### Concept Lightning Model
+### Concept Models with PyTorch Lightning
 
 class ConceptLightningModel(pl.LightningModule):
     """
@@ -274,12 +274,13 @@ class ConceptLightningModel(pl.LightningModule):
 
         # Track validation accuracy
         target_preds = target_logits.argmax(dim=-1)
-        accuracy_fn = Accuracy(task='multiclass', num_classes=target_logits.shape[-1])
+        accuracy_fn = Accuracy(
+            task='multiclass', num_classes=target_logits.shape[-1]).to(self.device)
         accuracy = accuracy_fn(target_preds, targets)
         self.log('val_acc', accuracy, **self.log_kwargs)
 
         # Track validation concept accuracy
-        concept_accuracy_fn = Accuracy(task='binary')
+        concept_accuracy_fn = Accuracy(task='binary').to(self.device)
         concept_accuracy = concept_accuracy_fn(concept_preds, concepts)
         self.log('val_concept_acc', concept_accuracy, **self.log_kwargs)
 

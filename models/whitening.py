@@ -58,7 +58,6 @@ class ConceptWhiteningModel(ConceptModel):
         activation_mode : one of {'mean', 'max', 'pos_mean', 'pool_max'}
             Mode for concept whitening activation
         """
-
         bottleneck_layer = ConceptWhitening(
             concept_dim + residual_dim,
             num_channels=concept_dim + residual_dim,
@@ -68,7 +67,6 @@ class ConceptWhiteningModel(ConceptModel):
             affine=affine_whitening,
             activation_mode=activation_mode,
         )
-
         super().__init__(
             concept_network=Apply(lambda x: x[..., :concept_dim]),
             residual_network=Apply(lambda x: x[..., -residual_dim:]),
@@ -154,7 +152,7 @@ class ConceptWhiteningCallback(pl.Callback):
                 for concept_idx, concept_loader in enumerate(self.concept_loaders):
                     pl_module.concept_model.bottleneck_layer.mode = concept_idx
                     for X in concept_loader:
-                        X.requires_grad = True
+                        X = X.requires_grad_().to(pl_module.device)
                         pl_module.concept_model(X)
                         break
 

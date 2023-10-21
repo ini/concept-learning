@@ -1,5 +1,6 @@
 import torch.nn as nn
 from .base import ConceptModel
+from lib.iterative_normalization import IterNorm
 
 
 
