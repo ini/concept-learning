@@ -7,18 +7,15 @@ import torch
 from datetime import datetime
 from pathlib import Path
 from pytorch_lightning.accelerators.mps import MPSAccelerator
+from pytorch_lightning.strategies import SingleDeviceStrategy
 from ray import tune
 from ray.air import CheckpointConfig, RunConfig, ScalingConfig
-from ray.train.lightning import (
-    RayDDPStrategy, RayFSDPStrategy, RayDeepSpeedStrategy,
-    RayLightningEnvironment,
-    prepare_trainer,
-)
+from ray.train.lightning import RayDDPStrategy, RayLightningEnvironment
 from ray.train.torch import TorchTrainer
 from ray.tune import TuneConfig, Tuner
 from typing import Any
 
-from loader import get_data_loaders, DATASET_NAMES
+from loader import get_data_loaders, DATASET_INFO
 from models import *
 from ray_utils import config_get, config_set, RayCallback
 from utils import cross_correlation
@@ -64,6 +61,8 @@ def make_concept_model(**config) -> ConceptLightningModel:
         Name of the experiment module (e.g. 'experiments.cifar')
     model_type : str
         Model type
+    training_mode : one of {'independent', 'sequential', 'joint'}
+        Training mode (see https://arxiv.org/abs/2007.04612)
     device : str
         Device to load model on
     concept_dim : int
@@ -77,39 +76,39 @@ def make_concept_model(**config) -> ConceptLightningModel:
     whitening_alignment_frequency : int
         Frequency of concept alignment for whitening (in epochs)
     """
-    experiment_module_name = config.get('experiment_module_name')
-    model_type = config.get('model_type', 'no_residual')
-    device = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
+    experiment_module = importlib.import_module(config['experiment_module_name'])
+    model_type = config['model_type']
+    device = config['device']
 
-    # Load experiment module
-    experiment_module = importlib.import_module(experiment_module_name)
-    make_bottleneck_model_fn = experiment_module.make_bottleneck_model
+    # Update config with any missing dataset information (e.g. concept_dim, num_classes)
+    dataset_info = DATASET_INFO[config['dataset']]
+    config = {**dataset_info, **config}
 
     # No residual
     if model_type == 'no_residual':
-        model = make_bottleneck_model_fn(dict(config, residual_dim=0)).to(device)
+        config = {**config, 'residual_dim': 0}
+        model = experiment_module.make_bottleneck_model(config).to(device)
         model = ConceptLightningModel(model, **config)
 
     # With latent residual
     elif model_type in 'latent_residual':
-        model = make_bottleneck_model_fn(config).to(device)
+        model = experiment_module.make_bottleneck_model(config).to(device)
         model = ConceptLightningModel(model, **config)
 
     # With decorrelated residual
     elif model_type == 'decorrelated_residual':
         residual_loss_fn = lambda r, c: cross_correlation(r, c).square().mean()
-        model = make_bottleneck_model_fn(config).to(device)
+        model = experiment_module.make_bottleneck_model(config).to(device)
         model = ConceptLightningModel(model, residual_loss_fn=residual_loss_fn, **config)
 
     # With MI-minimized residual
     elif model_type == 'mi_residual':
-        model = make_bottleneck_model_fn(config).to(device)
+        model = experiment_module.make_bottleneck_model(config).to(device)
         model = MutualInfoConceptLightningModel(model, **config)
 
     # With concept whitening
     elif model_type == 'concept_whitening':
-        make_whitening_model_fn = experiment_module.make_whitening_model
-        model = make_whitening_model_fn(config).to(device)
+        model = experiment_module.make_whitening_model(config).to(device)
         model = ConceptWhiteningLightningModel(model, **config)
 
     else:
@@ -117,7 +116,7 @@ def make_concept_model(**config) -> ConceptLightningModel:
 
     return model
 
-def train(config: dict[str, Any]):
+def train_concept_model(config: dict[str, Any]):
     """
     Train a concept model.
 
@@ -127,21 +126,22 @@ def train(config: dict[str, Any]):
         Configuration dictionary
     """
     # Get data loaders
-    train_loader, val_loader, _, concept_dim, num_classes = get_data_loaders(
+    train_loader, val_loader, _ = get_data_loaders(
         config['dataset'], data_dir=config['data_dir'], batch_size=config['batch_size'])
-
-    # Update config with dataset information
-    config['concept_dim'] = concept_dim
-    config['num_classes'] = num_classes
 
     # Create model
     model = make_concept_model(**config)
     model.dummy_pass(train_loader)
 
+    # Choose strategy for PyTorch Lightning
+    strategy = RayDDPStrategy()
+    if MPSAccelerator.is_available():
+        strategy = SingleDeviceStrategy(device='mps')
+
     # Train model
     trainer = pl.Trainer(
-        accelerator='cpu' if MPSAccelerator.is_available() else 'auto',
-        strategy=RayDDPStrategy(),
+        accelerator='auto',
+        strategy=strategy,
         devices='auto',
         logger=False, # logging metrics is handled by Ray
         callbacks=[model.callback(), RayCallback(**config)],
@@ -150,8 +150,30 @@ def train(config: dict[str, Any]):
         enable_progress_bar=False,
         plugins=[RayLightningEnvironment()],
     )
-    trainer = prepare_trainer(trainer)
     trainer.fit(model, train_loader, val_loader)
+
+def get_ray_trainer(config: dict[str, Any] = {}) -> TorchTrainer:
+    """
+    Ray trainer for training concept models.
+
+    Parameters
+    ----------
+    config : dict[str, Any]
+        Configuration dictionary
+    """
+    try:
+        num_gpus = config_get(config, 'num_gpus')
+    except:
+        num_gpus = 1 if torch.cuda.is_available() else 0
+
+    return TorchTrainer(
+        train_concept_model,
+        scaling_config=ScalingConfig(
+            num_workers=1,
+            use_gpu=(num_gpus > 0),
+            resources_per_worker={'CPU': 1, 'GPU': num_gpus},
+        ),
+    )
 
 
 
@@ -170,7 +192,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--save-dir', type=str, help='Directory to save models to')
     parser.add_argument(
-        '--dataset', type=str, choices=DATASET_NAMES, help='Dataset to train on')
+        '--dataset', type=str, choices=DATASET_INFO.keys(), help='Dataset to train on')
     parser.add_argument(
         '--model-type', type=str, nargs='+',
         choices=[
@@ -215,33 +237,17 @@ if __name__ == '__main__':
     experiment_name = config_get(config, 'experiment_module_name').split('.')[-1]
     experiment_name = f'{experiment_name}/{date}/train'
 
-    # Get number of GPUs
-    try:
-        num_gpus = config_get(config, 'num_gpus')
-    except:
-        num_gpus = 1 if torch.cuda.is_available() else 0
-
     # Set Ray storage directory
-    os.environ.setdefault('RAY_AIR_LOCAL_CACHE_DIR', str(config['save_dir']))
-
-    # Create Ray trainer
-    ray_trainer = TorchTrainer(
-        train,
-        scaling_config=ScalingConfig(
-            num_workers=1,
-            use_gpu=(num_gpus > 0),
-            resources_per_worker={'CPU': 1, 'GPU': num_gpus},
-        ),
-    )
+    os.environ.setdefault('RAY_AIR_LOCAL_CACHE_DIR', str(config_get(config, 'save_dir')))
 
     # Train the model(s)
     tuner = Tuner(
-        ray_trainer,
+        get_ray_trainer(config),
         param_space={'train_loop_config': config},
         tune_config=TuneConfig(metric='val_acc', mode='max', num_samples=1),
         run_config = RunConfig(
             name=experiment_name,
-            storage_path=config['save_dir'],
+            storage_path=config_get(config, 'save_dir'),
             checkpoint_config=CheckpointConfig(
                 num_to_keep=5,
                 checkpoint_score_attribute='val_acc',

@@ -1,7 +1,5 @@
 import argparse
-import importlib
 import os
-import pyarrow.fs
 import torch
 import torch.nn as nn
 import ray.train
@@ -13,14 +11,64 @@ from pathlib import Path
 from ray import air, tune
 from torch import Tensor
 from torch.utils.data import DataLoader
+from torchmetrics import Accuracy
 from typing import Sequence
 
 from loader import get_data_loaders
 from models import ConceptModel, ConceptWhiteningModel
-from train import train
-from utils import accuracy, disable_ray_storage_context
+from ray_utils import filter_results
+from train import make_concept_model, get_ray_trainer
 
 import nn_extensions # enable '+' operator for chaining modules
+
+
+
+### Accuracy Metrics
+
+def accuracy(model: ConceptModel, loader: DataLoader) -> float:
+    """
+    Compute model accuracy over the given data.
+
+    Parameters
+    ----------
+    model : ConceptModel
+        Model to evaluate
+    loader : DataLoader
+        Data loader
+    """
+    targets, target_preds = [], []
+    for (x, c), y in loader:
+        y_pred = model(x, concepts=c)[-1]
+        num_classes = y_pred.shape[-1]
+        target_preds.append(y_pred)
+        targets.append(y)
+
+    targets = torch.cat(targets, dim=0)
+    target_preds = torch.cat(target_preds, dim=0)
+    accuracy_fn = Accuracy(task='multiclass', num_classes=num_classes)
+    return accuracy_fn(target_preds, targets).item()
+
+def concept_accuracy(model: ConceptModel, loader: DataLoader) -> float:
+    """
+    Compute model concept accuracy over the given data.
+
+    Parameters
+    ----------
+    model : ConceptModel
+        Model to evaluate
+    loader : DataLoader
+        Data loader
+    """
+    concepts, concept_preds = [], []
+    for (x, c), y in loader:
+        c_pred = model(x, concepts=c)[0]
+        concept_preds.append(c_pred)
+        concepts.append(c)
+
+    concepts = torch.cat(concepts, dim=0)
+    concept_preds = torch.cat(concept_preds, dim=0)
+    concept_accuracy_fn = Accuracy(task='binary')
+    return concept_accuracy_fn(concept_preds, concepts).item()
 
 
 
@@ -29,6 +77,7 @@ import nn_extensions # enable '+' operator for chaining modules
 class Subscriptable(type):
     """
     Subscriptable metaclass.
+    Allows initialization of classes with subscripting (e.g. `x = MyClass[:10]`).
     """
 
     def __getitem__(cls, key):
@@ -117,8 +166,7 @@ def test_interventions(
     """
     new_model = deepcopy(model)
     new_model.bottleneck_layer += intervention_cls(num_interventions, type(model))
-    return accuracy(
-        new_model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
+    return accuracy(new_model, test_loader)
 
 def test_random_concepts(
     model: ConceptModel, test_loader: DataLoader, concept_dim: int) -> float:
@@ -136,8 +184,7 @@ def test_random_concepts(
     """
     new_model = deepcopy(model)
     new_model.bottleneck_layer += Randomize[:concept_dim]
-    return accuracy(
-        new_model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
+    return accuracy(new_model, test_loader)
 
 def test_random_residual(
     model: ConceptModel, test_loader: DataLoader, concept_dim: int) -> float:
@@ -155,8 +202,7 @@ def test_random_residual(
     """
     new_model = deepcopy(model)
     new_model.bottleneck_layer += Randomize[concept_dim:]
-    return accuracy(
-        new_model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
+    return accuracy(new_model, test_loader)
 
 
 
@@ -182,7 +228,7 @@ def load_train_results(
 
     # Load all results
     print('Loading training results from', results_path)
-    tuner = tune.Tuner.restore(str(results_path), trainable=train)
+    tuner = tune.Tuner.restore(str(results_path), trainable=get_ray_trainer())
     results = tuner.get_results()
     
     if not best_only:
@@ -191,25 +237,12 @@ def load_train_results(
     # Group results by config keys in `groupby`
     trials = defaultdict(list)
     for trial in results._experiment_analysis.trials:
-        trial.storage = ray.train.context.StorageContext(
-            trial.path,
-            trial.experiment_dir_name,
-            trial_dir_name=trial.path,
-        )
         group_key = tuple(trial.config[key] for key in groupby)
         trials[group_key].append(trial)
 
     # Get best result for each group
     return [
-        tune.ResultGrid(
-            tune.ExperimentAnalysis(
-                results._experiment_analysis.experiment_path,
-                storage_filesystem=pyarrow.fs.LocalFileSystem(),
-                trials=trials[group_key],
-                default_metric=results._experiment_analysis.default_metric,
-                default_mode=results._experiment_analysis.default_mode,
-            )
-        ).get_best_result()
+        filter_results(trials[group_key].__contains__, results).get_best_result()
         for group_key in trials
     ]
 
@@ -222,20 +255,11 @@ def load_model(result: ray.train.Result) -> ConceptModel:
     result : ray.train.Result
         Ray result instance
     """
-    experiment_module = importlib.import_module(result.config['experiment_module_name'])
-    make_bottleneck_model = experiment_module.make_bottleneck_model
-    make_whitening_model = experiment_module.make_whitening_model
-
-    # Create model
-    if result.config['model_type'] == 'no_residual':
-        model = make_bottleneck_model(dict(result.config, residual_dim=0))
-    elif result.config['model_type'] == 'whitened_residual':
-        model = make_whitening_model(result.config)
-    else:
-        model = make_bottleneck_model(result.config)
-
-    # Load trained model parameters
-    model.load_state_dict(torch.load(Path(result.path) / 'model.pt'))
+    train_config = result.config['train_loop_config']
+    checkpoint_dir = result.get_best_checkpoint('val_acc', 'max').path
+    model = make_concept_model(**train_config).concept_model
+    model_path = Path(checkpoint_dir) / 'model.pt'
+    model.load_state_dict(torch.load(model_path))
     return model
 
 def evaluate(config: dict):
@@ -248,44 +272,43 @@ def evaluate(config: dict):
         Evaluation configuration dictionary
     """
     train_result = config['train_result']
+    train_config = train_result.config['train_loop_config']
     metrics = {}
 
     # Get data loaders
-    _, _, test_loader, concept_dim, _ = get_data_loaders(
-        train_result.config['dataset'],
-        data_dir=train_result.config['data_dir'],
-        batch_size=10000,
-    )
+    _, _, test_loader = get_data_loaders(
+        train_config['dataset'], data_dir=train_config['data_dir'], batch_size=10000)
 
     # Load model
     model = load_model(train_result).to(config['device'])
+    model.eval()
+
+    # Get concept dim via dummy pass
+    loader = DataLoader(test_loader.dataset, batch_size=1)
+    (data, concepts), targets = next(iter(loader))
+    concept_dim = model(data, concepts=concepts)[0].shape[-1]
 
     # Evaluate model
     if config['eval_mode'] == 'accuracy':
-        metrics['test_acc'] = accuracy(
-            model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
-        metrics['test_concept_acc'] = accuracy(
-            model, test_loader,
-            batch_transform_fn=lambda batch: (batch[0][0], batch[0][1]),
-            predict_fn=lambda outputs: outputs[0] > 0.5,
-        )
+        metrics['test_acc'] = accuracy(model, test_loader)
+        metrics['test_concept_acc'] = concept_accuracy(model, test_loader)
 
     if config['eval_mode'] == 'neg_intervention':
         metrics['neg_intervention_accs'] = [
             test_interventions(model, test_loader, NegativeIntervention, n)
-            for n in range(train_result.config['concept_dim'] + 1)
+            for n in range(concept_dim + 1)
         ]
 
     elif config['eval_mode'] == 'pos_intervention':
         metrics['pos_intervention_accs'] = [
             test_interventions(model, test_loader, PositiveIntervention, n)
-            for n in range(train_result.config['concept_dim'] + 1)
+            for n in range(concept_dim + 1)
         ]
 
     elif config['eval_mode'] == 'random_concepts':
         metrics['random_concept_acc'] = test_random_concepts(
             model, test_loader, concept_dim)
-    
+
     elif config['eval_mode'] == 'random_residual':
         metrics['random_residual_acc'] = test_random_residual(
             model, test_loader, concept_dim)
@@ -296,8 +319,6 @@ def evaluate(config: dict):
 
 
 if __name__ == '__main__':
-    disable_ray_storage_context()
-
     MODES = [
         'accuracy',
         'neg_intervention',

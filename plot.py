@@ -10,13 +10,23 @@ from ray import tune
 from typing import Callable, Iterable
 
 from evaluate import evaluate
-from utils import disable_ray_storage_context
 
 Results = Iterable[ray.train.Result] | dict[str, 'Results'] # typing
 
 
 
 ### Helper Functions
+
+def get_train_config(result: ray.train.Result):
+    """
+    Get the train config for the given result.
+
+    Parameters
+    ----------
+    result : ray.train.Result
+        Evaluation result
+    """
+    return result.config['train_result'].config['train_loop_config']
 
 def get_group_key(result: ray.train.Result, groupby: list[str]):
     """
@@ -29,7 +39,7 @@ def get_group_key(result: ray.train.Result, groupby: list[str]):
     groupby : list[str]
         List of train config keys to group by
     """
-    group_key = tuple(result.config['train_result'].config[key] for key in groupby)
+    group_key = tuple(get_train_config(result)[key] for key in groupby)
     return group_key[0] if len(group_key) == 1 else group_key
 
 def get_dataset_title(dataset_name: str) -> str:
@@ -43,6 +53,8 @@ def get_dataset_title(dataset_name: str) -> str:
     """
     dataset_title = dataset_name.replace('_', ' ').title()
     dataset_title = dataset_title.replace('Mnist', 'MNIST')
+    dataset_title = dataset_title.replace('Cifar', 'CIFAR')
+    dataset_title = dataset_title.replace('Cub', 'CUB')
     return dataset_title
 
 def group_results(results: Results, get_group: Callable) -> dict[str, Results]:
@@ -86,8 +98,6 @@ def load_eval_results(path: str) -> Results:
         where `results[dataset][eval_mode]` is a list
         of `ray.train.Result` instances
     """
-    disable_ray_storage_context()
-
     # Recursively search for 'tuner.pkl' file within the provided directory
     # If multiple are found, use the most recently modified one
     experiment_paths = Path(path).resolve().glob('**/eval/tuner.pkl')
@@ -97,11 +107,8 @@ def load_eval_results(path: str) -> Results:
     print('Loading evaluation results from', experiment_path)
     tuner = tune.Tuner.restore(str(experiment_path), trainable=evaluate)
     results = tuner.get_results()
-    results = group_results(
-        results, lambda result: result.config['train_result'].config['dataset'])
-    results = group_results(
-        results, lambda result: result.config['eval_mode'])
-
+    results = group_results(results, lambda result: get_train_config(result)['dataset'])
+    results = group_results(results, lambda result: result.config['eval_mode'])
     return results
 
 

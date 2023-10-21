@@ -5,7 +5,9 @@ import torch
 
 from pathlib import Path
 from ray.train import Checkpoint
-from typing import Any
+from ray.tune import ExperimentAnalysis, ResultGrid
+from ray.tune.experiment import Trial
+from typing import Any, Callable
 
 from utils import unwrap
 
@@ -24,7 +26,9 @@ def config_get(config: dict[str, Any], key: str):
         Configuration key
     """
     if 'grid_search' in config:
-        return config['grid_search'][0][key]
+        values = {item[key] for item in config['grid_search']}
+        assert len(values) == 1, f'Inconsistent values for {key}: {values}'
+        return list(values)[0]
     else:
         return config[key]
 
@@ -47,6 +51,27 @@ def config_set(config: dict[str, Any], key: str, value: Any):
             config[key] = value
     else:
         config[key] = value
+
+def filter_results(fn: Callable[[Trial], bool], results: ResultGrid):
+    """
+    Return a new ResultGrid containing only the trials where fn(trial) is True.
+
+    Parameters
+    ----------
+    fn : Callable(Trial) -> bool
+        Function to select trials
+    results : ResultGrid
+        Results to filter
+    """
+    return ResultGrid(
+        ExperimentAnalysis(
+            results._experiment_analysis.experiment_path,
+            storage_filesystem=results._experiment_analysis.storage_filesystem,
+            trials=filter(fn, results._experiment_analysis.trials),
+            default_metric=results._experiment_analysis.default_metric,
+            default_mode=results._experiment_analysis.default_mode,
+        )
+    )
 
 
 class RayCallback(pl.Callback):
