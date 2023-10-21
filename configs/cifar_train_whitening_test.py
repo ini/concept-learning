@@ -9,7 +9,7 @@ from experiments.cifar import (
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type" : "whitened_residual",
+        "model_type" : "concept_whitening",
         "save_dir" : "/data/renos/supervised_concept_learning/",
         "data_dir" : "/data/Datasets/cifar/",
         "ray_storage_dir" : "/data/renos/ray_results/",

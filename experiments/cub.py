@@ -46,7 +46,7 @@ def get_config(**kwargs) -> dict:
             'latent_residual',
             'decorrelated_residual',
             'mi_residual',
-            'whitened_residual',
+            'concept_whitening',
         ]),
         'residual_dim': 32,
         'num_epochs': 100,
