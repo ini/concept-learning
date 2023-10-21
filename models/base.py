@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 from torchmetrics import Accuracy
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Literal
 
 from utils import unwrap
 
@@ -71,6 +71,8 @@ class ConceptModel(nn.Module):
     target_network : nn.Module
         Network that takes the output of `bottleneck_layer` and
         generates target predictions
+    training_mode : one of {'independent', 'sequential', 'joint'}
+        Training mode (see https://arxiv.org/abs/2007.04612)
     """
 
     def __init__(
@@ -79,7 +81,9 @@ class ConceptModel(nn.Module):
         residual_network: nn.Module,
         target_network: nn.Module,
         base_network: nn.Module = nn.Identity(),
-        bottleneck_layer: nn.Module = nn.Identity()):
+        bottleneck_layer: nn.Module = nn.Identity(),
+        training_mode: Literal['independent', 'sequential', 'joint'] = 'independent',
+        **kwargs):
         """
         Parameters
         ----------
@@ -88,7 +92,7 @@ class ConceptModel(nn.Module):
         residual_network : nn.Module -> (..., residual_dim)
             Residual network
         target_network : nn.Module (..., bottleneck_dim) -> (..., num_classes)
-            Target network 
+            Target network
         base_network : nn.Module
             Optional base network
         bottleneck_layer : nn.Module (..., bottleneck_dim) -> (..., bottleneck_dim)
@@ -100,6 +104,7 @@ class ConceptModel(nn.Module):
         self.residual_network = ConceptModuleWrapper(residual_network)
         self.bottleneck_layer = ConceptModuleWrapper(bottleneck_layer)
         self.target_network = ConceptModuleWrapper(target_network)
+        self.training_mode = training_mode
 
     def forward(
         self,
@@ -134,10 +139,16 @@ class ConceptModel(nn.Module):
             concept_preds, residual = x.split(
                 [concept_preds.shape[-1], residual.shape[-1]], dim=-1)
 
-        # Get target predictions
-        bottleneck = torch.cat([concept_preds.detach(), residual], dim=-1)
-        target_preds = self.target_network(bottleneck, concepts=concepts)
+        # Determine bottleneck based on training mode
+        if self.training and self.training_mode == 'independent':
+            bottleneck = torch.cat([concepts, residual], dim=-1)
+        elif self.training and self.training_mode == 'sequential':
+            bottleneck = torch.cat([concept_preds.detach(), residual], dim=-1)
+        else:
+            bottleneck = torch.cat([concept_preds, residual], dim=-1)
 
+        # Get target predictions
+        target_preds = self.target_network(bottleneck, concepts=concepts)
         return concept_preds, residual, target_preds
 
 

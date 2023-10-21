@@ -73,6 +73,7 @@ class ConceptWhiteningModel(ConceptModel):
             target_network=target_network,
             base_network=base_network,
             bottleneck_layer=bottleneck_layer,
+            **dict(kwargs, training_mode='joint'),
         )
 
 

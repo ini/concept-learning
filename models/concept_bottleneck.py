@@ -72,4 +72,5 @@ class ConceptBottleneckModel(ConceptModel):
             target_network=target_network,
             base_network=base_network,
             bottleneck_layer=bottleneck_layer,
+            **kwargs,
         )
