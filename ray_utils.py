@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pytorch_lightning as pl
 import ray
 import tempfile
@@ -132,6 +134,7 @@ class RayCallback(pl.Callback):
             PyTorch Lightning module
         """
         self.metrics.clear()
+        torch.cuda.empty_cache()
 
     def on_validation_epoch_end(
         self, trainer: pl.Trainer, pl_module: pl.LightningModule):

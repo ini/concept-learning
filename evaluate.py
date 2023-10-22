@@ -14,14 +14,14 @@ from ray import air, tune
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics import Accuracy
-from typing import Sequence
+from typing import Literal, Sequence
 
 from loader import get_data_loaders
-from models import ConceptModel, ConceptWhiteningModel
+from models import ConceptModel
+from nn_extensions import Chain
 from ray_utils import filter_results
 from train import make_concept_model, get_ray_trainer
-
-import nn_extensions # enable '+' operator for chaining modules
+from utils import logit_fn, to_device
 
 
 
@@ -38,8 +38,10 @@ def accuracy(model: ConceptModel, loader: DataLoader) -> float:
     loader : DataLoader
         Data loader
     """
+    device = next(model.parameters()).device
     targets, target_preds = [], []
-    for (x, c), y in loader:
+    for batch in loader:
+        (x, c), y = to_device(batch, device)
         y_pred = model(x, concepts=c)[-1]
         num_classes = y_pred.shape[-1]
         target_preds.append(y_pred)
@@ -47,7 +49,7 @@ def accuracy(model: ConceptModel, loader: DataLoader) -> float:
 
     targets = torch.cat(targets, dim=0)
     target_preds = torch.cat(target_preds, dim=0)
-    accuracy_fn = Accuracy(task='multiclass', num_classes=num_classes)
+    accuracy_fn = Accuracy(task='multiclass', num_classes=num_classes).to(device)
     return accuracy_fn(target_preds, targets).item()
 
 def concept_accuracy(model: ConceptModel, loader: DataLoader) -> float:
@@ -61,15 +63,17 @@ def concept_accuracy(model: ConceptModel, loader: DataLoader) -> float:
     loader : DataLoader
         Data loader
     """
+    device = next(model.parameters()).device
     concepts, concept_preds = [], []
-    for (x, c), y in loader:
+    for batch in loader:
+        (x, c), y = to_device(batch, device)
         c_pred = model(x, concepts=c)[0]
         concept_preds.append(c_pred)
         concepts.append(c)
 
     concepts = torch.cat(concepts, dim=0)
     concept_preds = torch.cat(concept_preds, dim=0)
-    concept_accuracy_fn = Accuracy(task='binary')
+    concept_accuracy_fn = Accuracy(task='binary').to(device)
     return concept_accuracy_fn(concept_preds, concepts).item()
 
 
@@ -88,7 +92,7 @@ class Subscriptable(type):
 
 class Randomize(nn.Module, metaclass=Subscriptable):
     """
-    Shuffle data along the batch dimension.
+    Shuffle data along the batch dimension for the given feature indices.
     """
 
     def __init__(self, idx: slice | Sequence[int] = slice(None)):
@@ -101,46 +105,25 @@ class Randomize(nn.Module, metaclass=Subscriptable):
         return x
 
 
-class NegativeIntervention(nn.Module):
+class Intervention(nn.Module):
     """
     Intervene on a random subset of concepts by setting them to
-    the opposite of their ground truth value.
+    either their ground truth value, or to the opposite value.
     """
 
-    def __init__(self, num_interventions: int, model_type: type[ConceptModel]):
+    def __init__(self, num_interventions: int, intervention_type: str = 'positive'):
         super().__init__()
         self.num_interventions = num_interventions
-        self.model_type = model_type
+        self.intervention_type = intervention_type
 
     def forward(self, x: Tensor, concepts: Tensor):
-        incorrect_concepts = 1 - concepts   # flip binary concept values
-        if self.model_type == ConceptWhiteningModel:
-            incorrect_concepts = 2 * incorrect_concepts - 1  # concept activations
+        if self.intervention_type == 'negative':
+            concepts = 1 - concepts   # flip to incorrect value
 
-        concept_dim = concepts.shape[-1]
+        concept_logits = logit_fn(concepts)  # convert to concept logits
+        concept_dim = concept_logits.shape[-1]
         intervention_idx = torch.randperm(concept_dim)[:self.num_interventions]
-        x[:, intervention_idx] = incorrect_concepts[:, intervention_idx]
-        return x
-
-
-class PositiveIntervention(nn.Module):
-    """
-    Intervene on a random subset of concepts by setting them to
-    their ground truth value.
-    """
-
-    def __init__(self, num_interventions: int, model_type: type[ConceptModel]):
-        super().__init__()
-        self.num_interventions = num_interventions
-        self.model_type = model_type
-
-    def forward(self, x: Tensor, concepts: Tensor):
-        if self.model_type == ConceptWhiteningModel:
-            concepts = 2 * concepts - 1  # convert to concept activations
-
-        concept_dim = concepts.shape[-1]
-        intervention_idx = torch.randperm(concept_dim)[:self.num_interventions]
-        x[:, intervention_idx] = concepts[:, intervention_idx]
+        x[:, intervention_idx] = concept_logits[:, intervention_idx]
         return x
 
 
@@ -150,7 +133,7 @@ class PositiveIntervention(nn.Module):
 def test_interventions(
     model: ConceptModel,
     test_loader: DataLoader,
-    intervention_cls: type,
+    intervention_type: Literal['positive', 'negative'],
     num_interventions: int) -> float:
     """
     Test model accuracy with concept interventions.
@@ -161,13 +144,14 @@ def test_interventions(
         Model to evaluate
     test_loader : DataLoader
         Test data loader
-    intervention_cls : type
-        Intervention class
+    intervention_type : one of {'positive', 'negative'}
+        Intervention type
     num_interventions : int
         Number of concepts to intervene on
     """
     new_model = deepcopy(model)
-    new_model.bottleneck_layer += intervention_cls(num_interventions, type(model))
+    new_model.bottleneck_layer = Chain(
+        new_model.bottleneck_layer, Intervention(num_interventions, intervention_type))
     return accuracy(new_model, test_loader)
 
 def test_random_concepts(
@@ -287,7 +271,8 @@ def evaluate(config: dict):
 
     # Get concept dim via dummy pass
     loader = DataLoader(test_loader.dataset, batch_size=1)
-    (data, concepts), targets = next(iter(loader))
+    batch = next(iter(loader))
+    (data, concepts), targets = to_device(batch, config['device'])
     concept_dim = model(data, concepts=concepts)[0].shape[-1]
 
     # Evaluate model
@@ -297,13 +282,13 @@ def evaluate(config: dict):
 
     if config['eval_mode'] == 'neg_intervention':
         metrics['neg_intervention_accs'] = [
-            test_interventions(model, test_loader, NegativeIntervention, n)
+            test_interventions(model, test_loader, 'negative', n)
             for n in range(concept_dim + 1)
         ]
 
     elif config['eval_mode'] == 'pos_intervention':
         metrics['pos_intervention_accs'] = [
-            test_interventions(model, test_loader, PositiveIntervention, n)
+            test_interventions(model, test_loader, 'positive', n)
             for n in range(concept_dim + 1)
         ]
 

@@ -9,11 +9,15 @@ import ray
 from collections import defaultdict
 from pathlib import Path
 from ray import tune
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Union
 
 from evaluate import evaluate
 
-Results = Iterable[ray.train.Result] | dict[str, 'Results'] # typing
+
+
+### Typing
+
+Results = Union[Iterable[ray.train.Result], dict[str, 'Results']]
 
 
 

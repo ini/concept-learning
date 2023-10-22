@@ -1,4 +1,4 @@
 from .base import ConceptBatch, ConceptModel, ConceptLightningModel
-from .concept_bottleneck import ConceptBottleneckModel
+from .bottleneck import make_bottleneck_layer
 from .mutual_info import MutualInfoConceptLightningModel
-from .whitening import ConceptWhiteningModel, ConceptWhiteningLightningModel
+from .whitening import ConceptWhiteningLightningModel

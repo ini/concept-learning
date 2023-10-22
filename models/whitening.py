@@ -7,74 +7,9 @@ from torch import Tensor
 from typing import Literal
 
 from .base import ConceptBatch, ConceptModel, ConceptLightningModel
-from lib.iterative_normalization import IterNormRotation
-from nn_extensions import Apply
+from .bottleneck import ConceptWhitening
+from utils import unwrap
 
-
-
-class ConceptWhitening(IterNormRotation):
-    """
-    Concept whitening layer (with support for arbitrary number of input dimensions).
-    """
-
-    def forward(self, x: Tensor):
-        bottleneck = x
-        while bottleneck.ndim < 4:
-            bottleneck = bottleneck.unsqueeze(-1)
-
-        return super().forward(bottleneck).view(*x.shape)
-
-
-class ConceptWhiteningModel(ConceptModel):
-    """
-    Concept whitening model.
-    """
-
-    def __init__(
-        self,
-        base_network: nn.Module,
-        target_network: nn.Module,
-        concept_dim: int,
-        residual_dim: int,
-        T_whitening: int = 0,
-        affine_whitening: bool = True,
-        activation_mode: str = Literal['mean', 'max', 'pos_mean', 'pool_max'],
-        **kwargs):
-        """
-        Parameters
-        ----------
-        base_network : nn.Module -> (..., bottleneck_dim)
-            Base network
-        target_network : nn.Module (..., bottleneck_dim) -> (..., num_classes)
-            Target network 
-        concept_dim : int
-            Dimension of concept vector
-        residual_dim : int
-            Dimension of residual vector
-        T_whitening : int
-            Number of iterations for whitening layer
-        affine_whitening : bool
-            Whether to use affine whitening
-        activation_mode : one of {'mean', 'max', 'pos_mean', 'pool_max'}
-            Mode for concept whitening activation
-        """
-        bottleneck_layer = ConceptWhitening(
-            concept_dim + residual_dim,
-            num_channels=concept_dim + residual_dim,
-            T=T_whitening,
-            dim=4,
-            momentum=1.0,
-            affine=affine_whitening,
-            activation_mode=activation_mode,
-        )
-        super().__init__(
-            concept_network=Apply(lambda x: x[..., :concept_dim]),
-            residual_network=Apply(lambda x: x[..., -residual_dim:]),
-            target_network=target_network,
-            base_network=base_network,
-            bottleneck_layer=bottleneck_layer,
-            **dict(kwargs, training_mode='joint'),
-        )
 
 
 class ConceptWhiteningCallback(pl.Callback):
@@ -104,7 +39,8 @@ class ConceptWhiteningCallback(pl.Callback):
         pl_module : ConceptLightningModel
             Concept model
         """
-        assert isinstance(pl_module.concept_model, ConceptWhiteningModel)
+        assert isinstance(
+            unwrap(pl_module.concept_model.bottleneck_layer), ConceptWhitening)
 
         # Get training data loader
         loader = trainer.fit_loop._data_source.instance
@@ -172,18 +108,19 @@ class ConceptWhiteningLightningModel(ConceptLightningModel):
     def __init__(
         self,
         concept_model: ConceptModel,
-        whitening_alignment_frequency: int = 20,
+        cw_alignment_frequency: int = 20,
         **kwargs):
         """
         Parameters
         ----------
         concept_model : ConceptModel
             Concept model
-        whitening_alignment_frequency : int
+        cw_alignment_frequency : int
             Frequency of concept alignment (e.g. every N batches)
         """
+        assert isinstance(unwrap(concept_model.bottleneck_layer), ConceptWhitening)
         self._callback = ConceptWhiteningCallback(
-            alignment_frequency=whitening_alignment_frequency)
+            alignment_frequency=cw_alignment_frequency)
         super().__init__(concept_model, **kwargs)
 
     def loss_fn(

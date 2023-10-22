@@ -87,28 +87,35 @@ def make_concept_model(**config) -> ConceptLightningModel:
     # No residual
     if model_type == 'no_residual':
         config = {**config, 'residual_dim': 0}
-        model = experiment_module.make_bottleneck_model(config).to(device)
+        model = experiment_module.make_concept_model(config)
         model = ConceptLightningModel(model, **config)
 
     # With latent residual
     elif model_type in 'latent_residual':
-        model = experiment_module.make_bottleneck_model(config).to(device)
+        model = experiment_module.make_concept_model(config)
         model = ConceptLightningModel(model, **config)
 
     # With decorrelated residual
     elif model_type == 'decorrelated_residual':
         residual_loss_fn = lambda r, c: cross_correlation(r, c).square().mean()
-        model = experiment_module.make_bottleneck_model(config).to(device)
+        model = experiment_module.make_concept_model(config)
         model = ConceptLightningModel(model, residual_loss_fn=residual_loss_fn, **config)
 
     # With MI-minimized residual
     elif model_type == 'mi_residual':
-        model = experiment_module.make_bottleneck_model(config).to(device)
+        model = experiment_module.make_concept_model(config)
         model = MutualInfoConceptLightningModel(model, **config)
+
+    # With iterative normalization
+    elif model_type == 'iter_norm':
+        config = {**config, 'norm_type': 'iter_norm'}
+        model = experiment_module.make_concept_model(config)
+        model = ConceptLightningModel(model, **config)
 
     # With concept whitening
     elif model_type == 'concept_whitening':
-        model = experiment_module.make_whitening_model(config).to(device)
+        config = {**config, 'norm_type': 'concept_whitening', 'training_mode': 'joint'}
+        model = experiment_module.make_concept_model(config)
         model = ConceptWhiteningLightningModel(model, **config)
 
     else:
@@ -134,7 +141,7 @@ def train_concept_model(config: dict[str, Any]):
     model.dummy_pass(train_loader)
 
     # Choose strategy for PyTorch Lightning
-    strategy = RayDDPStrategy()
+    strategy = RayDDPStrategy(find_unused_parameters=True)
     if MPSAccelerator.is_available():
         strategy = SingleDeviceStrategy(device='mps')
 
@@ -171,7 +178,7 @@ def get_ray_trainer(config: dict[str, Any] = {}) -> TorchTrainer:
         scaling_config=ScalingConfig(
             num_workers=1,
             use_gpu=(num_gpus > 0),
-            resources_per_worker={'CPU': 1, 'GPU': num_gpus},
+            resources_per_worker={'GPU': num_gpus} if num_gpus > 0 else None,
         ),
     )
 
@@ -200,10 +207,14 @@ if __name__ == '__main__':
             'latent_residual',
             'decorrelated_residual',
             'mi_residual',
+            'iter_norm',
             'concept_whitening',
         ],
         help='Model type',
     )
+    parser.add_argument(
+        '--training-mode', type=str, nargs='+',
+        choices=['independent', 'sequential', 'joint'], help='Training mode')
     parser.add_argument(
         '--residual-dim', type=int, nargs='+', help='Dimensionality of the residual')
     parser.add_argument(
@@ -224,7 +235,7 @@ if __name__ == '__main__':
         '--mi-optimizer-lr', type=float, nargs='+',
         help='Learning rate of the MI estimator optimizer')
     parser.add_argument(
-        '--whitening-alignment-frequency', type=int, nargs='+',
+        '--cw-alignment-frequency', type=int, nargs='+',
         help='Frequency of whitening alignment')
     parser.add_argument(
         '--checkpoint-frequency', type=int, nargs='+', help='Frequency of checkpointing')
@@ -244,7 +255,7 @@ if __name__ == '__main__':
     tuner = Tuner(
         get_ray_trainer(config),
         param_space={'train_loop_config': config},
-        tune_config=TuneConfig(metric='val_acc', mode='max', num_samples=1),
+        tune_config=TuneConfig(metric='val_acc', mode='max'),
         run_config = RunConfig(
             name=experiment_name,
             storage_path=config_get(config, 'save_dir'),

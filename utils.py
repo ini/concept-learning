@@ -6,6 +6,12 @@ from torch import Tensor
 
 
 
+def logit_fn(p: Tensor, eps: float = 1e-6):
+    """
+    Logit function (i.e. inverse sigmoid function).
+    """
+    return torch.log(p + eps) - torch.log(1 - p + eps)
+
 def to_device(
     data: Tensor | tuple[Tensor] | list[Tensor],
     device: torch.device | str) -> Tensor | tuple[Tensor] | list[Tensor]:

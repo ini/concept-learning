@@ -61,7 +61,7 @@ class ConceptModel(nn.Module):
         Network that pre-processes input
     concept_network : nn.Module
         Network that takes the output of `base_network` and
-        generates concept predictions
+        generates concept logits
     residual_network : nn.Module
         Network that takes the output of `base_network` and
         generates a residual vector
@@ -70,7 +70,7 @@ class ConceptModel(nn.Module):
         `concept_network` and `residual_network`
     target_network : nn.Module
         Network that takes the output of `bottleneck_layer` and
-        generates target predictions
+        generates target logits
     training_mode : one of {'independent', 'sequential', 'joint'}
         Training mode (see https://arxiv.org/abs/2007.04612)
     """
@@ -97,6 +97,10 @@ class ConceptModel(nn.Module):
             Optional base network
         bottleneck_layer : nn.Module (..., bottleneck_dim) -> (..., bottleneck_dim)
             Optional bottleneck layer
+        concept_activation : nn.Module
+            Concept activation function
+        training_mode : one of {'independent', 'sequential', 'joint'}
+            Training mode (see https://arxiv.org/abs/2007.04612)
         """
         super().__init__()
         self.base_network = ConceptModuleWrapper(base_network)
@@ -124,32 +128,33 @@ class ConceptModel(nn.Module):
             Concept predictions
         residual : Tensor
             Residual vector
-        target_preds : Tensor
-            Target predictions
+        target_logits : Tensor
+            Target logits
         """
-        # Get concept predictions & residual
+        # Get concept logits & residual
         x = self.base_network(x, concepts=concepts)
-        concept_preds = self.concept_network(x, concepts=concepts)
+        concept_logits = self.concept_network(x, concepts=concepts)
         residual = self.residual_network(x, concepts=concepts)
 
-        # Process concept predictions & residual via bottleneck layer
+        # Process concept logits & residual via bottleneck layer
         if not isinstance(unwrap(self.bottleneck_layer), nn.Identity):
-            x = torch.cat([concept_preds, residual], dim=-1)
+            x = torch.cat([concept_logits, residual], dim=-1)
             x = self.bottleneck_layer(x, concepts=concepts)
-            concept_preds, residual = x.split(
-                [concept_preds.shape[-1], residual.shape[-1]], dim=-1)
+            concept_logits, residual = x.split(
+                [concept_logits.shape[-1], residual.shape[-1]], dim=-1)
 
-        # Determine bottleneck based on training mode
+        # Determine target network input based on training mode
+        concept_preds = concept_logits.sigmoid()
         if self.training and self.training_mode == 'independent':
-            bottleneck = torch.cat([concepts, residual], dim=-1)
+            x = torch.cat([concepts, residual], dim=-1)
         elif self.training and self.training_mode == 'sequential':
-            bottleneck = torch.cat([concept_preds.detach(), residual], dim=-1)
+            x = torch.cat([concept_preds.detach(), residual], dim=-1)
         else:
-            bottleneck = torch.cat([concept_preds, residual], dim=-1)
+            x = torch.cat([concept_preds, residual], dim=-1)
 
-        # Get target predictions
-        target_preds = self.target_network(bottleneck, concepts=concepts)
-        return concept_preds, residual, target_preds
+        # Get target logits
+        target_logits = self.target_network(x, concepts=concepts)
+        return concept_preds, residual, target_logits
 
 
 
@@ -163,7 +168,7 @@ class ConceptLightningModel(pl.LightningModule):
     def __init__(
         self,
         concept_model: ConceptModel,
-        residual_loss_fn: Callable = lambda residual, concept_preds: torch.tensor(0.0),
+        residual_loss_fn: Callable = lambda r, c: torch.tensor(0.0, device=r.device),
         lr: float = 1e-3,
         alpha: float = 1.0,
         beta: float = 1.0,
@@ -173,7 +178,7 @@ class ConceptLightningModel(pl.LightningModule):
         ----------
         concept_model : ConceptModel
             Concept model
-        residual_loss_fn : Callable(residual, concept_preds) -> Tensor
+        residual_loss_fn : Callable(residual, concepts) -> loss
             Residual loss function
         lr : float
             Learning rate
@@ -225,7 +230,7 @@ class ConceptLightningModel(pl.LightningModule):
         concept_preds, residual, target_logits = outputs
 
         # Concept loss
-        concepts = concepts.view(*concept_preds.shape)
+        concepts = concepts.view(concept_preds.shape)
         concept_loss = F.binary_cross_entropy(concept_preds, concepts)
         self.log('concept_loss', concept_loss, **self.log_kwargs)
 

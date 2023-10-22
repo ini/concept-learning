@@ -1,25 +1,22 @@
+import os
 import ray
 import torch.nn as nn
 
-from models import ConceptBottleneckModel, ConceptWhiteningModel
+from models import ConceptModel, make_bottleneck_layer
 from utils import make_mlp
 
 
 
-def make_bottleneck_model(config):
-    return ConceptBottleneckModel(
-        concept_network=make_mlp(
-            config['concept_dim'], flatten_input=True, output_activation=nn.Sigmoid()),
-        residual_network=make_mlp(config['residual_dim'], flatten_input=True),
-        target_network=make_mlp(config['num_classes']),
-        **config,
-    )
-
-def make_whitening_model(config):
-    bottleneck_dim = config['concept_dim'] + config['residual_dim']
-    return ConceptWhiteningModel(
-        base_network=make_mlp(bottleneck_dim, flatten_input=True),
-        target_network=make_mlp(config['num_classes']),
+def make_concept_model(config: dict) -> ConceptModel:
+    num_classes = config['num_classes']
+    concept_dim = config['concept_dim']
+    residual_dim = config['residual_dim']
+    bottleneck_dim = concept_dim + residual_dim
+    return ConceptModel(
+        concept_network=make_mlp(concept_dim, flatten_input=True),
+        residual_network=make_mlp(residual_dim, flatten_input=True),
+        target_network=nn.Linear(bottleneck_dim, num_classes),
+        bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
         **config,
     )
 
@@ -31,15 +28,17 @@ def get_config(**kwargs) -> dict:
             'pitfalls_synthetic',
             'pitfalls_mnist_123456',
         ]),
-        'data_dir': './data',
-        'save_dir': './saved',
+        'data_dir': os.environ.get('CONCEPT_DATA_DIR', './data'),
+        'save_dir': os.environ.get('CONCEPT_SAVE_DIR', './saved'),
         'model_type': ray.tune.grid_search([
             'no_residual',
             'latent_residual',
             'decorrelated_residual',
             'mi_residual',
+            'iter_norm',
             'concept_whitening',
         ]),
+        'training_mode': 'independent',
         'residual_dim': 1,
         'num_epochs': 10,
         'lr': 1e-3,

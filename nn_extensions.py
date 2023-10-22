@@ -41,3 +41,4 @@ class Chain(nn.Sequential):
 
 # Monkey-patch nn.Module to support '+' operator for chaining modules
 nn.Module.__add__ = Chain.__add__
+nn.Module.__radd__ = Chain.__radd__
