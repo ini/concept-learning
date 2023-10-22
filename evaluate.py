@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import os
 import torch
@@ -366,6 +368,12 @@ if __name__ == '__main__':
         for result in results
         for mode in args.mode
     ]
+
+    # Get number of GPUs
+    if not torch.cuda.is_available():
+        args.num_gpus = 0
+    elif args.num_gpus is None:
+        args.num_gpus = results[0].config['train_loop_config'].get('num_gpus', 1)
 
     # Run evaluations
     tuner = tune.Tuner(
