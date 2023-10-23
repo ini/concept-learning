@@ -175,7 +175,7 @@ def get_ray_trainer(config: dict[str, Any] = {}) -> TorchTrainer:
     config : dict[str, Any]
         Configuration dictionary
     """
-    num_gpus = config_get(config, 'num_gpus', 1 if torch.cuda.is_available() else 0)
+    num_gpus = config_get(config, 'num_gpus', 1) if torch.cuda.is_available() else 0
     return TorchTrainer(
         train_concept_model,
         scaling_config=ScalingConfig(
