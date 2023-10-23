@@ -1,4 +1,7 @@
 import torch.nn as nn
+
+from inspect import signature, _ParameterKind
+from torch import Tensor
 from typing import Callable
 
 
@@ -15,6 +18,28 @@ class Apply(nn.Module):
 
     def forward(self, *args, **kwargs):
         return self.fn(*args, **kwargs, **self.fn_kwargs)
+
+
+class BatchNormNd(nn.Module):
+    """
+    N-dimensional batch normalization.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.bn = None
+        self.kwargs = kwargs
+
+    def forward(self, input: Tensor) -> Tensor:
+        if self.bn is None:
+            if input.ndim == 4:
+                self.bn = nn.BatchNorm2d(input.shape[1], **self.kwargs)
+            elif input.ndim == 5:
+                self.bn = nn.BatchNorm3d(input.shape[1], **self.kwargs)
+            else:
+                self.bn = nn.BatchNorm1d(input.shape[1], **self.kwargs)
+
+        return self.bn(input)
 
 
 class Chain(nn.Sequential):
@@ -36,6 +61,43 @@ class Chain(nn.Sequential):
         return Chain(*module_1, *module_2)
 
     __radd__ = __add__
+
+
+class Dummy(nn.Module):
+    """
+    Dummy module that returns a tensor of shape (N, 0).
+    """
+
+    def forward(self, input: Tensor):
+        return input.flatten(start_dim=1)[:, []]
+
+
+class VariableKwargs(nn.Module):
+    """
+    Wrapper to allow module to take in variable keyword arguments.
+    """
+
+    def __init__(self, module: nn.Module):
+        super().__init__()
+        self.module = module
+
+    def __getattr__(self, name: str):
+        if name == 'module':
+            return super().__getattr__(name)
+        else:
+            return getattr(self.module, name)
+
+    def forward(self, *args, **kwargs):
+        parameters = signature(self.module.forward).parameters.values()
+        if any(p.kind == _ParameterKind.VAR_KEYWORD for p in parameters):
+            module_kwargs = kwargs
+        else:
+            module_kwargs = {
+                key: value for key, value in kwargs.items()
+                if key in signature(self.module.forward).parameters.keys()
+            }
+
+        return self.module(*args, **module_kwargs)
 
 
 

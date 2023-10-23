@@ -59,11 +59,13 @@ class DatasetC(Dataset):
         self.targets = mnist.targets[idx].long() % 2
 
         # Generate random concepts
-        X = self.data.view(self.data.shape[0], -1)
-        A = torch.rand(X.shape[1], num_concepts)
+        generator = torch.Generator().manual_seed(0)
+        train_dataset = self if train else self.__class__(root, num_concepts, train=True)
+        X = train_dataset.data.flatten(start_dim=1)
+        A = torch.rand(X.shape[1], num_concepts, generator=generator)
         S = X @ A
         S_min, S_max = S.min(dim=0).values, S.max(dim=0).values
-        B = torch.rand(num_concepts) * (S_max - S_min) + S_min
+        B = torch.rand(num_concepts, generator=generator) * (S_max - S_min) + S_min
         self.concepts = (S < B).float()
 
     def __len__(self):
@@ -81,7 +83,8 @@ class DatasetD(Dataset):
 
     def __init__(self, train: bool = True):
         num_samples = 2000 if train else 1000
-        points = 2 * torch.randn(num_samples, 3)
+        generator = torch.Generator().manual_seed(int(train))
+        points = 2 * torch.randn(num_samples, 3, generator=generator)
         self.data = torch.cat([
             torch.sin(points) + points,
             torch.cos(points) + points,
@@ -89,7 +92,7 @@ class DatasetD(Dataset):
         ], dim=-1)
         self.concepts = (points > 0).float()
         self.targets = (self.concepts.sum(dim=-1) > 1).long()
-    
+
     def __len__(self):
         return len(self.data)
 
@@ -115,7 +118,8 @@ class DatasetE(Dataset):
             for digit in range(1, 7)
         ], dim=0)
 
-        self.data, self.targets = mnist.data[idx].float(), mnist.targets[idx]
+        self.data = mnist.data[idx].unsqueeze(1).float() # add channel dimension
+        self.targets = mnist.targets[idx]
         self.concepts = torch.stack([
             self.targets == digit for digit in (1, 2, 3)], dim=-1).float()
         self.targets = (self.targets < 4).long()

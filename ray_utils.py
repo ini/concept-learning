@@ -5,11 +5,12 @@ import ray
 import tempfile
 import torch
 
+from collections import defaultdict
 from pathlib import Path
 from ray.train import Checkpoint
 from ray.tune import ExperimentAnalysis, ResultGrid
 from ray.tune.experiment import Trial
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from utils import unwrap
 
@@ -68,12 +69,40 @@ def filter_results(fn: Callable[[Trial], bool], results: ResultGrid):
     return ResultGrid(
         ExperimentAnalysis(
             results._experiment_analysis.experiment_path,
-            storage_filesystem=results._experiment_analysis.storage_filesystem,
-            trials=filter(fn, results._experiment_analysis.trials),
+            storage_filesystem=results._experiment_analysis._fs,
+            trials=list(filter(fn, results._experiment_analysis.trials)),
             default_metric=results._experiment_analysis.default_metric,
             default_mode=results._experiment_analysis.default_mode,
         )
     )
+
+def group_results(
+    results: ResultGrid, groupby: str | Iterable[str]) -> dict[tuple[str], ResultGrid]:
+    """
+    Map each unique combination of config values for keys specified by `groupby`
+    to a ResultGrid containing only the trials with those config values.
+
+    Parameters
+    ----------
+    results : ResultGrid
+        Results to group
+    groupby : str or Iterable[str]
+        Config key(s) to group by
+    """
+    trials = defaultdict(list)
+    for trial in results._experiment_analysis.trials:
+        if isinstance(groupby, str):
+            group = trial.config[groupby]
+            trials[group].append(trial)
+        else:
+            group = tuple(trial.config[key] for key in groupby)
+            trials[group].append(trial)
+
+    return {
+        group: filter_results(trials[group].__contains__, results)
+        for group in trials
+    }
+
 
 
 class RayCallback(pl.Callback):

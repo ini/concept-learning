@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import torch.nn as nn
 from torch import Tensor
+
 from lib.iterative_normalization import IterNorm, IterNormRotation
+from nn_extensions import BatchNormNd
 
 
 
@@ -10,7 +12,7 @@ def make_bottleneck_layer(
     bottleneck_dim: int,
     norm_type: str | None = None,
     affine: bool = True,
-    T_whitening: int = 0,
+    T_whitening: int = 5,
     cw_activation_mode: str = 'mean',
     **kwargs) -> nn.Module:
     """
@@ -30,7 +32,7 @@ def make_bottleneck_layer(
         Mode for concept whitening activation
     """
     if norm_type == 'batch_norm':
-        return nn.BatchNorm1d(bottleneck_dim, affine=affine)
+        return BatchNormNd(affine=affine)
     elif norm_type == 'layer_norm':
         return nn.LayerNorm(bottleneck_dim)
     elif norm_type == 'instance_norm':

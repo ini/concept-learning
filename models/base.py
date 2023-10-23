@@ -9,6 +9,7 @@ from torch.nn import functional as F
 from torchmetrics import Accuracy
 from typing import Any, Callable, Iterable, Literal
 
+from nn_extensions import VariableKwargs
 from utils import unwrap
 
 
@@ -16,36 +17,6 @@ from utils import unwrap
 ### Typing
 
 ConceptBatch = tuple[tuple[Tensor, Tensor], Tensor] # ((data, concepts), targets)
-
-
-
-### Helper Modules
-
-class ConceptModuleWrapper(nn.Module):
-    """
-    Wrapper to allow module to optionally take in ground truth concepts.
-    """
-
-    def __init__(self, module: nn.Module):
-        super().__init__()
-        self.module = module
-
-    def __getattr__(self, name: str):
-        if name == 'module':
-            return super().__getattr__(name)
-        else:
-            return getattr(self.module, name)
-
-    def forward(self, x: Tensor, concepts: Tensor | None = None):
-        """
-        Parameters
-        ----------
-        x : Tensor
-            Input tensor
-        concepts : Tensor or None
-            Ground truth concept values
-        """
-        return self.module(x)
 
 
 
@@ -82,6 +53,7 @@ class ConceptModel(nn.Module):
         target_network: nn.Module,
         base_network: nn.Module = nn.Identity(),
         bottleneck_layer: nn.Module = nn.Identity(),
+        concept_activation: Callable = torch.sigmoid,
         training_mode: Literal['independent', 'sequential', 'joint'] = 'independent',
         **kwargs):
         """
@@ -97,17 +69,18 @@ class ConceptModel(nn.Module):
             Optional base network
         bottleneck_layer : nn.Module (..., bottleneck_dim) -> (..., bottleneck_dim)
             Optional bottleneck layer
-        concept_activation : nn.Module
+        concept_activation : Callable(concept_logits) -> concept_preds
             Concept activation function
         training_mode : one of {'independent', 'sequential', 'joint'}
             Training mode (see https://arxiv.org/abs/2007.04612)
         """
         super().__init__()
-        self.base_network = ConceptModuleWrapper(base_network)
-        self.concept_network = ConceptModuleWrapper(concept_network)
-        self.residual_network = ConceptModuleWrapper(residual_network)
-        self.bottleneck_layer = ConceptModuleWrapper(bottleneck_layer)
-        self.target_network = ConceptModuleWrapper(target_network)
+        self.base_network = VariableKwargs(base_network)
+        self.concept_network = VariableKwargs(concept_network)
+        self.residual_network = VariableKwargs(residual_network)
+        self.target_network = VariableKwargs(target_network)
+        self.bottleneck_layer = VariableKwargs(bottleneck_layer)
+        self.concept_activation = concept_activation
         self.training_mode = training_mode
 
     def forward(
@@ -144,7 +117,7 @@ class ConceptModel(nn.Module):
                 [concept_logits.shape[-1], residual.shape[-1]], dim=-1)
 
         # Determine target network input based on training mode
-        concept_preds = concept_logits.sigmoid()
+        concept_preds = self.concept_activation(concept_logits)
         if self.training and self.training_mode == 'independent':
             x = torch.cat([concepts, residual], dim=-1)
         elif self.training and self.training_mode == 'sequential':

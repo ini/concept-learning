@@ -2,9 +2,22 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 from torch import Tensor
+from typing import Callable
 
 
+
+def is_sigmoid(fn: Callable) -> bool:
+    """
+    Check if a function is a sigmoid function.
+    """
+    if isinstance(fn, nn.Sigmoid):
+        return True
+
+    return fn in (
+        torch.sigmoid, torch.sigmoid_, F.sigmoid, Tensor.sigmoid, Tensor.sigmoid_)
 
 def logit_fn(p: Tensor, eps: float = 1e-6):
     """
@@ -49,8 +62,7 @@ def make_mlp(
     output_dim: int,
     hidden_dim: int = 256,
     num_hidden_layers: int = 2,
-    flatten_input: bool = False,
-    output_activation: nn.Module = nn.Identity()) -> nn.Module:
+    flatten_input: bool = False) -> nn.Module:
     """
     Create a multi-layer perceptron.
 
@@ -71,8 +83,7 @@ def make_mlp(
         hidden_layers.append(nn.ReLU())
 
     pre_input_layer = nn.Flatten() if flatten_input else nn.Identity()
-    return nn.Sequential(
-        pre_input_layer, *hidden_layers, nn.LazyLinear(output_dim), output_activation)
+    return nn.Sequential(pre_input_layer, *hidden_layers, nn.LazyLinear(output_dim))
 
 def cross_correlation(X: Tensor, Y: Tensor):
     """
