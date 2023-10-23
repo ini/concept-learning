@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import pytorch_lightning as pl
+import random
 import ray
 import tempfile
 import torch
 
 from collections import defaultdict
+from copy import deepcopy
 from pathlib import Path
 from ray.train import Checkpoint
 from ray.tune import ExperimentAnalysis, ResultGrid
+from ray.tune.execution.tune_controller import TuneController
 from ray.tune.experiment import Trial
+from ray.tune.schedulers import TrialScheduler
 from typing import Any, Callable, Iterable
 
 from utils import unwrap
@@ -178,6 +182,13 @@ class RayCallback(pl.Callback):
         self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         """
         Report metrics when a validation epoch ends.
+
+        Parameters
+        ----------
+        trainer : pl.Trainer
+            PyTorch Lightning trainer
+        pl_module : pl.LightningModule
+            PyTorch Lightning module
         """
         # Update metrics
         self.metrics.update({k: v.item() for k, v in trainer.callback_metrics.items()})
@@ -194,3 +205,82 @@ class RayCallback(pl.Callback):
 
                 else:
                     ray.train.report(metrics=self.metrics)
+
+
+class GroupScheduler(TrialScheduler):
+    """
+    Group trials by config values and apply a different scheduler instance to each group.
+    """
+
+    def __init__(self, scheduler: TrialScheduler, groupby: Iterable[str]):
+        """
+        Parameters
+        ----------
+        scheduler : TrialScheduler
+            Scheduler to apply to each group
+        groupby : Iterable[str]
+            Trial config keys to group by
+        """
+        super().__init__()
+        self.groupby = tuple(groupby)
+        self.schedulers = defaultdict(lambda: deepcopy(scheduler))
+
+    def on_trial_add(self, tune_controller: TuneController, trial: Trial):
+        """
+        Called when a new trial is added to the trial runner.
+        """
+        key = tuple(config_get(trial.config, key, None) for key in self.groupby)
+        self.schedulers[key].on_trial_add(tune_controller, trial)
+
+    def on_trial_error(self, tune_controller: TuneController, trial: Trial):
+        """
+        Notification for the error of trial.
+        """
+        key = tuple(config_get(trial.config, key, None) for key in self.groupby)
+        self.schedulers[key].on_trial_error(tune_controller, trial)
+
+    def on_trial_result(
+        self, tune_controller: TuneController, trial: Trial, result: dict) -> str:
+        """
+        Called on each intermediate result returned by a trial.
+        """
+        key = tuple(config_get(trial.config, key, None) for key in self.groupby)
+        return self.schedulers[key].on_trial_result(tune_controller, trial, result)
+
+    def on_trial_complete(
+        self, tune_controller: TuneController, trial: Trial, result: dict):
+        """
+        Notification for the completion of trial.
+        """
+        key = tuple(config_get(trial.config, key, None) for key in self.groupby)
+        self.schedulers[key].on_trial_complete(tune_controller, trial, result)
+
+    def on_trial_remove(self, tune_controller: TuneController, trial: Trial):
+        """
+        Called to remove trial.
+        """
+        key = tuple(config_get(trial.config, key, None) for key in self.groupby)
+        self.schedulers[key].on_trial_remove(tune_controller, trial)
+
+    def choose_trial_to_run(self, tune_controller: TuneController) -> Trial | None:
+        """
+        Called to choose a new trial to run.
+        """
+        schedulers = list(self.schedulers.values())
+        random.shuffle(schedulers)
+
+        for scheduler in schedulers:
+            trial = scheduler.choose_trial_to_run(tune_controller)
+            if trial is not None:
+                return trial
+
+        return None
+
+    def debug_string(self) -> str:
+        """
+        Returns a human readable message for printing to the console.
+        """
+        return '\n'.join([
+            f'{key}: {scheduler.debug_string()}'
+            for key, scheduler in self.schedulers.items()
+        ])
