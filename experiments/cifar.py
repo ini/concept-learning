@@ -41,6 +41,7 @@ def get_config(**kwargs) -> dict:
             'latent_residual',
             'decorrelated_residual',
             'mi_residual',
+            'iter_norm',
             'concept_whitening',
         ]),
         'training_mode': 'independent',
