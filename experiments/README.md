@@ -1,6 +1,6 @@
 Experiment modules should implement the following functions:
 
-    def make_bottleneck_model(config: dict) -> ConceptModel
+    def make_concept_model(config: dict) -> ConceptModel
         """
         Create a concept model from the given configuration.
         """
