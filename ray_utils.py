@@ -16,10 +16,10 @@ from utils import unwrap
 
 
 
-def config_get(config: dict[str, Any], key: str):
+def config_get(config: dict[str, Any], key: str, default: Any = ...) -> Any:
     """
     Get a value from a Ray-style configuration dictionary
-    (handles top-level grid search).
+    (handles nested dictionaries).
 
     Parameters
     ----------
@@ -27,13 +27,22 @@ def config_get(config: dict[str, Any], key: str):
         Configuration dictionary
     key : str
         Configuration key
+    default : Any
+        Default value if key is not found
     """
-    if 'grid_search' in config:
+    if key in config:
+        return config.get(key)
+    elif 'train_loop_config' in config:
+        return config_get(config['train_loop_config'], key)
+    elif 'grid_search' in config:
         values = {item[key] for item in config['grid_search']}
         assert len(values) == 1, f'Inconsistent values for {key}: {values}'
-        return list(values)[0]
-    else:
-        return config[key]
+        return next(iter(values))
+
+    if default is not ...:
+        return default
+
+    raise KeyError(f'Key not found: {key}')
 
 def config_set(config: dict[str, Any], key: str, value: Any):
     """
@@ -80,7 +89,7 @@ def group_results(
     results: ResultGrid, groupby: str | Iterable[str]) -> dict[tuple[str], ResultGrid]:
     """
     Map each unique combination of config values for keys specified by `groupby`
-    to a ResultGrid containing only the trials with those config values.
+    to a ResultGrid containing only the results with those config values.
 
     Parameters
     ----------
@@ -92,10 +101,10 @@ def group_results(
     trials = defaultdict(list)
     for trial in results._experiment_analysis.trials:
         if isinstance(groupby, str):
-            group = trial.config[groupby]
+            group = config_get(trial.config, groupby)
             trials[group].append(trial)
         else:
-            group = tuple(trial.config[key] for key in groupby)
+            group = tuple(config_get(trial.config, key) for key in groupby)
             trials[group].append(trial)
 
     return {

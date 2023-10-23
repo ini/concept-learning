@@ -1,18 +1,21 @@
+from __future__ import annotations
+
 import argparse
 import importlib
 import os
 import pytorch_lightning as pl
 import torch
+import torch.nn as nn
 
 from datetime import datetime
 from pathlib import Path
 from pytorch_lightning.accelerators.mps import MPSAccelerator
-from pytorch_lightning.strategies import SingleDeviceStrategy
 from ray import tune
 from ray.air import CheckpointConfig, RunConfig, ScalingConfig
 from ray.train.lightning import RayDDPStrategy, RayLightningEnvironment
 from ray.train.torch import TorchTrainer
 from ray.tune import TuneConfig, Tuner
+from torch.utils.data import DataLoader
 from typing import Any
 
 from loader import get_data_loaders, DATASET_INFO
@@ -51,12 +54,15 @@ def get_train_config(args: argparse.Namespace) -> dict[str, Any]:
 
     return config
 
-def make_concept_model(**config) -> ConceptLightningModel:
+def make_concept_model(
+    loader: DataLoader | None = None, **config) -> ConceptLightningModel:
     """
     Create a concept model.
 
     Parameters
     ----------
+    loader : DataLoader or None
+        Data loader to use for dummy pass
     experiment_module_name : str
         Name of the experiment module (e.g. 'experiments.cifar')
     model_type : str
@@ -78,7 +84,6 @@ def make_concept_model(**config) -> ConceptLightningModel:
     """
     experiment_module = importlib.import_module(config['experiment_module_name'])
     model_type = config['model_type']
-    device = config['device']
 
     # Update config with any missing dataset information (e.g. concept_dim, num_classes)
     dataset_info = DATASET_INFO[config['dataset']]
@@ -114,12 +119,20 @@ def make_concept_model(**config) -> ConceptLightningModel:
 
     # With concept whitening
     elif model_type == 'concept_whitening':
-        config = {**config, 'norm_type': 'concept_whitening', 'training_mode': 'joint'}
+        config = {
+            **config,
+            'concept_activation': nn.Identity(),
+            'norm_type': 'concept_whitening',
+            'training_mode': 'joint',
+        }
         model = experiment_module.make_concept_model(config)
         model = ConceptWhiteningLightningModel(model, **config)
 
     else:
         raise ValueError('Unknown model type:', model_type)
+
+    if loader is not None:
+        model.dummy_pass(loader)
 
     return model
 
@@ -137,18 +150,12 @@ def train_concept_model(config: dict[str, Any]):
         config['dataset'], data_dir=config['data_dir'], batch_size=config['batch_size'])
 
     # Create model
-    model = make_concept_model(**config)
-    model.dummy_pass(train_loader)
-
-    # Choose strategy for PyTorch Lightning
-    strategy = RayDDPStrategy(find_unused_parameters=True)
-    if MPSAccelerator.is_available():
-        strategy = SingleDeviceStrategy(device='mps')
+    model = make_concept_model(loader=train_loader, **config)
 
     # Train model
     trainer = pl.Trainer(
-        accelerator='auto',
-        strategy=strategy,
+        accelerator='cpu' if MPSAccelerator.is_available() else 'auto',
+        strategy=RayDDPStrategy(find_unused_parameters=True),
         devices='auto',
         logger=False, # logging metrics is handled by Ray
         callbacks=[model.callback(), RayCallback(**config)],
@@ -168,11 +175,7 @@ def get_ray_trainer(config: dict[str, Any] = {}) -> TorchTrainer:
     config : dict[str, Any]
         Configuration dictionary
     """
-    try:
-        num_gpus = config_get(config, 'num_gpus')
-    except:
-        num_gpus = 1 if torch.cuda.is_available() else 0
-
+    num_gpus = config_get(config, 'num_gpus', 1 if torch.cuda.is_available() else 0)
     return TorchTrainer(
         train_concept_model,
         scaling_config=ScalingConfig(
