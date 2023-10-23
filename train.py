@@ -15,12 +15,13 @@ from ray.air import CheckpointConfig, RunConfig, ScalingConfig
 from ray.train.lightning import RayDDPStrategy, RayLightningEnvironment
 from ray.train.torch import TorchTrainer
 from ray.tune import TuneConfig, Tuner
+from ray.tune.schedulers import AsyncHyperBandScheduler
 from torch.utils.data import DataLoader
 from typing import Any
 
 from loader import get_data_loaders, DATASET_INFO
 from models import *
-from ray_utils import config_get, config_set, RayCallback
+from ray_utils import config_get, config_set, GroupScheduler, RayCallback
 from utils import cross_correlation
 
 
@@ -244,6 +245,8 @@ if __name__ == '__main__':
         '--checkpoint-frequency', type=int, nargs='+', help='Frequency of checkpointing')
     parser.add_argument(
         '--tensorboard-port', type=int, default=0, help='Port to launch TensorBoard')
+    parser.add_argument(
+        '--groupby', type=str, nargs='+', help='Config keys to group by')
 
     args = parser.parse_args()
     config = get_train_config(args)
@@ -256,14 +259,22 @@ if __name__ == '__main__':
     # Set Ray storage directory
     os.environ.setdefault('RAY_AIR_LOCAL_CACHE_DIR', str(config_get(config, 'save_dir')))
 
+    # Create hyperparameter scheduler
+    scheduler = None
+    groupby = config_get(config, 'groupby', None)
+    if groupby is not None:
+        scheduler = AsyncHyperBandScheduler(
+            metric='val_acc', mode='max', max_t=config_get(config, 'num_epochs'))
+        scheduler = GroupScheduler(scheduler, groupby=config_get(config, 'groupby'))
+
     # Launch TensorBoard
-    if args.tensorboard_port is not None:
+    port = config_get(config, 'tensorboard_port')
+    if port is not None:
         from tensorboard import program
         experiment_dir = Path(config_get(config, 'save_dir')) / experiment_name
         experiment_dir = experiment_dir.parent
         tb = program.TensorBoard()
-        tb.configure(argv=[
-            None, '--logdir', str(experiment_dir), '--port', str(args.tensorboard_port)])
+        tb.configure(argv=[None, '--logdir', str(experiment_dir), '--port', str(port)])
         url = tb.launch()
         print(f'TensorBoard started at {url}', '\n')
 
@@ -271,7 +282,8 @@ if __name__ == '__main__':
     tuner = Tuner(
         get_ray_trainer(config),
         param_space={'train_loop_config': config},
-        tune_config=TuneConfig(metric='val_acc', mode='max'),
+        tune_config=TuneConfig(
+            metric='val_acc', mode='max', scheduler=scheduler, num_samples=1),
         run_config = RunConfig(
             name=experiment_name,
             storage_path=config_get(config, 'save_dir'),

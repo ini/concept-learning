@@ -37,7 +37,7 @@ def config_get(config: dict[str, Any], key: str, default: Any = ...) -> Any:
     if key in config:
         return config.get(key)
     elif 'train_loop_config' in config:
-        return config_get(config['train_loop_config'], key)
+        return config_get(config['train_loop_config'], key, default=default)
     elif 'grid_search' in config:
         values = {item[key] for item in config['grid_search']}
         assert len(values) == 1, f'Inconsistent values for {key}: {values}'
