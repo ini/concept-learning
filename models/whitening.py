@@ -1,10 +1,8 @@
 import pytorch_lightning as pl
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 from torch import Tensor
-from typing import Literal
 
 from .base import ConceptBatch, ConceptModel, ConceptLightningModel
 from .bottleneck import ConceptWhitening
