@@ -17,7 +17,7 @@ DATASET_INFO = {
     'pitfalls_synthetic': {'concept_dim': 3, 'num_classes': 2},
     'pitfalls_mnist_123456': {'concept_dim': 3, 'num_classes': 2},
     'cifar100': {'concept_dim': 20, 'num_classes': 100},
-    'cub': {'concept_dim': 312, 'num_classes': 200},
+    'cub': {'concept_dim': 112, 'num_classes': 200},
 }
 
 def get_data_loaders(
