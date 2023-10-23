@@ -242,6 +242,8 @@ if __name__ == '__main__':
         help='Frequency of whitening alignment')
     parser.add_argument(
         '--checkpoint-frequency', type=int, nargs='+', help='Frequency of checkpointing')
+    parser.add_argument(
+        '--tensorboard-port', type=int, default=0, help='Port to launch TensorBoard')
 
     args = parser.parse_args()
     config = get_train_config(args)
@@ -253,6 +255,17 @@ if __name__ == '__main__':
 
     # Set Ray storage directory
     os.environ.setdefault('RAY_AIR_LOCAL_CACHE_DIR', str(config_get(config, 'save_dir')))
+
+    # Launch TensorBoard
+    if args.tensorboard_port is not None:
+        from tensorboard import program
+        experiment_dir = Path(config_get(config, 'save_dir')) / experiment_name
+        experiment_dir = experiment_dir.parent
+        tb = program.TensorBoard()
+        tb.configure(argv=[
+            None, '--logdir', str(experiment_dir), '--port', str(args.tensorboard_port)])
+        url = tb.launch()
+        print(f'TensorBoard started at {url}', '\n')
 
     # Train the model(s)
     tuner = Tuner(
