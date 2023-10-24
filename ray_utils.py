@@ -35,7 +35,11 @@ def config_get(config: dict[str, Any], key: str, default: Any = ...) -> Any:
         Default value if key is not found
     """
     if key in config:
-        return config.get(key)
+        value = config[key]
+        if isinstance(value, dict) and len(value) == 1 and 'grid_search' in value:
+            return value['grid_search']
+        else:
+            return value
     elif 'train_loop_config' in config:
         return config_get(config['train_loop_config'], key, default=default)
     elif 'grid_search' in config:

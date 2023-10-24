@@ -251,6 +251,15 @@ if __name__ == '__main__':
     args = parser.parse_args()
     config = get_train_config(args)
 
+    # Download datasets (if necessary) before launching Ray Tune
+    # Avoids each initial worker trying to downloading the dataset simultaneously
+    dataset_names = config_get(config, 'dataset')
+    if isinstance(dataset_names, dict) and 'grid_search' in dataset_names:
+        dataset_names = list(dataset_names.values())
+    dataset_names = [dataset_names] if isinstance(dataset_names, str) else dataset_names
+    for dataset_name in dataset_names:
+        get_data_loaders(dataset_name, data_dir=config_get(config, 'data_dir'))
+
     # Get experiment name
     date = datetime.today().strftime("%Y-%m-%d_%H_%M_%S")
     experiment_name = config_get(config, 'experiment_module_name').split('.')[-1]
