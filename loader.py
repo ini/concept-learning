@@ -7,23 +7,23 @@ from datasets.cifar import CIFAR100
 from datasets.cub import CUB
 from datasets.other import MNISTModulo
 from datasets.pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
-
-
+from datasets.oai import load_data_from_different_splits
 
 DATASET_INFO = {
-    'mnist_modulo': {'concept_dim': 5, 'num_classes': 10},
-    'pitfalls_mnist_without_45': {'concept_dim': 2, 'num_classes': 2},
-    'pitfalls_random_concepts': {'concept_dim': 100, 'num_classes': 2},
-    'pitfalls_synthetic': {'concept_dim': 3, 'num_classes': 2},
-    'pitfalls_mnist_123456': {'concept_dim': 3, 'num_classes': 2},
-    'cifar100': {'concept_dim': 20, 'num_classes': 100},
-    'cub': {'concept_dim': 112, 'num_classes': 200},
+    "mnist_modulo": {"concept_dim": 5, "num_classes": 10},
+    "pitfalls_mnist_without_45": {"concept_dim": 2, "num_classes": 2},
+    "pitfalls_random_concepts": {"concept_dim": 100, "num_classes": 2},
+    "pitfalls_synthetic": {"concept_dim": 3, "num_classes": 2},
+    "pitfalls_mnist_123456": {"concept_dim": 3, "num_classes": 2},
+    "cifar100": {"concept_dim": 20, "num_classes": 100},
+    "cub": {"concept_dim": 112, "num_classes": 200},
+    "oai": {"concept_dim": 10, "num_classes": 4},
 }
 
+
 def get_data_loaders(
-    name: str = 'cifar100',
-    data_dir: str = './data',
-    batch_size: int = 64) -> tuple[DataLoader, DataLoader, DataLoader]:
+    name: str = "cifar100", data_dir: str = "./data", batch_size: int = 64
+) -> tuple[DataLoader, DataLoader, DataLoader]:
     """
     Get data loaders for the specified dataset.
 
@@ -47,65 +47,112 @@ def get_data_loaders(
     """
     train_dataset, val_dataset, test_dataset = None, None, None
 
-    if name == 'mnist_modulo':
+    if name == "mnist_modulo":
         train_dataset = MNISTModulo(root=data_dir, train=True)
         test_dataset = MNISTModulo(root=data_dir, train=False)
 
-    elif name == 'pitfalls_mnist_without_45':
+    elif name == "pitfalls_mnist_without_45":
         train_dataset = MNIST_45(root=data_dir, train=True)
         test_dataset = MNIST_45(root=data_dir, train=False)
 
-    elif name == 'pitfalls_random_concepts':
+    elif name == "pitfalls_random_concepts":
         train_dataset = DatasetC(root=data_dir, num_concepts=100, train=True)
         test_dataset = DatasetC(root=data_dir, num_concepts=100, train=False)
 
-    elif name == 'pitfalls_synthetic':
+    elif name == "pitfalls_synthetic":
         train_dataset = DatasetD(train=True)
         val_dataset = DatasetD(train=False)
         test_dataset = DatasetD(train=False)
 
-    elif name == 'pitfalls_mnist_123456':
+    elif name == "pitfalls_mnist_123456":
         train_dataset = DatasetE(root=data_dir, train=True)
         test_dataset = DatasetE(root=data_dir, train=False)
 
-    elif name == 'cifar100':
-        transform_train = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
-        ])
-        transform_test = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2])
-        ])
+    elif name == "cifar100":
+        transform_train = transforms.Compose(
+            [
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
+            ]
+        )
+        transform_test = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
+            ]
+        )
         train_dataset = CIFAR100(
-            root=data_dir, train=True, transform=transform_train, download=True)
+            root=data_dir, train=True, transform=transform_train, download=True
+        )
         test_dataset = CIFAR100(
-            root=data_dir, train=False, transform=transform_test, download=True)
+            root=data_dir, train=False, transform=transform_test, download=True
+        )
 
-    elif name == 'cub':
-        transform_train = transforms.Compose([
-            transforms.ColorJitter(brightness=32/255, saturation=(0.5, 1.5)),
-            transforms.RandomResizedCrop(299),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[2, 2, 2])
-        ])
-        transform_test = transforms.Compose([
-            transforms.CenterCrop(299),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[2, 2, 2])
-        ])
+    elif name == "cub":
+        transform_train = transforms.Compose(
+            [
+                transforms.ColorJitter(brightness=32 / 255, saturation=(0.5, 1.5)),
+                transforms.RandomResizedCrop(299),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[2, 2, 2]),
+            ]
+        )
+        transform_test = transforms.Compose(
+            [
+                transforms.CenterCrop(299),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[2, 2, 2]),
+            ]
+        )
         train_dataset = CUB(
-            root=data_dir, split='train', transform=transform_train, download=True)
+            root=data_dir, split="train", transform=transform_train, download=True
+        )
         val_dataset = CUB(
-            root=data_dir, split='val', transform=transform_test, download=True)
+            root=data_dir, split="val", transform=transform_test, download=True
+        )
         test_dataset = CUB(
-            root=data_dir, split='test', transform=transform_test, download=True)
+            root=data_dir, split="test", transform=transform_test, download=True
+        )
+
+    elif name == "oai":
+        dataloaders, datasets, dataset_sizes = load_data_from_different_splits(
+            batch_size=batch_size,
+            C_cols=[
+                "xrosfm",
+                "xrscfm",
+                "xrjsm",
+                "xrostm",
+                "xrsctm",
+                "xrosfl",
+                "xrscfl",
+                "xrjsl",
+                "xrostl",
+                "xrsctl",
+            ],
+            y_cols=["xrkl"],
+            zscore_C=True,
+            zscore_Y=False,
+            data_proportion=1.0,
+            shuffle_Cs=False,
+            merge_klg_01=True,
+            max_horizontal_translation=0.1,
+            max_vertical_translation=0.1,
+            augment="random_translation",
+            sampling_strategy="uniform",
+            sampling_args=None,
+            C_hat_path=None,
+            use_small_subset=True,
+            downsample_fraction=None,
+        )
+        train_dataset = datasets["train"]
+        val_dataset = datasets["val"]
+        test_dataset = datasets["test"]
 
     else:
-        raise ValueError(f'Invalid dataset name: {name}')
+        raise ValueError(f"Invalid dataset name: {name}")
 
     # Get validation set
     if val_dataset is None:
