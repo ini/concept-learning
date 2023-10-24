@@ -22,7 +22,7 @@ from typing import Any
 from loader import get_data_loaders, DATASET_INFO
 from models import *
 from ray_utils import config_get, config_set, GroupScheduler, RayCallback
-from utils import cross_correlation
+from utils import cross_correlation, set_cuda_visible_devices
 
 
 
@@ -286,6 +286,11 @@ if __name__ == '__main__':
         tb.configure(argv=[None, '--logdir', str(experiment_dir), '--port', str(port)])
         url = tb.launch()
         print(f'TensorBoard started at {url}', '\n')
+
+    # Get available resources
+    num_gpus = config_get(config, 'num_gpus', 1) if torch.cuda.is_available() else 0
+    if num_gpus < 1:
+        set_cuda_visible_devices(available_memory_threshold=num_gpus)
 
     # Train the model(s)
     tuner = Tuner(

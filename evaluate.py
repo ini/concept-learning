@@ -22,7 +22,7 @@ from nn_extensions import Chain
 from models import ConceptLightningModel
 from ray_utils import group_results
 from train import make_concept_model, get_ray_trainer
-from utils import logit_fn
+from utils import logit_fn, set_cuda_visible_devices
 
 
 
@@ -307,6 +307,10 @@ if __name__ == '__main__':
         for result in results
         for mode in args.mode
     ])
+
+    # Get available resources
+    if args.num_gpus < 1:
+        set_cuda_visible_devices(available_memory_threshold=args.num_gpus)
 
     # Run evaluations
     tuner = tune.Tuner(

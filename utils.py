@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import pynvml
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -105,3 +107,30 @@ def cross_correlation(X: Tensor, Y: Tensor):
     X = (X - X.mean(dim=0)) / torch.maximum(X.std(dim=0), eps)
     Y = (Y - Y.mean(dim=0)) / torch.maximum(Y.std(dim=0), eps)
     return torch.bmm(X.unsqueeze(-1), Y.unsqueeze(1)).mean(dim=0)
+
+def set_cuda_visible_devices(available_memory_threshold: float):
+    """
+    Set CUDA_VISIBLE_DEVICES to the GPUs whose fraction of available memory
+    is at least a given threshold.
+
+    When running processes with fractional GPUs, set the threshold to
+    the fraction of the GPU memory that is available to each worker.
+
+    Parameters
+    ----------
+    available_memory_threshold : float in range [0, 1]
+        Threshold for fraction of available GPU memory
+    """
+    try:
+        pynvml.nvmlInit()
+    except pynvml.nvml.NVMLError_LibraryNotFound:
+        return
+
+    available_devices = []
+    for i in range(pynvml.nvmlDeviceGetCount()):
+        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+        memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        if memory_info.free / memory_info.total >= available_memory_threshold:
+            available_devices.append(i)
+
+    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(map(str, available_devices))
