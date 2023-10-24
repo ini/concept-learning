@@ -1,95 +1,123 @@
+from __future__ import annotations
+
 import argparse
-import importlib
 import os
-import pyarrow.fs
 import torch
 import torch.nn as nn
 import ray.train
 import ray.train.context
 
-from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
 from ray import air, tune
+from ray.train import Result
 from torch import Tensor
 from torch.utils.data import DataLoader
-from typing import Sequence
+from torchmetrics import Accuracy
+from typing import Iterable
 
 from loader import get_data_loaders
-from models import ConceptModel, ConceptWhiteningModel
-from train import train
-from utils import accuracy, disable_ray_storage_context
+from nn_extensions import Chain
+from models import ConceptModel
+from ray_utils import group_results
+from train import make_concept_model, get_ray_trainer
+from utils import is_sigmoid, logit_fn, to_device
 
-import nn_extensions # enable '+' operator for chaining modules
 
 
+### Metrics
 
-### Helper Modules
-
-class Subscriptable(type):
+def accuracy(model: ConceptModel, loader: DataLoader) -> float:
     """
-    Subscriptable metaclass.
+    Compute model accuracy over the given data.
+
+    Parameters
+    ----------
+    model : ConceptModel
+        Model to evaluate
+    loader : DataLoader
+        Data loader
     """
+    device = next(model.parameters()).device
+    targets, target_preds = [], []
+    for batch in loader:
+        (x, c), y = to_device(batch, device)
+        y_pred = model(x, concepts=c)[-1]
+        num_classes = y_pred.shape[-1]
+        target_preds.append(y_pred)
+        targets.append(y)
 
-    def __getitem__(cls, key):
-        return cls(key)
+    targets = torch.cat(targets, dim=0)
+    target_preds = torch.cat(target_preds, dim=0)
+    accuracy_fn = Accuracy(task='multiclass', num_classes=num_classes).to(device)
+    return accuracy_fn(target_preds, targets).item()
+
+def concept_accuracy(model: ConceptModel, loader: DataLoader) -> float:
+    """
+    Compute model concept accuracy over the given data.
+
+    Parameters
+    ----------
+    model : ConceptModel
+        Model to evaluate
+    loader : DataLoader
+        Data loader
+    """
+    device = next(model.parameters()).device
+    concepts, concept_preds = [], []
+    for batch in loader:
+        (x, c), y = to_device(batch, device)
+        if is_sigmoid(model.concept_activation):
+            c_pred = model(x, concepts=c)[0]
+        else:
+            c_pred = model(x, concepts=c)[0].sigmoid()
+        concept_preds.append(c_pred)
+        concepts.append(c)
+
+    concepts = torch.cat(concepts, dim=0)
+    concept_preds = torch.cat(concept_preds, dim=0)
+    concept_accuracy_fn = Accuracy(task='binary').to(device)
+    return concept_accuracy_fn(concept_preds, concepts).item()
 
 
-class Randomize(nn.Module, metaclass=Subscriptable):
+
+### Interventions
+
+class Randomize(nn.Module):
     """
     Shuffle data along the batch dimension.
     """
 
-    def __init__(self, idx: slice | Sequence[int] = slice(None)):
-        super().__init__()
-        self.idx = idx
-
     def forward(self, x: Tensor, *args, **kwargs):
-        order = torch.randperm(x.shape[0])
-        x[..., self.idx] = x[order][..., self.idx]
-        return x
+        return x[torch.randperm(len(x))]
 
 
-class NegativeIntervention(nn.Module):
+class Intervention(nn.Module):
     """
-    Intervene on a random subset of concepts by setting them to
-    the opposite of their ground truth value.
+    Intervene on a random subset of concepts.
     """
 
-    def __init__(self, num_interventions: int, model_type: type[ConceptModel]):
+    def __init__(self, num_interventions: int, negative: bool = False):
+        """
+        Parameters
+        ----------
+        num_interventions : int
+            Number of concepts to intervene on
+        negative : bool
+            Whether to intervene with incorrect concept values
+        """
         super().__init__()
         self.num_interventions = num_interventions
-        self.model_type = model_type
+        self.negative = negative
 
     def forward(self, x: Tensor, concepts: Tensor):
-        incorrect_concepts = 1 - concepts   # flip binary concept values
-        if self.model_type == ConceptWhiteningModel:
-            incorrect_concepts = 2 * incorrect_concepts - 1  # concept activations
+        if self.negative:
+            concepts = 1 - concepts   # flip binary concepts to opposite values
 
         concept_dim = concepts.shape[-1]
-        intervention_idx = torch.randperm(concept_dim)[:self.num_interventions]
-        x[:, intervention_idx] = incorrect_concepts[:, intervention_idx]
-        return x
-
-
-class PositiveIntervention(nn.Module):
-    """
-    Intervene on a random subset of concepts by setting them to
-    their ground truth value.
-    """
-
-    def __init__(self, num_interventions: int, model_type: type[ConceptModel]):
-        super().__init__()
-        self.num_interventions = num_interventions
-        self.model_type = model_type
-
-    def forward(self, x: Tensor, concepts: Tensor):
-        if self.model_type == ConceptWhiteningModel:
-            concepts = 2 * concepts - 1  # convert to concept activations
-
-        concept_dim = concepts.shape[-1]
-        intervention_idx = torch.randperm(concept_dim)[:self.num_interventions]
-        x[:, intervention_idx] = concepts[:, intervention_idx]
+        concept_logits = logit_fn(concepts)
+        idx = torch.randperm(concept_dim)[:self.num_interventions]
+        x[:, idx] = concept_logits[:, idx]
         return x
 
 
@@ -99,8 +127,8 @@ class PositiveIntervention(nn.Module):
 def test_interventions(
     model: ConceptModel,
     test_loader: DataLoader,
-    intervention_cls: type,
-    num_interventions: int) -> float:
+    num_interventions: int,
+    negative: bool) -> float:
     """
     Test model accuracy with concept interventions.
 
@@ -110,18 +138,17 @@ def test_interventions(
         Model to evaluate
     test_loader : DataLoader
         Test data loader
-    intervention_cls : type
-        Intervention class
     num_interventions : int
         Number of concepts to intervene on
+    negative : bool
+        Whether to intervene with incorrect concept values
     """
+    intervention = Intervention(num_interventions, negative=negative)
     new_model = deepcopy(model)
-    new_model.bottleneck_layer += intervention_cls(num_interventions, type(model))
-    return accuracy(
-        new_model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
+    new_model.bottleneck_layer = Chain(new_model.bottleneck_layer, intervention)
+    return accuracy(new_model, test_loader)
 
-def test_random_concepts(
-    model: ConceptModel, test_loader: DataLoader, concept_dim: int) -> float:
+def test_random_concepts(model: ConceptModel, test_loader: DataLoader) -> float:
     """
     Test model accuracy with randomized concept predictions.
 
@@ -131,16 +158,12 @@ def test_random_concepts(
         Model to evaluate
     test_loader : DataLoader
         Test data loader
-    concept_dim : int
-        Size of concept vector
     """
     new_model = deepcopy(model)
-    new_model.bottleneck_layer += Randomize[:concept_dim]
-    return accuracy(
-        new_model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
+    new_model.concept_network = Chain(new_model.concept_network, Randomize())
+    return accuracy(new_model, test_loader)
 
-def test_random_residual(
-    model: ConceptModel, test_loader: DataLoader, concept_dim: int) -> float:
+def test_random_residual(model: ConceptModel, test_loader: DataLoader) -> float:
     """
     Test model accuracy with randomized residual values.
 
@@ -150,13 +173,10 @@ def test_random_residual(
         Model to evaluate
     test_loader : DataLoader
         Test data loader
-    concept_dim : int
-        Size of concept vector
     """
     new_model = deepcopy(model)
-    new_model.bottleneck_layer += Randomize[concept_dim:]
-    return accuracy(
-        new_model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
+    new_model.residual_network = Chain(new_model.residual_network, Randomize())
+    return accuracy(new_model, test_loader)
 
 
 
@@ -165,7 +185,7 @@ def test_random_residual(
 def load_train_results(
     path: Path | str,
     best_only: bool = False,
-    groupby: list[str] = ['dataset', 'model_type']) -> list[ray.train.Result]:
+    groupby: list[str] = ['dataset', 'model_type']) -> Iterable[Result]:
     """
     Load train results for the given experiment.
 
@@ -182,61 +202,56 @@ def load_train_results(
 
     # Load all results
     print('Loading training results from', results_path)
-    tuner = tune.Tuner.restore(str(results_path), trainable=train)
+    tuner = tune.Tuner.restore(str(results_path), trainable=get_ray_trainer())
     results = tuner.get_results()
-    
-    if not best_only:
-        return list(results)
 
-    # Group results by config keys in `groupby`
-    trials = defaultdict(list)
-    for trial in results._experiment_analysis.trials:
-        trial.storage = ray.train.context.StorageContext(
-            trial.path,
-            trial.experiment_dir_name,
-            trial_dir_name=trial.path,
-        )
-        group_key = tuple(trial.config[key] for key in groupby)
-        trials[group_key].append(trial)
+    if best_only:
+        return [
+            group.get_best_result()
+            for group in group_results(results, groupby).values()
+        ]
+    else:
+        return results
 
-    # Get best result for each group
-    return [
-        tune.ResultGrid(
-            tune.ExperimentAnalysis(
-                results._experiment_analysis.experiment_path,
-                storage_filesystem=pyarrow.fs.LocalFileSystem(),
-                trials=trials[group_key],
-                default_metric=results._experiment_analysis.default_metric,
-                default_mode=results._experiment_analysis.default_mode,
-            )
-        ).get_best_result()
-        for group_key in trials
-    ]
-
-def load_model(result: ray.train.Result) -> ConceptModel:
+def load_model(result: Result, loader: DataLoader | None = None) -> ConceptModel:
     """
     Load a trained model from a Ray Tune result.
 
     Parameters
     ----------
-    result : ray.train.Result
+    result : Result
         Ray result instance
+    loader : DataLoader
+        Data loader for dummy pass
     """
-    experiment_module = importlib.import_module(result.config['experiment_module_name'])
-    make_bottleneck_model = experiment_module.make_bottleneck_model
-    make_whitening_model = experiment_module.make_whitening_model
-
-    # Create model
-    if result.config['model_type'] == 'no_residual':
-        model = make_bottleneck_model(dict(result.config, residual_dim=0))
-    elif result.config['model_type'] == 'whitened_residual':
-        model = make_whitening_model(result.config)
-    else:
-        model = make_bottleneck_model(result.config)
-
-    # Load trained model parameters
-    model.load_state_dict(torch.load(Path(result.path) / 'model.pt'))
+    checkpoint_dir = result.get_best_checkpoint('val_acc', 'max').path
+    model = make_concept_model(**result.config['train_loop_config'], loader=loader)
+    model = model.concept_model
+    model_path = Path(checkpoint_dir) / 'model.pt'
+    model.load_state_dict(torch.load(model_path))
     return model
+
+def filter_eval_configs(configs: list[dict]) -> list[dict]:
+    """
+    Filter evaluation configs.
+
+    Parameters
+    ----------
+    configs : list[dict]
+        List of evaluation configs
+    """
+    configs_to_keep = []
+    for config in configs:
+        # TODO: support interventions for concept whitening models
+        if config['eval_mode'].endswith('intervention'):
+            if config['model_type'] == 'concept_whitening':
+                print('Interventions not supported for concept whitening models')
+                continue
+
+        configs_to_keep.append(config)
+
+    return configs_to_keep
+
 
 def evaluate(config: dict):
     """
@@ -247,48 +262,46 @@ def evaluate(config: dict):
     config : dict
         Evaluation configuration dictionary
     """
-    train_result = config['train_result']
     metrics = {}
 
     # Get data loaders
-    _, _, test_loader, concept_dim, _ = get_data_loaders(
-        train_result.config['dataset'],
-        data_dir=train_result.config['data_dir'],
-        batch_size=10000,
+    _, _, test_loader = get_data_loaders(
+        config['dataset'],
+        data_dir=config['data_dir'],
+        batch_size=10000, # ideally as large as will fit in memory
     )
 
     # Load model
-    model = load_model(train_result).to(config['device'])
+    model = load_model(config['train_result'], loader=test_loader).to(config['device'])
+    model.eval()
+
+    # Get concept dim via dummy pass
+    loader = DataLoader(test_loader.dataset, batch_size=1)
+    (data, concepts), targets = next(iter(loader))
+    concept_dim = model(data, concepts=concepts)[0].shape[-1]
 
     # Evaluate model
     if config['eval_mode'] == 'accuracy':
-        metrics['test_acc'] = accuracy(
-            model, test_loader, predict_fn=lambda outputs: outputs[-1].argmax(dim=-1))
-        metrics['test_concept_acc'] = accuracy(
-            model, test_loader,
-            batch_transform_fn=lambda batch: (batch[0][0], batch[0][1]),
-            predict_fn=lambda outputs: outputs[0] > 0.5,
-        )
+        metrics['test_acc'] = accuracy(model, test_loader)
+        metrics['test_concept_acc'] = concept_accuracy(model, test_loader)
 
     if config['eval_mode'] == 'neg_intervention':
         metrics['neg_intervention_accs'] = [
-            test_interventions(model, test_loader, NegativeIntervention, n)
-            for n in range(train_result.config['concept_dim'] + 1)
+            test_interventions(model, test_loader, n, negative=True)
+            for n in range(concept_dim + 1)
         ]
 
     elif config['eval_mode'] == 'pos_intervention':
         metrics['pos_intervention_accs'] = [
-            test_interventions(model, test_loader, PositiveIntervention, n)
-            for n in range(train_result.config['concept_dim'] + 1)
+            test_interventions(model, test_loader, n, negative=False)
+            for n in range(concept_dim + 1)
         ]
 
     elif config['eval_mode'] == 'random_concepts':
-        metrics['random_concept_acc'] = test_random_concepts(
-            model, test_loader, concept_dim)
-    
+        metrics['random_concept_acc'] = test_random_concepts(model, test_loader)
+
     elif config['eval_mode'] == 'random_residual':
-        metrics['random_residual_acc'] = test_random_residual(
-            model, test_loader, concept_dim)
+        metrics['random_residual_acc'] = test_random_residual(model, test_loader)
 
     # Report evaluation metrics
     ray.train.report(metrics)
@@ -296,8 +309,6 @@ def evaluate(config: dict):
 
 
 if __name__ == '__main__':
-    disable_ray_storage_context()
-
     MODES = [
         'accuracy',
         'neg_intervention',
@@ -308,21 +319,21 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--exp-dir', type=str, help='Experiment directory')
+        '--exp-dir', type=str, default=os.environ.get('CONCEPT_SAVE_DIR', './saved'),
+        help='Experiment directory')
     parser.add_argument(
         '--mode', nargs='+', default=MODES, help='Evaluation modes')
+    parser.add_argument(
+        '--groupby', nargs='+', default=['dataset', 'model_type'],
+        help='Config keys to group by when selecting best trial results')
+    parser.add_argument(
+        '--all', action='store_true',
+        help='Evaluate all trained models (instead of best trial per group)')
     parser.add_argument(
         '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
         help='Device to use for model inference')
     parser.add_argument(
-        '--num-gpus', type=float, default=1, help='Number of GPUs to use (per model)')
-    parser.add_argument(
-        '--best-only', action='store_true',
-        help='Only evaluate best trial result per experiment group')
-    parser.add_argument(
-        '--groupby', nargs='+', default=['dataset', 'model_type'],
-        help='Config keys to group by when selecting best trial results'
-    )
+        '--num-gpus', type=float, help='Number of GPUs to use (per model)')
 
     args = parser.parse_args()
 
@@ -333,18 +344,25 @@ if __name__ == '__main__':
 
     # Load train results
     results = load_train_results(
-        experiment_path, best_only=args.best_only, groupby=args.groupby)
+        experiment_path, best_only=(not args.all), groupby=args.groupby)
 
     # Create evaluation configs
-    eval_configs = [
+    eval_configs = filter_eval_configs([
         {
+            **result.config['train_loop_config'],
             'train_result': result,
             'eval_mode': mode,
             'device': args.device,
         }
         for result in results
         for mode in args.mode
-    ]
+    ])
+
+    # Get number of GPUs
+    if not torch.cuda.is_available():
+        args.num_gpus = 0
+    elif args.num_gpus is None:
+        args.num_gpus = results[0].config['train_loop_config'].get('num_gpus', 1)
 
     # Run evaluations
     tuner = tune.Tuner(

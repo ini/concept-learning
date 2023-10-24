@@ -10,17 +10,20 @@ from datasets.pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 
 
 
-DATASET_NAMES = [
-    'mnist_modulo',
-    'pitfalls_mnist_without_45', 'pitfalls_random_concepts',
-    'pitfalls_synthetic', 'pitfalls_mnist_123456',
-    'cifar100', 'cub',
-]
+DATASET_INFO = {
+    'mnist_modulo': {'concept_dim': 5, 'num_classes': 10},
+    'pitfalls_mnist_without_45': {'concept_dim': 2, 'num_classes': 2},
+    'pitfalls_random_concepts': {'concept_dim': 100, 'num_classes': 2},
+    'pitfalls_synthetic': {'concept_dim': 3, 'num_classes': 2},
+    'pitfalls_mnist_123456': {'concept_dim': 3, 'num_classes': 2},
+    'cifar100': {'concept_dim': 20, 'num_classes': 100},
+    'cub': {'concept_dim': 112, 'num_classes': 200},
+}
 
 def get_data_loaders(
     name: str = 'cifar100',
     data_dir: str = './data',
-    batch_size: int = 64) -> tuple[DataLoader, DataLoader, DataLoader, int, int]:
+    batch_size: int = 64) -> tuple[DataLoader, DataLoader, DataLoader]:
     """
     Get data loaders for the specified dataset.
 
@@ -41,41 +44,31 @@ def get_data_loaders(
         Validation data loader
     test_loader : DataLoader
         Test data loader
-    concept_dim : int
-        Number of concepts
-    num_classes : int
-        Number of label classes
     """
     train_dataset, val_dataset, test_dataset = None, None, None
 
     if name == 'mnist_modulo':
-        concept_dim, num_classes = 5, 10
         train_dataset = MNISTModulo(root=data_dir, train=True)
         test_dataset = MNISTModulo(root=data_dir, train=False)
 
     elif name == 'pitfalls_mnist_without_45':
-        concept_dim, num_classes = 2, 2
         train_dataset = MNIST_45(root=data_dir, train=True)
         test_dataset = MNIST_45(root=data_dir, train=False)
 
     elif name == 'pitfalls_random_concepts':
-        concept_dim, num_classes = 100, 2
         train_dataset = DatasetC(root=data_dir, num_concepts=100, train=True)
         test_dataset = DatasetC(root=data_dir, num_concepts=100, train=False)
 
     elif name == 'pitfalls_synthetic':
-        concept_dim, num_classes = 3, 2
         train_dataset = DatasetD(train=True)
         val_dataset = DatasetD(train=False)
         test_dataset = DatasetD(train=False)
 
     elif name == 'pitfalls_mnist_123456':
-        concept_dim, num_classes = 3, 2
         train_dataset = DatasetE(root=data_dir, train=True)
         test_dataset = DatasetE(root=data_dir, train=False)
 
     elif name == 'cifar100':
-        concept_dim, num_classes = 20, 100
         transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
@@ -92,7 +85,6 @@ def get_data_loaders(
             root=data_dir, train=False, transform=transform_test, download=True)
 
     elif name == 'cub':
-        concept_dim, num_classes = 312, 200
         transform_train = transforms.Compose([
             transforms.ColorJitter(brightness=32/255, saturation=(0.5, 1.5)),
             transforms.RandomResizedCrop(299),
@@ -112,6 +104,9 @@ def get_data_loaders(
         test_dataset = CUB(
             root=data_dir, split='test', transform=transform_test, download=True)
 
+    else:
+        raise ValueError(f'Invalid dataset name: {name}')
+
     # Get validation set
     if val_dataset is None:
         N = len(train_dataset)
@@ -126,4 +121,4 @@ def get_data_loaders(
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    return train_loader, val_loader, test_loader, concept_dim, num_classes
+    return train_loader, val_loader, test_loader

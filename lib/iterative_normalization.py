@@ -207,7 +207,7 @@ class IterNormRotation(torch.nn.Module):
             torch.nn.init.ones_(self.weight)
             torch.nn.init.zeros_(self.bias)
 
-    def update_rotation_matrix(self, cuda=True):
+    def update_rotation_matrix(self):
         """
         Update the rotation matrix R using the accumulated gradient G.
         The update uses Cayley transform to make sure R is always orthonormal.

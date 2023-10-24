@@ -1,47 +1,51 @@
+import os
 import ray
 import torch.nn as nn
 
-from models import ConceptBottleneckModel, ConceptWhiteningModel
+from models import ConceptModel, make_bottleneck_layer
 from torchvision.models.resnet import resnet18, ResNet18_Weights
-from utils import make_mlp
 
 
 
-def make_resnet(output_dim):
-    resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
-    resnet.fc = nn.Linear(resnet.fc.in_features, output_dim)
-    return resnet
+### Helper Methods
 
-def make_bottleneck_model(config):
-    return ConceptBottleneckModel(
-        concept_network=nn.Sequential(make_resnet(config['concept_dim']), nn.Sigmoid()),
-        residual_network=make_resnet(config['residual_dim']),
-        target_network=make_mlp(config['num_classes']),
-        **config,
-    )
+def make_cnn(output_dim: int):
+    model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+    model.fc = nn.Linear(model.fc.in_features, output_dim)
+    return model
 
-def make_whitening_model(config):
-    bottleneck_dim = config['concept_dim'] + config['residual_dim']
-    return ConceptWhiteningModel(
-        base_network=make_resnet(bottleneck_dim),
-        target_network=make_mlp(config['num_classes']),
-        bottleneck_dim=bottleneck_dim,
+
+
+### Experiment Module Methods
+
+def make_concept_model(config: dict) -> ConceptModel:
+    num_classes = config['num_classes']
+    concept_dim = config['concept_dim']
+    residual_dim = config['residual_dim']
+    bottleneck_dim = concept_dim + residual_dim
+    return ConceptModel(
+        concept_network=make_cnn(concept_dim),
+        residual_network=make_cnn(residual_dim),
+        target_network=nn.Linear(bottleneck_dim, num_classes),
+        bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
         **config,
     )
 
 def get_config(**kwargs) -> dict:
     config = {
-        'dataset': 'cifar100',
-        'data_dir': './data',
-        'save_dir': './saved',
+        'dataset': 'cub',
+        'data_dir': os.environ.get('CONCEPT_DATA_DIR', './data'),
+        'save_dir': os.environ.get('CONCEPT_SAVE_DIR', './saved'),
         'model_type': ray.tune.grid_search([
             'no_residual',
             'latent_residual',
             'decorrelated_residual',
             'mi_residual',
-            'whitened_residual',
+            'iter_norm',
+            'concept_whitening',
         ]),
-        'residual_dim': 32,
+        'training_mode': 'independent',
+        'residual_dim': 8,
         'num_epochs': 100,
         'lr': 1e-4,
         'batch_size': 64,
@@ -49,7 +53,7 @@ def get_config(**kwargs) -> dict:
         'beta': 1.0,
         'mi_estimator_hidden_dim': 256,
         'mi_optimizer_lr': 1e-3,
-        'whitening_alignment_frequency': 20,
+        'cw_alignment_frequency': 20,
         'checkpoint_frequency': 5,
     }
     config.update(kwargs)
