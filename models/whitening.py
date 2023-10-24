@@ -136,7 +136,8 @@ class ConceptWhiteningLightningModel(ConceptLightningModel):
         (data, concepts), targets = batch
         concept_preds, residual, target_logits = outputs
         target_loss = F.cross_entropy(target_logits, targets)
-        self.log('target_loss', target_loss, **self.log_kwargs)
+        if target_loss.requires_grad:
+            self.log('target_loss', target_loss, **self.log_kwargs)
 
         return target_loss
 
