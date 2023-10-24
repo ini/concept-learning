@@ -5,7 +5,6 @@ import importlib
 import os
 import pytorch_lightning as pl
 import torch
-import torch.nn as nn
 
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +18,7 @@ from ray.tune.schedulers import AsyncHyperBandScheduler
 from torch.utils.data import DataLoader
 from typing import Any
 
-from loader import get_data_loaders, DATASET_INFO
+from loader import get_concept_loss_fn, get_data_loaders, DATASET_INFO
 from models import *
 from ray_utils import config_get, config_set, GroupScheduler, RayCallback
 from utils import cross_correlation, set_cuda_visible_devices
@@ -90,6 +89,9 @@ def make_concept_model(
     dataset_info = DATASET_INFO[config['dataset']]
     config = {**dataset_info, **config}
 
+    # Get concept loss function
+    config['concept_loss_fn'] = get_concept_loss_fn(config['dataset'])
+
     # No residual
     if model_type == 'no_residual':
         config = {**config, 'residual_dim': 0}
@@ -122,7 +124,7 @@ def make_concept_model(
     elif model_type == 'concept_whitening':
         config = {
             **config,
-            'concept_activation': nn.Identity(),
+            'concept_type': 'continuous',
             'norm_type': 'concept_whitening',
             'training_mode': 'joint',
         }

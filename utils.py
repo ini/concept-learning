@@ -123,7 +123,7 @@ def set_cuda_visible_devices(available_memory_threshold: float):
     """
     try:
         pynvml.nvmlInit()
-    except pynvml.nvml.NVMLError_LibraryNotFound:
+    except pynvml.NVMLError_LibraryNotFound:
         return
 
     available_devices = []

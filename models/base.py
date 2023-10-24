@@ -53,7 +53,7 @@ class ConceptModel(nn.Module):
         target_network: nn.Module,
         base_network: nn.Module = nn.Identity(),
         bottleneck_layer: nn.Module = nn.Identity(),
-        concept_activation: Callable = torch.sigmoid,
+        concept_type: Literal['binary', 'continuous'] = 'binary',
         training_mode: Literal['independent', 'sequential', 'joint'] = 'independent',
         **kwargs):
         """
@@ -69,8 +69,8 @@ class ConceptModel(nn.Module):
             Optional base network
         bottleneck_layer : nn.Module (..., bottleneck_dim) -> (..., bottleneck_dim)
             Optional bottleneck layer
-        concept_activation : Callable(concept_logits) -> concept_preds
-            Concept activation function
+        concept_type : one of {'binary', 'continuous'}
+            Concept type
         training_mode : one of {'independent', 'sequential', 'joint'}
             Training mode (see https://arxiv.org/abs/2007.04612)
         """
@@ -80,7 +80,7 @@ class ConceptModel(nn.Module):
         self.residual_network = VariableKwargs(residual_network)
         self.target_network = VariableKwargs(target_network)
         self.bottleneck_layer = VariableKwargs(bottleneck_layer)
-        self.concept_activation = concept_activation
+        self.concept_type = concept_type
         self.training_mode = training_mode
 
     def forward(
@@ -116,8 +116,13 @@ class ConceptModel(nn.Module):
             concept_logits, residual = x.split(
                 [concept_logits.shape[-1], residual.shape[-1]], dim=-1)
 
+        # Convert concept logits to predictions
+        if self.concept_type == 'binary':
+            concept_preds = concept_logits.sigmoid()
+        else:
+            concept_preds = concept_logits
+
         # Determine target network input based on training mode
-        concept_preds = self.concept_activation(concept_logits)
         if self.training and self.training_mode == 'independent':
             x = torch.cat([concepts, residual], dim=-1)
         elif self.training and self.training_mode == 'sequential':
@@ -127,7 +132,7 @@ class ConceptModel(nn.Module):
 
         # Get target logits
         target_logits = self.target_network(x, concepts=concepts)
-        return concept_preds, residual, target_logits
+        return concept_logits, residual, target_logits
 
 
 
@@ -141,6 +146,7 @@ class ConceptLightningModel(pl.LightningModule):
     def __init__(
         self,
         concept_model: ConceptModel,
+        concept_loss_fn: Callable = F.binary_cross_entropy_with_logits,
         residual_loss_fn: Callable = lambda r, c: torch.tensor(0.0, device=r.device),
         lr: float = 1e-3,
         alpha: float = 1.0,
@@ -151,6 +157,8 @@ class ConceptLightningModel(pl.LightningModule):
         ----------
         concept_model : ConceptModel
             Concept model
+        concept_loss_fn : Callable(concept_logits, concepts) -> loss
+            Concept loss function
         residual_loss_fn : Callable(residual, concepts) -> loss
             Residual loss function
         lr : float
@@ -162,6 +170,7 @@ class ConceptLightningModel(pl.LightningModule):
         """
         super().__init__()
         self.concept_model = concept_model
+        self.concept_loss_fn = concept_loss_fn
         self.residual_loss_fn = residual_loss_fn
         self.lr = lr
         self.alpha = alpha
@@ -197,19 +206,19 @@ class ConceptLightningModel(pl.LightningModule):
         batch : ConceptBatch
             Batch of ((data, concepts), targets)
         outputs : tuple[Tensor, Tensor, Tensor]
-            Concept model outputs (concept_preds, residual, target_logits)
+            Concept model outputs (concept_logits, residual, target_logits)
         """
         (data, concepts), targets = batch
-        concept_preds, residual, target_logits = outputs
+        concept_logits, residual, target_logits = outputs
 
         # Concept loss
-        concepts = concepts.view(concept_preds.shape)
-        concept_loss = F.binary_cross_entropy(concept_preds, concepts)
+        concepts = concepts.view(concept_logits.shape)
+        concept_loss = self.concept_loss_fn(concept_logits, concepts)
         if concept_loss.requires_grad:
             self.log('concept_loss', concept_loss, **self.log_kwargs)
 
         # Residual loss
-        residual_loss = self.residual_loss_fn(residual, concept_preds)
+        residual_loss = self.residual_loss_fn(residual, concept_logits)
         if residual_loss.requires_grad:
             self.log('residual_loss', residual_loss, **self.log_kwargs)
 
@@ -242,7 +251,7 @@ class ConceptLightningModel(pl.LightningModule):
         """
         (data, concepts), targets = batch
         outputs = self.concept_model(data, concepts=concepts)
-        concept_preds, residual, target_logits = outputs
+        concept_logits, residual, target_logits = outputs
 
         # Track loss
         loss = self.loss_fn(batch, outputs)
@@ -256,9 +265,11 @@ class ConceptLightningModel(pl.LightningModule):
         self.log(f'{split}_acc', accuracy, **self.log_kwargs)
 
         # Track concept accuracy
-        concept_accuracy_fn = Accuracy(task='binary').to(self.device)
-        concept_accuracy = concept_accuracy_fn(concept_preds, concepts)
-        self.log(f'{split}_concept_acc', concept_accuracy, **self.log_kwargs)
+        if self.concept_model.concept_type == 'binary':
+            concept_preds = concept_logits.sigmoid()
+            concept_accuracy_fn = Accuracy(task='binary').to(self.device)
+            concept_accuracy = concept_accuracy_fn(concept_preds, concepts)
+            self.log(f'{split}_concept_acc', concept_accuracy, **self.log_kwargs)
 
         return loss
 
