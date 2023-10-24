@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import numpy as np
 import os
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import ray.train
@@ -13,71 +15,14 @@ from ray import air, tune
 from ray.train import Result
 from torch import Tensor
 from torch.utils.data import DataLoader
-from torchmetrics import Accuracy
 from typing import Iterable
 
-from loader import get_data_loaders
+from loader import get_data_loaders, DATASET_INFO
 from nn_extensions import Chain
-from models import ConceptModel
+from models import ConceptLightningModel
 from ray_utils import group_results
 from train import make_concept_model, get_ray_trainer
-from utils import is_sigmoid, logit_fn, to_device
-
-
-
-### Metrics
-
-def accuracy(model: ConceptModel, loader: DataLoader) -> float:
-    """
-    Compute model accuracy over the given data.
-
-    Parameters
-    ----------
-    model : ConceptModel
-        Model to evaluate
-    loader : DataLoader
-        Data loader
-    """
-    device = next(model.parameters()).device
-    targets, target_preds = [], []
-    for batch in loader:
-        (x, c), y = to_device(batch, device)
-        y_pred = model(x, concepts=c)[-1]
-        num_classes = y_pred.shape[-1]
-        target_preds.append(y_pred)
-        targets.append(y)
-
-    targets = torch.cat(targets, dim=0)
-    target_preds = torch.cat(target_preds, dim=0)
-    accuracy_fn = Accuracy(task='multiclass', num_classes=num_classes).to(device)
-    return accuracy_fn(target_preds, targets).item()
-
-def concept_accuracy(model: ConceptModel, loader: DataLoader) -> float:
-    """
-    Compute model concept accuracy over the given data.
-
-    Parameters
-    ----------
-    model : ConceptModel
-        Model to evaluate
-    loader : DataLoader
-        Data loader
-    """
-    device = next(model.parameters()).device
-    concepts, concept_preds = [], []
-    for batch in loader:
-        (x, c), y = to_device(batch, device)
-        if is_sigmoid(model.concept_activation):
-            c_pred = model(x, concepts=c)[0]
-        else:
-            c_pred = model(x, concepts=c)[0].sigmoid()
-        concept_preds.append(c_pred)
-        concepts.append(c)
-
-    concepts = torch.cat(concepts, dim=0)
-    concept_preds = torch.cat(concept_preds, dim=0)
-    concept_accuracy_fn = Accuracy(task='binary').to(device)
-    return concept_accuracy_fn(concept_preds, concepts).item()
+from utils import logit_fn, set_cuda_visible_devices
 
 
 
@@ -125,58 +70,75 @@ class Intervention(nn.Module):
 ### Evaluations
 
 def test_interventions(
-    model: ConceptModel,
+    model: ConceptLightningModel,
     test_loader: DataLoader,
-    num_interventions: int,
-    negative: bool) -> float:
+    concept_dim: int,
+    negative: bool,
+    max_samples = 10) -> float:
     """
     Test model accuracy with concept interventions.
 
     Parameters
     ----------
-    model : ConceptModel
+    model : ConceptLightningModel
         Model to evaluate
     test_loader : DataLoader
         Test data loader
-    num_interventions : int
-        Number of concepts to intervene on
+    concept_dim : int
+        Dimension of concept vector
     negative : bool
         Whether to intervene with incorrect concept values
+    max_samples : int
+        Maximum number of interventions to test (varying the # of concepts intervened on)
     """
-    intervention = Intervention(num_interventions, negative=negative)
-    new_model = deepcopy(model)
-    new_model.bottleneck_layer = Chain(new_model.bottleneck_layer, intervention)
-    return accuracy(new_model, test_loader)
+    x = np.linspace(0, concept_dim + 1, num=min(concept_dim + 2, max_samples), dtype=int)
+    y = np.zeros_like(x)
+    for i, num_interventions in enumerate(x):
+        intervention = Intervention(num_interventions, negative=negative)
+        new_model = deepcopy(model)
+        new_model.concept_model.bottleneck_layer = Chain(
+            new_model.concept_model.bottleneck_layer, intervention)
+        trainer = pl.Trainer(enable_progress_bar=False)
+        trainer.test(new_model, test_loader)
+        y[i] = trainer.callback_metrics['test_acc'].item()
 
-def test_random_concepts(model: ConceptModel, test_loader: DataLoader) -> float:
+    return {'x': x, 'y': y}
+
+def test_random_concepts(model: ConceptLightningModel, test_loader: DataLoader) -> float:
     """
     Test model accuracy with randomized concept predictions.
 
     Parameters
     ----------
-    model : ConceptModel
+    model : ConceptLightningModel
         Model to evaluate
     test_loader : DataLoader
         Test data loader
     """
     new_model = deepcopy(model)
-    new_model.concept_network = Chain(new_model.concept_network, Randomize())
-    return accuracy(new_model, test_loader)
+    new_model.concept_model.concept_network = Chain(
+        new_model.concept_model.concept_network, Randomize())
+    trainer = pl.Trainer(enable_progress_bar=False)
+    trainer.test(new_model, test_loader)
+    return trainer.callback_metrics['test_acc'].item()
 
-def test_random_residual(model: ConceptModel, test_loader: DataLoader) -> float:
+def test_random_residual(model: ConceptLightningModel, test_loader: DataLoader) -> float:
     """
     Test model accuracy with randomized residual values.
 
     Parameters
     ----------
-    model : ConceptModel
+    model : ConceptLightningModel
         Model to evaluate
     test_loader : DataLoader
         Test data loader
     """
     new_model = deepcopy(model)
-    new_model.residual_network = Chain(new_model.residual_network, Randomize())
-    return accuracy(new_model, test_loader)
+    new_model.concept_model.residual_network = Chain(
+        new_model.concept_model.residual_network, Randomize())
+    trainer = pl.Trainer(enable_progress_bar=False)
+    trainer.test(new_model, test_loader)
+    return trainer.callback_metrics['test_acc'].item()
 
 
 
@@ -213,7 +175,8 @@ def load_train_results(
     else:
         return results
 
-def load_model(result: Result, loader: DataLoader | None = None) -> ConceptModel:
+def load_model(
+    result: Result, loader: DataLoader | None = None) -> ConceptLightningModel:
     """
     Load a trained model from a Ray Tune result.
 
@@ -224,11 +187,10 @@ def load_model(result: Result, loader: DataLoader | None = None) -> ConceptModel
     loader : DataLoader
         Data loader for dummy pass
     """
-    checkpoint_dir = result.get_best_checkpoint('val_acc', 'max').path
+    checkpoint_dir = Path(result.get_best_checkpoint('val_acc', 'max').path)
     model = make_concept_model(**result.config['train_loop_config'], loader=loader)
-    model = model.concept_model
-    model_path = Path(checkpoint_dir) / 'model.pt'
-    model.load_state_dict(torch.load(model_path))
+    model.concept_model.load_state_dict(
+        torch.load(checkpoint_dir / 'model.pt', map_location=model.device))
     return model
 
 def filter_eval_configs(configs: list[dict]) -> list[dict]:
@@ -252,7 +214,6 @@ def filter_eval_configs(configs: list[dict]) -> list[dict]:
 
     return configs_to_keep
 
-
 def evaluate(config: dict):
     """
     Evaluate a trained model.
@@ -266,36 +227,27 @@ def evaluate(config: dict):
 
     # Get data loaders
     _, _, test_loader = get_data_loaders(
-        config['dataset'],
-        data_dir=config['data_dir'],
-        batch_size=10000, # ideally as large as will fit in memory
-    )
+        config['dataset'], data_dir=config['data_dir'], batch_size=config['batch_size'])
 
     # Load model
-    model = load_model(config['train_result'], loader=test_loader).to(config['device'])
-    model.eval()
-
-    # Get concept dim via dummy pass
-    loader = DataLoader(test_loader.dataset, batch_size=1)
-    (data, concepts), targets = next(iter(loader))
-    concept_dim = model(data, concepts=concepts)[0].shape[-1]
+    model = load_model(config['train_result'], loader=test_loader)
 
     # Evaluate model
     if config['eval_mode'] == 'accuracy':
-        metrics['test_acc'] = accuracy(model, test_loader)
-        metrics['test_concept_acc'] = concept_accuracy(model, test_loader)
+        trainer = pl.Trainer(enable_progress_bar=False)
+        trainer.test(model, test_loader)
+        metrics['test_acc'] = trainer.callback_metrics['test_acc'].item()
+        metrics['test_concept_acc'] = trainer.callback_metrics['test_concept_acc'].item()
 
     if config['eval_mode'] == 'neg_intervention':
-        metrics['neg_intervention_accs'] = [
-            test_interventions(model, test_loader, n, negative=True)
-            for n in range(concept_dim + 1)
-        ]
+        concept_dim = DATASET_INFO[config['dataset']]['concept_dim']
+        metrics['neg_intervention_accs'] = test_interventions(
+            model, test_loader, concept_dim, negative=True)
 
     elif config['eval_mode'] == 'pos_intervention':
-        metrics['pos_intervention_accs'] = [
-            test_interventions(model, test_loader, n, negative=False)
-            for n in range(concept_dim + 1)
-        ]
+        concept_dim = DATASET_INFO[config['dataset']]['concept_dim']
+        metrics['pos_intervention_accs'] = test_interventions(
+            model, test_loader, concept_dim, negative=False)
 
     elif config['eval_mode'] == 'random_concepts':
         metrics['random_concept_acc'] = test_random_concepts(model, test_loader)
@@ -330,10 +282,9 @@ if __name__ == '__main__':
         '--all', action='store_true',
         help='Evaluate all trained models (instead of best trial per group)')
     parser.add_argument(
-        '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-        help='Device to use for model inference')
+        '--num-cpus', type=float, default=1, help='Number of CPUs to use (per model)')
     parser.add_argument(
-        '--num-gpus', type=float, help='Number of GPUs to use (per model)')
+        '--num-gpus', type=float, default=1, help='Number of GPUs to use (per model)')
 
     args = parser.parse_args()
 
@@ -352,24 +303,21 @@ if __name__ == '__main__':
             **result.config['train_loop_config'],
             'train_result': result,
             'eval_mode': mode,
-            'device': args.device,
         }
         for result in results
         for mode in args.mode
     ])
 
-    # Get number of GPUs
-    if not torch.cuda.is_available():
-        args.num_gpus = 0
-    elif args.num_gpus is None:
-        args.num_gpus = results[0].config['train_loop_config'].get('num_gpus', 1)
+    # Get available resources
+    if args.num_gpus < 1:
+        set_cuda_visible_devices(available_memory_threshold=args.num_gpus)
 
     # Run evaluations
     tuner = tune.Tuner(
         tune.with_resources(
             evaluate,
             resources={
-                'cpu': 1,
+                'cpu': args.num_cpus,
                 'gpu': args.num_gpus if torch.cuda.is_available() else 0
             },
         ),

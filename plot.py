@@ -86,8 +86,9 @@ def plot_negative_interventions(
     for key, results in group_results(dataset_results, groupby=groupby).items():
         results = group_results(results, groupby='eval_mode')
         for result in results.get('neg_intervention', []):
-            accuracies = np.array(result.metrics['neg_intervention_accs'])
-            plt.plot(range(len(accuracies)), 1 - accuracies, label=key)
+            num_interventions = result.metrics['neg_intervention_accs']['x']
+            accuracies = result.metrics['neg_intervention_accs']['y']
+            plt.plot(num_interventions, 1 - accuracies, label=key)
 
     plt.xlabel('# of Concepts Intervened')
     plt.ylabel('Classification Error')
@@ -113,8 +114,9 @@ def plot_positive_interventions(
     for key, results in group_results(dataset_results, groupby=groupby).items():
         results = group_results(results, groupby='eval_mode')
         for result in results.get('pos_intervention', []):
-            accuracies = np.array(result.metrics['pos_intervention_accs'])
-            plt.plot(range(len(accuracies)), accuracies, label=key)
+            num_interventions = result.metrics['pos_intervention_accs']['x']
+            accuracies = result.metrics['pos_intervention_accs']['y']
+            plt.plot(num_interventions, accuracies, label=key)
 
     plt.xlabel('# of Concepts Intervened')
     plt.ylabel('Classification Accuracy')

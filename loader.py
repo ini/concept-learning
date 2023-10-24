@@ -1,4 +1,6 @@
+import functools
 import torch
+import torch.nn as nn
 
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
@@ -19,6 +21,50 @@ DATASET_INFO = {
     "cub": {"concept_dim": 112, "num_classes": 200},
     "oai": {"concept_dim": 10, "num_classes": 4},
 }
+
+
+@functools.cache
+def get_concept_loss_fn(dataset_name: str) -> nn.BCEWithLogitsLoss:
+    """
+    Get BCE concept loss function for the specified dataset.
+
+    Parameters
+    ----------
+    dataset_name : str
+        Name of the dataset
+    """
+    train_loader = get_data_loaders(dataset_name)[0]
+    concept_dim = DATASET_INFO[dataset_name]["concept_dim"]
+    concepts_pos_count = torch.zeros(concept_dim)
+    concepts_neg_count = torch.zeros(concept_dim)
+    for (data, concepts), targets in train_loader:
+        concepts_pos_count += concepts.sum(dim=0)
+        concepts_neg_count += (1 - concepts).sum(dim=0)
+
+    pos_weight = concepts_neg_count / (concepts_pos_count + 1e-6)
+    return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+
+@functools.cache
+def get_concept_loss_fn(dataset_name: str) -> nn.BCEWithLogitsLoss:
+    """
+    Get BCE concept loss function for the specified dataset.
+
+    Parameters
+    ----------
+    dataset_name : str
+        Name of the dataset
+    """
+    train_loader = get_data_loaders(dataset_name)[0]
+    concept_dim = DATASET_INFO[dataset_name]["concept_dim"]
+    concepts_pos_count = torch.zeros(concept_dim)
+    concepts_neg_count = torch.zeros(concept_dim)
+    for (data, concepts), targets in train_loader:
+        concepts_pos_count += concepts.sum(dim=0)
+        concepts_neg_count += (1 - concepts).sum(dim=0)
+
+    pos_weight = concepts_neg_count / (concepts_pos_count + 1e-6)
+    return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
 
 def get_data_loaders(
@@ -166,6 +212,6 @@ def get_data_loaders(
     # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
     return train_loader, val_loader, test_loader
