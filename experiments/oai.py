@@ -56,6 +56,7 @@ def get_config(**kwargs) -> dict:
         "batch_size": 8,
         "alpha": 1.0,
         "beta": 1.0,
+        "concept_type": "continuous",
         "mi_estimator_hidden_dim": 256,
         "mi_optimizer_lr": 1e-3,
         "cw_alignment_frequency": 20,

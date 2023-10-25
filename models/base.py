@@ -310,14 +310,10 @@ class ConceptLightningModel(pl.LightningModule):
 
         # Residual loss
         residual_loss = self.residual_loss_fn(residual, concept_preds)
-        self.log("residual_loss", residual_loss, **self.log_kwargs)
-        residual_loss = self.residual_loss_fn(residual, concept_logits)
         if residual_loss.requires_grad:
             self.log("residual_loss", residual_loss, **self.log_kwargs)
 
-        self.log("target_loss", target_loss, **self.log_kwargs)
         # Target loss
-        target_loss = F.cross_entropy(target_logits, targets)
         if target_loss.requires_grad:
             self.log("target_loss", target_loss, **self.log_kwargs)
 
@@ -403,7 +399,10 @@ class ConceptLightningModel(pl.LightningModule):
         if self.concept_model.concept_type == "binary":
             concept_preds = concept_logits.sigmoid()
             concept_accuracy_fn = Accuracy(task="binary").to(self.device)
-            concept_accuracy = concept_accuracy_fn(concept_preds, concepts)
+            if isinstance(concepts, list) and len(concepts) == 3:
+                concept_accuracy = concept_accuracy_fn(concept_preds, concepts[0])
+            else:
+                concept_accuracy = concept_accuracy_fn(concept_preds, concepts)
             self.log(f"{split}_concept_acc", concept_accuracy, **self.log_kwargs)
 
         return loss
