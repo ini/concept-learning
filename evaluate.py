@@ -11,6 +11,7 @@ import ray.train.context
 
 from copy import deepcopy
 from pathlib import Path
+from pytorch_lightning.accelerators.mps import MPSAccelerator
 from ray import air, tune
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -66,6 +67,23 @@ class Intervention(nn.Module):
 
 ### Evaluations
 
+def test(model: pl.LightningModule, loader: DataLoader):
+    """
+    Test model.
+
+    Parameters
+    ----------
+    model : pl.LightningModule
+        Model to test
+    loader : DataLoader
+        Test data loader
+    """
+    trainer = pl.Trainer(
+        accelerator='cpu' if MPSAccelerator.is_available() else 'auto',
+        enable_progress_bar=False,
+    )
+    return trainer.test(model, loader)[0]
+
 def test_interventions(
     model: ConceptLightningModel,
     test_loader: DataLoader,
@@ -95,9 +113,8 @@ def test_interventions(
         new_model = deepcopy(model)
         new_model.concept_model.bottleneck_layer = Chain(
             new_model.concept_model.bottleneck_layer, intervention)
-        trainer = pl.Trainer(enable_progress_bar=False)
-        trainer.test(new_model, test_loader)
-        y[i] = trainer.callback_metrics['test_acc'].item()
+        results = test(new_model, test_loader)
+        y[i] = results['test_acc']
 
     return {'x': x, 'y': y}
 
@@ -124,9 +141,8 @@ def test_random_concepts(model: ConceptLightningModel, test_loader: DataLoader) 
     new_model = deepcopy(model)
     new_model.concept_model.concept_network = Chain(
         new_model.concept_model.concept_network, Randomize())
-    trainer = pl.Trainer(enable_progress_bar=False)
-    trainer.test(new_model, test_loader)
-    return trainer.callback_metrics['test_acc'].item()
+    results = test(new_model, test_loader)
+    return results['test_acc']
 
 def test_random_residual(model: ConceptLightningModel, test_loader: DataLoader) -> float:
     """
@@ -151,9 +167,8 @@ def test_random_residual(model: ConceptLightningModel, test_loader: DataLoader) 
     new_model = deepcopy(model)
     new_model.concept_model.residual_network = Chain(
         new_model.concept_model.residual_network, Randomize())
-    trainer = pl.Trainer(enable_progress_bar=False)
-    trainer.test(new_model, test_loader)
-    return trainer.callback_metrics['test_acc'].item()
+    results = test(new_model, test_loader)
+    return results['test_acc']
 
 
 
@@ -204,11 +219,10 @@ def evaluate(config: dict):
 
     # Evaluate model
     if config['eval_mode'] == 'accuracy':
-        trainer = pl.Trainer(enable_progress_bar=False)
-        trainer.test(model, test_loader)
+        results = test(model, test_loader)
         for key in ('test_acc', 'test_concept_acc'):
-            if key in trainer.callback_metrics:
-                metrics[key] = trainer.callback_metrics[key].item()
+            if key in results:
+                metrics[key] = results[key]
 
     if config['eval_mode'] == 'neg_intervention':
         concept_dim = DATASET_INFO[config['dataset']]['concept_dim']

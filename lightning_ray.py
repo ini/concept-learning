@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import pynvml
 import pytorch_lightning as pl
@@ -9,7 +11,6 @@ import torch
 from argparse import ArgumentParser, Namespace
 from collections import defaultdict
 from copy import deepcopy
-from dataclasses import dataclass
 from pathlib import Path
 from pytorch_lightning.accelerators.mps import MPSAccelerator
 from ray.air import CheckpointConfig, RunConfig, ScalingConfig
@@ -385,7 +386,7 @@ class LightningTuner:
         """
         trainer = pl.Trainer(
             accelerator='cpu' if MPSAccelerator.is_available() else 'auto',
-            strategy=RayDDPStrategy(),
+            strategy=RayDDPStrategy(find_unused_parameters=True),
             devices='auto',
             logger=False, # logging metrics is handled by RayCallback
             callbacks=[*self.get_callbacks(config), RayCallback(**config)],
