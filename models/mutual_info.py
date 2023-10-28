@@ -1,12 +1,15 @@
 import pytorch_lightning as pl
 import torch
+import torch.nn as nn
+
+from torch import Tensor
 
 from .base import ConceptBatch, ConceptModel, ConceptLightningModel
 from lib.club import CLUB
 
 
 
-class MutualInfoCallback(pl.Callback):
+class MutualInfoCallback(nn.Module, pl.Callback):
     """
     Callback class for `MutualInfoConceptLightningModel`.
     """
@@ -34,21 +37,6 @@ class MutualInfoCallback(pl.Callback):
         self.mi_optimizer = torch.optim.Adam(
             self.mi_estimator.parameters(), lr=mi_optimizer_lr)
 
-    def setup(self, trainer: pl.Trainer, pl_module: pl.LightningModule, stage: str):
-        """
-        Move callback modules to model device.
-
-        Parameters
-        ----------
-        trainer : pl.Trainer
-            PyTorch Lightning trainer
-        pl_module : ConceptLightningModel
-            Concept model
-        stage : str
-            Trainer stage
-        """
-        self.mi_estimator.to(pl_module.device)
-
     def on_train_batch_start(
         self,
         trainer: pl.Trainer,
@@ -72,10 +60,11 @@ class MutualInfoCallback(pl.Callback):
         # Run inference for concept model
         with torch.no_grad():
             (data, concepts), targets = batch
-            concept_preds, residual, _ = pl_module(data, concepts=concepts)
+            concept_logits, residual, target_logits = pl_module(data, concepts=concepts)
 
         # Optimize the MI estimator
         self.mi_optimizer.zero_grad()
+        concept_preds = pl_module.concept_model.get_concept_predictions(concept_logits)
         mi_loss = self.mi_estimator.learning_loss(residual, concept_preds)
         mi_loss.backward()
         self.mi_optimizer.step()
@@ -110,17 +99,24 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
         mi_optimizer_lr : float
             Learning rate for mutual information estimator optimizer
         """
+        super().__init__(
+            concept_model,
+            residual_loss_fn=self.mutual_information,
+            **kwargs,
+        )
         self._callback = MutualInfoCallback(
             concept_dim,
             residual_dim,
             mi_estimator_hidden_dim=mi_estimator_hidden_dim,
             mi_optimizer_lr=mi_optimizer_lr,
         )
-        super().__init__(
-            concept_model,
-            residual_loss_fn=self._callback.mi_estimator.forward,
-            **kwargs,
-        )
+
+    def mutual_information(self, residual: Tensor, concept_logits: Tensor) -> Tensor:
+        """
+        Estimated mutual information between residual and concept predictions.
+        """
+        concept_preds = self.concept_model.get_concept_predictions(concept_logits)
+        return self._callback.mi_estimator(residual, concept_preds.detach())
 
     def callback(self) -> MutualInfoCallback:
         """

@@ -12,7 +12,7 @@ from ray.tune import ResultGrid
 from typing import Iterable, Union
 
 from evaluate import evaluate
-from ray_utils import group_results
+from lightning_ray import group_results
 
 
 

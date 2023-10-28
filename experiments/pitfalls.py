@@ -87,7 +87,7 @@ def get_config(**kwargs) -> dict:
         'beta': 1.0,
         'mi_estimator_hidden_dim': 256,
         'mi_optimizer_lr': 1e-3,
-        'whitening_alignment_frequency': 20,
+        'cw_alignment_frequency': 20,
         'checkpoint_frequency': 1,
     }
     config.update(kwargs)

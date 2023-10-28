@@ -12,16 +12,13 @@ import ray.train.context
 from copy import deepcopy
 from pathlib import Path
 from ray import air, tune
-from ray.train import Result
 from torch import Tensor
 from torch.utils.data import DataLoader
-from typing import Iterable
 
-from loader import get_data_loaders, DATASET_INFO
+from loader import get_datamodule, DATASET_INFO
 from nn_extensions import Chain
 from models import ConceptLightningModel
-from ray_utils import group_results
-from train import make_concept_model, get_ray_trainer
+from train import ConceptModelTuner
 from utils import logit_fn, set_cuda_visible_devices
 
 
@@ -92,7 +89,7 @@ def test_interventions(
         Maximum number of interventions to test (varying the # of concepts intervened on)
     """
     x = np.linspace(0, concept_dim + 1, num=min(concept_dim + 2, max_samples), dtype=int)
-    y = np.zeros_like(x)
+    y = np.zeros(len(x))
     for i, num_interventions in enumerate(x):
         intervention = Intervention(num_interventions, negative=negative)
         new_model = deepcopy(model)
@@ -115,6 +112,15 @@ def test_random_concepts(model: ConceptLightningModel, test_loader: DataLoader) 
     test_loader : DataLoader
         Test data loader
     """
+    # Shuffle data
+    test_loader = DataLoader(
+        test_loader.dataset,
+        batch_size=test_loader.batch_size,
+        shuffle=True,
+        num_workers=test_loader.num_workers,
+        pin_memory=test_loader.pin_memory,
+    )
+
     new_model = deepcopy(model)
     new_model.concept_model.concept_network = Chain(
         new_model.concept_model.concept_network, Randomize())
@@ -133,6 +139,15 @@ def test_random_residual(model: ConceptLightningModel, test_loader: DataLoader) 
     test_loader : DataLoader
         Test data loader
     """
+    # Shuffle data
+    test_loader = DataLoader(
+        test_loader.dataset,
+        batch_size=test_loader.batch_size,
+        shuffle=True,
+        num_workers=test_loader.num_workers,
+        pin_memory=test_loader.pin_memory,
+    )
+
     new_model = deepcopy(model)
     new_model.concept_model.residual_network = Chain(
         new_model.concept_model.residual_network, Randomize())
@@ -143,55 +158,6 @@ def test_random_residual(model: ConceptLightningModel, test_loader: DataLoader) 
 
 
 ### Loading & Execution
-
-def load_train_results(
-    path: Path | str,
-    best_only: bool = False,
-    groupby: list[str] = ['dataset', 'model_type']) -> Iterable[Result]:
-    """
-    Load train results for the given experiment.
-
-    Parameters
-    ----------
-    path : Path or str
-        Path to the experiment directory
-    best_only : bool
-        Whether to return only the best result (for each group)
-    groupby : list[str]
-        List of config keys to group by when selecting best results
-    """
-    results_path = Path(path).resolve() / 'train'
-
-    # Load all results
-    print('Loading training results from', results_path)
-    tuner = tune.Tuner.restore(str(results_path), trainable=get_ray_trainer())
-    results = tuner.get_results()
-
-    if best_only:
-        return [
-            group.get_best_result()
-            for group in group_results(results, groupby).values()
-        ]
-    else:
-        return results
-
-def load_model(
-    result: Result, loader: DataLoader | None = None) -> ConceptLightningModel:
-    """
-    Load a trained model from a Ray Tune result.
-
-    Parameters
-    ----------
-    result : Result
-        Ray result instance
-    loader : DataLoader
-        Data loader for dummy pass
-    """
-    checkpoint_dir = Path(result.get_best_checkpoint('val_acc', 'max').path)
-    model = make_concept_model(**result.config['train_loop_config'], loader=loader)
-    model.concept_model.load_state_dict(
-        torch.load(checkpoint_dir / 'model.pt', map_location=model.device))
-    return model
 
 def filter_eval_configs(configs: list[dict]) -> list[dict]:
     """
@@ -225,19 +191,24 @@ def evaluate(config: dict):
     """
     metrics = {}
 
-    # Get data loaders
-    _, _, test_loader = get_data_loaders(
-        config['dataset'], data_dir=config['data_dir'], batch_size=config['batch_size'])
+    # Get data loader
+    test_loader = get_datamodule(
+        config['dataset'],
+        config['data_dir'],
+        batch_size=config['batch_size'],
+        num_workers=0,
+    ).test_dataloader()
 
     # Load model
-    model = load_model(config['train_result'], loader=test_loader)
+    model = ConceptModelTuner('val_acc', 'max').load_model(config['train_result'])
 
     # Evaluate model
     if config['eval_mode'] == 'accuracy':
         trainer = pl.Trainer(enable_progress_bar=False)
         trainer.test(model, test_loader)
-        metrics['test_acc'] = trainer.callback_metrics['test_acc'].item()
-        metrics['test_concept_acc'] = trainer.callback_metrics['test_concept_acc'].item()
+        for key in ('test_acc', 'test_concept_acc'):
+            if key in trainer.callback_metrics:
+                metrics[key] = trainer.callback_metrics[key].item()
 
     if config['eval_mode'] == 'neg_intervention':
         concept_dim = DATASET_INFO[config['dataset']]['concept_dim']
@@ -291,11 +262,18 @@ if __name__ == '__main__':
     # Recursively search for 'tuner.pkl' file within the provided directory
     # If multiple are found, use the most recently modified one
     experiment_paths = Path(args.exp_dir).resolve().glob('**/train/tuner.pkl')
-    experiment_path = sorted(experiment_paths, key=os.path.getmtime)[-1].parent.parent
+    experiment_path = sorted(experiment_paths, key=os.path.getmtime)[-1].parent
 
     # Load train results
-    results = load_train_results(
-        experiment_path, best_only=(not args.all), groupby=args.groupby)
+    print('Loading training results from', experiment_path)
+    tuner = ConceptModelTuner.restore(experiment_path)
+    if args.all:
+        results = tuner.get_results()
+    else:
+        results = [
+            group.get_best_result()
+            for group in tuner.get_results(groupby=args.groupby).values()
+        ]
 
     # Create evaluation configs
     eval_configs = filter_eval_configs([
@@ -322,6 +300,7 @@ if __name__ == '__main__':
             },
         ),
         param_space=tune.grid_search(eval_configs),
-        run_config=air.RunConfig(name='eval', storage_path=experiment_path),
+        run_config=air.RunConfig(
+            name='eval', storage_path=tuner.tuner._local_tuner._run_config.storage_path),
     )
     eval_results = tuner.fit()

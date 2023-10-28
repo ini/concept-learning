@@ -7,9 +7,31 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch import Tensor
+from torchmetrics import Accuracy
 from typing import Callable
 
 
+
+def accuracy(logits: Tensor, targets: Tensor, task: str = 'multiclass') -> Tensor:
+    """
+    Compute accuracy from logits and targets.
+
+    Parameters
+    ----------
+    logits : Tensor
+        Logits
+    targets : Tensor
+        Targets
+    """
+    if task == 'binary':
+        preds = logits.sigmoid()
+        accuracy_fn = Accuracy(task='binary').to(logits.device)
+    else:
+        preds = logits.argmax(dim=-1)
+        accuracy_fn = Accuracy(
+            task='multiclass', num_classes=logits.shape[-1]).to(logits.device)
+
+    return accuracy_fn(preds, targets)
 
 def is_sigmoid(fn: Callable) -> bool:
     """

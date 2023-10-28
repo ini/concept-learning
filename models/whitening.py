@@ -41,7 +41,7 @@ class ConceptWhiteningCallback(pl.Callback):
             unwrap(pl_module.concept_model.bottleneck_layer), ConceptWhitening)
 
         # Get training data loader
-        loader = trainer.fit_loop._data_source.instance
+        loader = trainer.fit_loop._data_source.dataloader()
         (data, concepts), targets = next(iter(loader))
         batch_size, concept_dim = concepts.shape
 
