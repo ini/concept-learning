@@ -327,6 +327,45 @@ class ConceptLightningModel(pl.LightningModule):
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
+    # def step(
+    #     self, batch: ConceptBatch, split: Literal["train", "val", "test"]
+    # ) -> Tensor:
+    #     """
+    #     Training / validation / test step.
+
+    #     Parameters
+    #     ----------
+    #     batch : ConceptBatch
+    #         Batch of ((data, concepts), targets)
+    #     split : one of {'train', 'val', 'test'}
+    #         Dataset split
+    #     """
+    #     print("Training step")
+    #     (data, concepts), targets = batch
+    #     outputs = self.concept_model(data, concepts=concepts)
+    #     concept_logits, residual, target_logits = outputs
+
+    #     # Track loss
+    #     loss = self.loss_fn(batch, outputs)
+    #     self.log(f"{split}_loss", loss, **self.log_kwargs)
+
+    #     # Track accuracy
+    #     target_preds = target_logits.argmax(dim=-1)
+    #     accuracy_fn = Accuracy(
+    #         task="multiclass", num_classes=target_logits.shape[-1]
+    #     ).to(self.device)
+    #     accuracy = accuracy_fn(target_preds, targets)
+    #     self.log(f"{split}_acc", accuracy, **self.log_kwargs)
+
+    #     # Track concept accuracy
+    #     if self.concept_model.concept_type == "binary":
+    #         concept_preds = concept_logits.sigmoid()
+    #         concept_accuracy_fn = Accuracy(task="binary").to(self.device)
+    #         concept_accuracy = concept_accuracy_fn(concept_preds, concepts)
+    #         self.log(f"{split}_concept_acc", concept_accuracy, **self.log_kwargs)
+
+    #     return loss
+
     def step(
         self, batch: ConceptBatch, split: Literal["train", "val", "test"]
     ) -> Tensor:
@@ -340,7 +379,6 @@ class ConceptLightningModel(pl.LightningModule):
         split : one of {'train', 'val', 'test'}
             Dataset split
         """
-        print("Training step")
         (data, concepts), targets = batch
         outputs = self.concept_model(data, concepts=concepts)
         concept_logits, residual, target_logits = outputs
@@ -348,45 +386,6 @@ class ConceptLightningModel(pl.LightningModule):
         # Track loss
         loss = self.loss_fn(batch, outputs)
         self.log(f"{split}_loss", loss, **self.log_kwargs)
-
-        # Track accuracy
-        target_preds = target_logits.argmax(dim=-1)
-        accuracy_fn = Accuracy(
-            task="multiclass", num_classes=target_logits.shape[-1]
-        ).to(self.device)
-        accuracy = accuracy_fn(target_preds, targets)
-        self.log(f"{split}_acc", accuracy, **self.log_kwargs)
-
-        # Track concept accuracy
-        if self.concept_model.concept_type == "binary":
-            concept_preds = concept_logits.sigmoid()
-            concept_accuracy_fn = Accuracy(task="binary").to(self.device)
-            concept_accuracy = concept_accuracy_fn(concept_preds, concepts)
-            self.log(f"{split}_concept_acc", concept_accuracy, **self.log_kwargs)
-
-        return loss
-
-    def step(
-        self, batch: ConceptBatch, split: Literal["train", "val", "test"]
-    ) -> Tensor:
-        """
-        Training / validation / test step.
-
-        Parameters
-        ----------
-        batch : ConceptBatch
-            Batch of ((data, concepts), targets)
-        split : one of {'train', 'val', 'test'}
-            Dataset split
-        """
-        (data, concepts), targets = batch
-        outputs = self.concept_model(data, concepts=concepts)
-        concept_logits, residual, target_logits = outputs
-
-        # Track loss
-        loss = self.loss_fn(batch, outputs)
-        self.log(f"{split}_loss", loss, **self.log_kwargs)
-
         # Track accuracy
         target_preds = target_logits.argmax(dim=-1)
         accuracy_fn = Accuracy(

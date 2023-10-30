@@ -162,8 +162,14 @@ def train_concept_model(config: dict[str, Any]):
     model = make_concept_model(loader=train_loader, **config)
 
     # Train model
+    if MPSAccelerator.is_available():
+        accelerator = "cpu"
+    elif config["num_gpus"] > 0:
+        accelerator = "gpu"
+    else:
+        accelerator = "auto"
     trainer = pl.Trainer(
-        accelerator="cpu" if MPSAccelerator.is_available() else "auto",
+        accelerator=accelerator,
         strategy=RayDDPStrategy(find_unused_parameters=True),
         devices="auto",
         logger=False,  # logging metrics is handled by Ray
@@ -172,6 +178,7 @@ def train_concept_model(config: dict[str, Any]):
         enable_checkpointing=False,  # checkpointing is handled by Ray
         enable_progress_bar=False,
         plugins=[RayLightningEnvironment()],
+        profiler="simple",
     )
     trainer.fit(model, train_loader, val_loader)
 
