@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import os
 import pynvml
 import pytorch_lightning as pl
@@ -8,6 +9,7 @@ import ray
 import tempfile
 import torch
 
+from abc import ABC, abstractmethod
 from argparse import ArgumentParser, Namespace
 from collections import defaultdict
 from copy import deepcopy
@@ -18,18 +20,109 @@ from ray.experimental.tqdm_ray import safe_print
 from ray.train import Checkpoint
 from ray.train.lightning import RayDDPStrategy, RayLightningEnvironment
 from ray.train.torch import TorchTrainer
-from ray.tune import ExperimentAnalysis, ResultGrid, TuneConfig, Tuner
+from ray.train.trainer import BaseTrainer
+from ray.tune import ExperimentAnalysis, ResultGrid, Trainable, TuneConfig, Tuner
+from ray.tune.execution.experiment_state import _ResumeConfig
 from ray.tune.execution.tune_controller import TuneController
 from ray.tune.experiment import Trial
 from ray.tune.schedulers import FIFOScheduler, TrialScheduler
+from ray.tune.tuner import TunerInternal
 from tensorboard import program as tensorboard
-from typing import Any, Iterable, Literal
+from typing import Any, Callable, Iterable, Literal, Type
 
 
+
+def get_internal_tuner(tuner: Tuner | LightningTuner) -> TunerInternal:
+    """
+    Get the internal Ray Tune tuner.
+
+    Parameters
+    ----------
+    tuner : ray.tune.Tuner or LightningTuner
+        Tuner instance
+    """
+    if isinstance(tuner, LightningTuner):
+        tuner = tuner.tuner
+
+    return tuner._local_tuner or tuner._remote_tuner
+
+def restore_ray_tuner(
+    path: str | Path,
+    trainable: str | Callable | Type[Trainable] | BaseTrainer,
+    **kwargs,
+) -> Tuner:
+    """
+    Restore Ray Tuner.
+
+    NOTE: This is a patch to prevent the experiment name and storage path
+    from being changed when restoring a tuner. This is necessary because,
+    as of Ray 2.7.1, the Tuner.restore() implementation does not support experiment
+    names specified as subdirectories (i.e. experiment_name = 'exp/train').
+
+    Parameters
+    ----------
+    path : str or Path
+        Experiment directory
+    trainable : str or callable or type[Trainable] or BaseTrainer
+        Trainable to be tuned
+    """
+
+    class RestoredTunerInternal(TunerInternal):
+        """
+        Ray TunerInternal class that wraps the RunConfig to prevent
+        the experiment name and storage path from being changed on restore.
+        """
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            if isinstance(self._run_config, RestoredRunConfig):
+                self._run_config = self._run_config.run_config  # unwrap after init
+
+        def _set_trainable_on_restore(self, *args, **kwargs):
+            super()._set_trainable_on_restore(*args, **kwargs)
+            self._run_config = RestoredRunConfig(self._run_config)
+
+    class RestoredRunConfig(RunConfig):
+        """
+        RunConfig wrapper that prevents the experiment name and storage
+        path from being changed.
+        """
+
+        def __init__(self, run_config: RunConfig):
+            self.run_config = run_config
+
+        def __getattribute__(self, name: str) -> Any:
+            if name == 'run_config':
+                return super().__getattribute__(name)
+            else:
+                return getattr(self.run_config, name)
+
+        def __setattr__(self, name: str, value: Any):
+            if name in ('name', 'storage_path'):
+                print(f"{self} cannot set attribute '{name}'")
+            else:
+                super().__setattr__(name, value)
+
+    if not ray.util.client.ray.is_connected():
+        resume_config = _ResumeConfig(
+            resume_unfinished=kwargs.get('resume_unfinished', True),
+            resume_errored=kwargs.get('resume_errored', False),
+            restart_errored=kwargs.get('restart_errored', False),
+        )
+        tuner_internal = RestoredTunerInternal(
+            restore_path=str(path),
+            resume_config=resume_config,
+            trainable=trainable,
+            param_space=kwargs.get('param_space', None),
+            storage_filesystem=kwargs.get('storage_filesystem', None),
+        )
+        return Tuner(_tuner_internal=tuner_internal)
+
+    return Tuner.restore(path, trainable, **kwargs)
 
 def group_results(
     results: ResultGrid, groupby: str | Iterable[str],
-) -> dict[tuple[str], ResultGrid]:
+) -> dict[str | tuple[str], ResultGrid]:
     """
     Map each unique combination of config values for keys specified by `groupby`
     to a ResultGrid containing only the results with those config values.
@@ -43,11 +136,12 @@ def group_results(
     """
     trials = defaultdict(list)
     for trial in results._experiment_analysis.trials:
+        config = trial.config.get('train_loop_config', trial.config)
         if isinstance(groupby, str):
-            group = trial.config[groupby]
+            group = config[groupby]
             trials[group].append(trial)
         else:
-            group = tuple(trial.config[key] for key in groupby)
+            group = tuple(config[key] for key in groupby)
             trials[group].append(trial)
 
     return {
@@ -122,33 +216,72 @@ def parse_args_dynamic(parser: ArgumentParser) -> tuple[Namespace, dict[str, Any
 
     return args, config
 
-def set_cuda_visible_devices(available_memory_threshold: float):
+def configure_gpus(gpu_memory_per_worker: str | int | float) -> float:
     """
-    Set CUDA_VISIBLE_DEVICES to the GPUs whose fraction of available memory
-    is at least a given threshold.
-
-    When running processes with fractional GPUs, set the threshold to
-    the fraction of the GPU memory that is available to each worker.
+    Configure CUDA_VISIBLE_DEVICES to maximize the total number of workers.
 
     Parameters
     ----------
-    available_memory_threshold : float in range [0, 1]
-        Threshold for fraction of available GPU memory
+    gpu_memory_per_worker : str | int | float
+        The amount of GPU memory required per worker. Can be a string with units
+        (e.g. "1.5 GB") or a number in bytes.
+
+    Returns
+    -------
+    gpus_per_worker : float
+        The number of GPUs to allocate to each worker
     """
     try:
         pynvml.nvmlInit()
     except pynvml.NVMLError_LibraryNotFound:
-        return
+        return 0
 
-    available_devices = []
-    for i in range(pynvml.nvmlDeviceGetCount()):
+    if not torch.cuda.is_available():
+        return 0
+
+    # Convert to bytes
+    if isinstance(gpu_memory_per_worker, str):
+        UNITS = {
+            'KB': 1e3, 'KiB': 2**10,
+            'MB': 1e6, 'MiB': 2**20,
+            'GB': 1e9, 'GiB': 2**30,
+            'TB': 1e12, 'TiB': 2**40,
+        }
+        for unit, value in UNITS.items():
+            if gpu_memory_per_worker.endswith(unit):
+                gpu_memory_per_worker = float(gpu_memory_per_worker.strip(unit)) * value
+                break
+
+    gpu_memory_per_worker = int(gpu_memory_per_worker)
+    total_num_gpus = pynvml.nvmlDeviceGetCount()
+
+    # For each GPU, calculate the number of workers that can fit in memory
+    num_workers = np.zeros(total_num_gpus)
+    for i in range(total_num_gpus):
         handle = pynvml.nvmlDeviceGetHandleByIndex(i)
         memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        if memory_info.free / memory_info.total >= available_memory_threshold:
-            available_devices.append(i)
+        num_workers[i] = memory_info.free // gpu_memory_per_worker
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(map(str, available_devices))
+    if num_workers.max() == 0:
+        return 0
 
+    # Sort GPU indices by number of available workers
+    gpu_idx = num_workers.argsort()[::-1]
+
+    # Given n GPUs, the total number of workers is
+    # n * the number of workers on the GPU with the least availability
+    total_num_workers = np.zeros(total_num_gpus + 1)
+    for n in range(1, total_num_gpus + 1):
+        idx = gpu_idx[:n] # select the top-n GPUs
+        total_num_workers[n] = n * num_workers[idx].min()
+
+    # Select the combination of GPUs that maximizes the total number of workers
+    n = total_num_workers.argmax()
+    best_gpu_idx = gpu_idx[:n]
+    gpus_per_worker = 1 / num_workers[best_gpu_idx].min()
+    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(map(str, best_gpu_idx))
+
+    return gpus_per_worker
 
 
 class GroupScheduler(TrialScheduler):
@@ -167,20 +300,31 @@ class GroupScheduler(TrialScheduler):
         """
         super().__init__()
         self.groupby = tuple(groupby)
-        self.schedulers = defaultdict(lambda: deepcopy(scheduler))
+        self.base_scheduler = scheduler
+        self.schedulers = defaultdict(self._create_scheduler)
+
+    def set_search_properties(self, *args, **kwargs) -> bool:
+        """
+        Pass search properties to scheduler.
+        """
+        self.base_scheduler.set_search_properties(*args, **kwargs)
+        for scheduler in self.schedulers.values():
+            scheduler.set_search_properties(*args, **kwargs)
+
+        return super().set_search_properties(*args, **kwargs)
 
     def on_trial_add(self, tune_controller: TuneController, trial: Trial):
         """
         Called when a new trial is added to the trial runner.
         """
-        key = tuple(trial.config.get(key, None) for key in self.groupby)
+        key = self._get_trial_key(trial)
         self.schedulers[key].on_trial_add(tune_controller, trial)
 
     def on_trial_error(self, tune_controller: TuneController, trial: Trial):
         """
         Notification for the error of trial.
         """
-        key = tuple(trial.config.get(key, None) for key in self.groupby)
+        key = self._get_trial_key(trial)
         self.schedulers[key].on_trial_error(tune_controller, trial)
 
     def on_trial_result(
@@ -189,7 +333,7 @@ class GroupScheduler(TrialScheduler):
         """
         Called on each intermediate result returned by a trial.
         """
-        key = tuple(trial.config.get(key, None) for key in self.groupby)
+        key = self._get_trial_key(trial)
         return self.schedulers[key].on_trial_result(tune_controller, trial, result)
 
     def on_trial_complete(
@@ -198,14 +342,14 @@ class GroupScheduler(TrialScheduler):
         """
         Notification for the completion of trial.
         """
-        key = tuple(trial.config.get(key, None) for key in self.groupby)
+        key = self._get_trial_key(trial)
         self.schedulers[key].on_trial_complete(tune_controller, trial, result)
 
     def on_trial_remove(self, tune_controller: TuneController, trial: Trial):
         """
         Called to remove trial.
         """
-        key = tuple(trial.config.get(key, None) for key in self.groupby)
+        key = self._get_trial_key(trial)
         self.schedulers[key].on_trial_remove(tune_controller, trial)
 
     def choose_trial_to_run(self, tune_controller: TuneController) -> Trial | None:
@@ -230,6 +374,19 @@ class GroupScheduler(TrialScheduler):
             f'{key}: {scheduler.debug_string()}'
             for key, scheduler in self.schedulers.items()
         ])
+
+    def _create_scheduler(self) -> TrialScheduler:
+        """
+        Create a new scheduler instance.
+        """
+        return deepcopy(self.base_scheduler)
+
+    def _get_trial_key(self, trial: Trial) -> tuple:
+        """
+        Get the group key for the specified trial.
+        """
+        config = trial.config.get('train_loop_config', trial.config)
+        return tuple(config.get(key, None) for key in self.groupby)
 
 
 class RayCallback(pl.Callback):
@@ -321,9 +478,25 @@ class RayCallback(pl.Callback):
                     ray.train.report(metrics=self.metrics)
 
 
-class LightningTuner:
+class LightningTuner(ABC):
     """
     Use Ray Tune to run hyperparamter optimization for a PyTorch Lightning model.
+
+    Example
+    -------
+    ```
+    class MyTuner(LightningTuner):
+
+        def get_datamodule(self, config):
+            return MyDataModule(**config)
+
+        def get_model(self, config):
+            return MyModel(**config)
+
+    >>> config_space = {lr: ray.tune.grid_search([1e-3, 1e-4, 1e-5])}
+    >>> tuner = MyTuner(metric='val_acc', mode='max')
+    >>> tuner.fit(config_space)
+    ```
     """
 
     def __init__(
@@ -344,6 +517,7 @@ class LightningTuner:
         self.tuner = None
         self.tune_config = TuneConfig(metric=metric, mode=mode, **tune_config_kwargs)
 
+    @abstractmethod
     def get_datamodule(self, config: dict[str, Any]) -> pl.LightningDataModule:
         """
         Get PyTorch Lightning data module for specified configuration.
@@ -353,8 +527,9 @@ class LightningTuner:
         config : dict[str, Any]
             Configuration dictionary
         """
-        raise NotImplementedError
+        pass
 
+    @abstractmethod
     def get_model(self, config: dict[str, Any]) -> pl.LightningModule:
         """
         Get PyTorch Lightning model for specified configuration.
@@ -364,7 +539,7 @@ class LightningTuner:
         config : dict[str, Any]
             Configuration dictionary
         """
-        raise NotImplementedError
+        pass
 
     def get_callbacks(self, config: dict[str, Any]) -> list[pl.Callback]:
         """
@@ -405,6 +580,7 @@ class LightningTuner:
         num_workers_per_trial: int = 1,
         num_cpus_per_worker: int = 1,
         num_gpus_per_worker: int = 1,
+        gpu_memory_per_worker: str | int | float | None = None,
         tensorboard_port: int = 0,
         groupby: str | Iterable[str] = (),
     ) -> ResultGrid:
@@ -423,6 +599,9 @@ class LightningTuner:
             Number of CPUs per worker
         num_gpus_per_worker : int
             Number of GPUs per worker
+        gpu_memory_per_worker : str or int or float
+            Amount of GPU memory to allocate to each worker
+            (overrides `num_gpus_per_worker`)
         tensorboard_port : int
             Port for TensorBoard to visualize results
         groupby : str or Iterable[str]
@@ -431,22 +610,15 @@ class LightningTuner:
         if self.tuner is None:
             # Group trials by config values and schedule each group separately
             if groupby:
+                groupby = (groupby,) if isinstance(groupby, str) else tuple(groupby)
                 self.tune_config.scheduler = GroupScheduler(
                     self.tune_config.scheduler or FIFOScheduler(), groupby)
 
             # Create Ray Trainer
-            num_gpus_per_worker = num_gpus_per_worker if torch.cuda.is_available() else 0
-            trainer = TorchTrainer(
-                self.train_model,
-                scaling_config=ScalingConfig(
-                    num_workers=num_workers_per_trial,
-                    use_gpu=(num_gpus_per_worker > 0),
-                    resources_per_worker={
-                        'CPU': num_cpus_per_worker,
-                        'GPU': num_gpus_per_worker,
-                    },
-                ),
-            )
+            if gpu_memory_per_worker:
+                num_gpus_per_worker = configure_gpus(gpu_memory_per_worker)
+            if not torch.cuda.is_available():
+                num_gpus_per_worker = 0
 
             # Set Ray storage directory
             save_dir = Path(save_dir).expanduser().resolve()
@@ -454,7 +626,7 @@ class LightningTuner:
 
             # Create Ray Tuner
             self.tuner = Tuner(
-                trainer,
+                TorchTrainer(self.train_model),
                 param_space={'train_loop_config': param_space},
                 tune_config=self.tune_config,
                 run_config=RunConfig(
@@ -469,19 +641,32 @@ class LightningTuner:
             )
 
         # Set Ray storage directory
-        ray_internal_tuner = self.tuner._local_tuner or self.tuner._remote_tuner
-        save_dir = ray_internal_tuner._run_config.storage_path
+        save_dir = get_internal_tuner(self.tuner).get_run_config().storage_path
         save_dir = Path(save_dir).expanduser().resolve()
         os.environ.setdefault('RAY_AIR_LOCAL_CACHE_DIR', str(save_dir))
 
-        # Set CUDA_VISIBLE_DEVICES to the GPUs with enough available memory
-        # to run at least one worker.
-        num_gpus_per_worker = trainer.scaling_config.resources_per_worker['GPU']
-        if num_gpus_per_worker < 1:
-            set_cuda_visible_devices(available_memory_threshold=num_gpus_per_worker)
+        # Configure GPUs
+        if gpu_memory_per_worker:
+            num_gpus_per_worker = configure_gpus(gpu_memory_per_worker)
+        if not torch.cuda.is_available():
+            num_gpus_per_worker = 0
+
+        # Set scaling config
+        scaling_config = ScalingConfig(
+            num_workers=num_workers_per_trial,
+            use_gpu=(num_gpus_per_worker > 0),
+            resources_per_worker={
+                'CPU': num_cpus_per_worker,
+                'GPU': configure_gpus(gpu_memory_per_worker),
+            },
+        )
+
+        # Update trainer
+        trainer = TorchTrainer(self.train_model, scaling_config=scaling_config)
+        get_internal_tuner(self.tuner).trainable = trainer
 
         # Launch TensorBoard
-        experiment_name = ray_internal_tuner._run_config.name
+        experiment_name = get_internal_tuner(self.tuner).get_run_config().name
         logdir = str(save_dir / experiment_name)
         tb = tensorboard.TensorBoard()
         tb.configure(argv=[None, '--logdir', logdir, '--port', str(tensorboard_port)])
@@ -494,7 +679,7 @@ class LightningTuner:
     def get_results(
         self,
         groupby: str | Iterable[str] | None = None,
-    ) -> ResultGrid | dict[str, ResultGrid]:
+    ) -> ResultGrid | dict[str | tuple[str], ResultGrid]:
         """
         Get results of a hyperparameter tuning run.
 
@@ -505,13 +690,7 @@ class LightningTuner:
         """
         assert self.tuner is not None, "Must call fit() or restore() first"
         results = self.tuner.get_results()
-    
-        if groupby:
-            for trial in results._experiment_analysis.trials:
-                trial.config = trial.config['train_loop_config']
-            return group_results(results, groupby)
-
-        return results
+        return results if not groupby else group_results(results, groupby)
 
     def load_model(self, result: ray.train.Result) -> pl.LightningModule:
         """
@@ -524,13 +703,13 @@ class LightningTuner:
         """
         checkpoint_path = result.get_best_checkpoint(
             self.tune_config.metric, self.tune_config.mode).path
-        checkpoint_path = Path(checkpoint_path) / 'checkpoint.pt'
+        checkpoint_path = Path(checkpoint_path, 'checkpoint.pt')
         model = self.get_model(result.config['train_loop_config'])
         model.load_state_dict(torch.load(checkpoint_path)['state_dict'])
         return model
 
     @classmethod
-    def restore(cls, path: Path | str, **tuner_restore_kwargs) -> 'LightningTuner':
+    def restore(cls, path: Path | str, **kwargs) -> 'LightningTuner':
         """
         Restore from a previous run.
 
@@ -538,21 +717,19 @@ class LightningTuner:
         ----------
         path : Path or str
             Experiment directory
-        tuner_restore_kwargs : dict[str, Any]
+        kwargs : dict[str, Any]
             Additional arguments to pass to `ray.tune.Tuner.restore()`
         """
         # Recursively search for 'tuner.pkl' file within the provided directory
         # If multiple are found, use the most recently modified one
-        paths = Path(path).expanduser().resolve().glob('**/tuner.pkl')
-        path = sorted(paths, key=os.path.getmtime)[-1].parent
+        path = Path(path).expanduser().resolve()
+        path = path if path.is_dir() else path.parent
+        path = sorted(path.glob('**/tuner.pkl'), key=os.path.getmtime)[-1].parent
 
-        # Restore Tuner
-        tuner = LightningTuner()
-        tuner.tuner = Tuner.restore(
-            str(path), TorchTrainer(tuner.train_model), **tuner_restore_kwargs)
+        # Restore tuner
+        lightning_tuner = cls.__new__(cls)
+        trainable = TorchTrainer(lightning_tuner.train_model)
+        lightning_tuner.tuner = restore_ray_tuner(path, trainable, **kwargs)
+        lightning_tuner.tune_config = get_internal_tuner(lightning_tuner)._tune_config
 
-        # Restore TuneConfig
-        ray_internal_tuner = tuner.tuner._local_tuner or tuner.tuner._remote_tuner
-        tuner.tune_config = ray_internal_tuner._tune_config
-
-        return tuner
+        return lightning_tuner

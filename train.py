@@ -68,9 +68,7 @@ def make_concept_model(**config) -> ConceptLightningModel:
     elif model_type == 'decorrelated_residual':
         residual_loss_fn = lambda r, c: cross_correlation(r, c).square().mean()
         model = experiment_module.make_concept_model(config)
-        model = ConceptLightningModel(
-            model, residual_loss_fn=residual_loss_fn, **config
-        )
+        model = ConceptLightningModel(model, residual_loss_fn=residual_loss_fn, **config)
 
     # With MI-minimized residual
     elif model_type == 'mi_residual':
@@ -142,6 +140,8 @@ if __name__ == '__main__':
     parser.add_argument(
         '--save-dir', type=str, help="Directory to save models to")
     parser.add_argument(
+        '--restore-path', type=str, help="Path to restore model from")
+    parser.add_argument(
         '--num-workers', type=int, help="Number of workers to use (per model)")
     parser.add_argument(
         '--num-cpus', type=float, help="Number of CPUs to use (per worker)")
@@ -149,28 +149,34 @@ if __name__ == '__main__':
         '--num-gpus', type=float, help="Number of GPUs to use (per worker)")
     parser.add_argument(
         '--groupby', type=str, nargs='+', help="Config keys to group by")
+    parser.add_argument(
+        '--scheduler', action='store_true', help="Use Tune trial scheduler")
 
     args, args_config = parse_args_dynamic(parser)
 
     # Load experiment config
     experiment_module = importlib.import_module(args.config)
     config = RayConfig(experiment_module.get_config())
+    config.update({k: v for k, v in vars(args).items() if v is not None})
+    config.update(args_config)
     config.set('experiment_module_name', args.config)
     config.set('data_dir', Path(config.get('data_dir')).expanduser().resolve())
     config.set('save_dir', Path(config.get('save_dir')).expanduser().resolve())
 
-    # Override config with any command-line arguments
-    config.update({k: v for k, v in vars(args).items() if v is not None})
-    config.update(args_config)
-
     # Download datasets (if necessary) before launching Ray Tune
-    # Avoids each initial worker trying to downloading the dataset simultaneously
+    # Avoids each initial worker trying to download the dataset simultaneously
     dataset_names = config.get('dataset')
     if isinstance(dataset_names, dict) and 'grid_search' in dataset_names:
         dataset_names = list(dataset_names.values())
     dataset_names = [dataset_names] if isinstance(dataset_names, str) else dataset_names
     for dataset_name in dataset_names:
         get_datamodule(dataset_name, data_dir=config.get('data_dir'))
+
+    # Create trial scheduler
+    scheduler = None
+    if args.scheduler:
+        scheduler = AsyncHyperBandScheduler(
+            max_t=config.get('num_epochs'), grace_period=config.get('num_epochs') // 5)
 
     # Get experiment name
     date = datetime.today().strftime("%Y-%m-%d_%H_%M_%S")
@@ -179,8 +185,10 @@ if __name__ == '__main__':
 
     # Train models
     config.set('max_epochs', config.get('num_epochs'))
-    scheduler = AsyncHyperBandScheduler(max_t=config.get('max_epochs'), grace_period=10)
-    tuner = ConceptModelTuner(metric='val_acc', mode='max', scheduler=scheduler)
+    if args.restore_path:
+        tuner = ConceptModelTuner.restore(args.restore_path, restart_errored=True)
+    else:
+        tuner = ConceptModelTuner(metric='val_acc', mode='max', scheduler=scheduler)
     tuner.fit(
         param_space=config,
         save_dir=args.save_dir or config.get('save_dir'),
@@ -188,5 +196,6 @@ if __name__ == '__main__':
         num_workers_per_trial=config.get('num_workers', 1),
         num_cpus_per_worker=config.get('num_cpus', 1),
         num_gpus_per_worker=config.get('num_gpus', 1),
-        groupby=args.groupby or config.get('groupby', []),
+        gpu_memory_per_worker=config.get('gpu_memory_per_worker', None),
+        groupby=config.get('groupby', []),
     )
