@@ -280,7 +280,7 @@ if __name__ == '__main__':
 
     # Load train results
     print('Loading training results from', experiment_path / 'train')
-    tuner = ConceptModelTuner.restore(experiment_path)
+    tuner = ConceptModelTuner.restore(experiment_path / 'train')
     if args.all:
         results = tuner.get_results()
     else:

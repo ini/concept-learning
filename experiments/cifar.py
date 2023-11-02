@@ -33,7 +33,7 @@ def make_concept_model(config: dict) -> ConceptModel:
 
 def get_config(**kwargs) -> dict:
     config = {
-        'dataset': 'cub',
+        'dataset': 'cifar100',
         'data_dir': os.environ.get('CONCEPT_DATA_DIR', './data'),
         'save_dir': os.environ.get('CONCEPT_SAVE_DIR', './saved'),
         'model_type': ray.tune.grid_search([
@@ -45,7 +45,7 @@ def get_config(**kwargs) -> dict:
             'concept_whitening',
         ]),
         'training_mode': 'independent',
-        'residual_dim': 8,
+        'residual_dim': ray.tune.grid_search([1, 2, 4, 8, 16, 32]),
         'num_epochs': 100,
         'lr': 1e-4,
         'batch_size': 64,
@@ -55,6 +55,7 @@ def get_config(**kwargs) -> dict:
         'mi_optimizer_lr': 1e-3,
         'cw_alignment_frequency': 20,
         'checkpoint_frequency': 5,
+        'gpu_memory_per_worker': '3000 MiB',
     }
     config.update(kwargs)
     return config
