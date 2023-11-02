@@ -7,7 +7,6 @@ import pytorch_lightning as pl
 from datetime import datetime
 from pathlib import Path
 from ray.tune.schedulers import AsyncHyperBandScheduler
-from typing import Any
 
 from lightning_ray import LightningTuner, parse_args_dynamic
 from loader import get_concept_loss_fn, get_dummy_batch, get_datamodule, DATASET_INFO
@@ -101,32 +100,13 @@ def make_concept_model(**config) -> ConceptLightningModel:
 
     return model
 
-
-
-class ConceptModelTuner(LightningTuner):
-    """
-    Use Ray Tune to train concept models.
-    """
-
-    def get_datamodule(self, config: dict[str, Any]) -> pl.LightningDataModule:
-        return get_datamodule(
-            dataset_name=config['dataset'],
-            data_dir=config['data_dir'],
-            batch_size=config['batch_size'],
-            num_workers=config.get('num_cpus', 1) - 1,
-        )
-
-    def get_model(self, config: dict[str, Any]) -> pl.LightningModule:
-        if getattr(self, 'model', None) is None:
-            self.model = make_concept_model(**config)
-
-        return self.model
-
-    def get_callbacks(self, config: dict[str, Any]) -> list[pl.Callback]:
-        if getattr(self, 'model', None) is None:
-            self.model = self.get_model(config)
-
-        return [self.model.callback()]
+def make_datamodule(**config) -> pl.LightningDataModule:
+    return get_datamodule(
+        dataset_name=config['dataset'],
+        data_dir=config['data_dir'],
+        batch_size=config['batch_size'],
+        num_workers=config.get('num_cpus', 1) - 1,
+    )
 
 
 
@@ -186,11 +166,14 @@ if __name__ == '__main__':
     # Train models
     config.set('max_epochs', config.get('num_epochs'))
     if args.restore_path:
-        tuner = ConceptModelTuner.restore(args.restore_path, restart_errored=True)
+        tuner = LightningTuner.restore(args.restore_path, resume_errored=True)
     else:
-        tuner = ConceptModelTuner(metric='val_acc', mode='max', scheduler=scheduler)
+        tuner = LightningTuner(metric='val_acc', mode='max', scheduler=scheduler)
     tuner.fit(
+        make_concept_model,
+        make_datamodule,
         param_space=config,
+        callbacks_creator=lambda **kwargs: [make_concept_model(**kwargs).callback()],
         save_dir=args.save_dir or config.get('save_dir'),
         experiment_name=experiment_name,
         num_workers_per_trial=config.get('num_workers', 1),
