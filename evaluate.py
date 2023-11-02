@@ -276,10 +276,10 @@ if __name__ == '__main__':
     # Recursively search for 'tuner.pkl' file within the provided directory
     # If multiple are found, use the most recently modified one
     experiment_paths = Path(args.exp_dir).resolve().glob('**/train/tuner.pkl')
-    experiment_path = sorted(experiment_paths, key=os.path.getmtime)[-1].parent
+    experiment_path = sorted(experiment_paths, key=os.path.getmtime)[-1].parent.parent
 
     # Load train results
-    print('Loading training results from', experiment_path)
+    print('Loading training results from', experiment_path / 'train')
     tuner = ConceptModelTuner.restore(experiment_path)
     if args.all:
         results = tuner.get_results()
@@ -314,7 +314,6 @@ if __name__ == '__main__':
             },
         ),
         param_space=tune.grid_search(eval_configs),
-        run_config=air.RunConfig(
-            name='eval', storage_path=tuner.tuner._local_tuner._run_config.storage_path),
+        run_config=air.RunConfig(name='eval', storage_path=experiment_path),
     )
     eval_results = tuner.fit()

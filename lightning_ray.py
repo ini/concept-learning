@@ -657,7 +657,7 @@ class LightningTuner(ABC):
             use_gpu=(num_gpus_per_worker > 0),
             resources_per_worker={
                 'CPU': num_cpus_per_worker,
-                'GPU': configure_gpus(gpu_memory_per_worker),
+                'GPU': num_gpus_per_worker,
             },
         )
 
