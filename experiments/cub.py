@@ -3,6 +3,7 @@ import ray
 import torch.nn as nn
 
 from models import ConceptModel, make_bottleneck_layer
+from nn_extensions import Apply
 from torchvision.models.inception import inception_v3, Inception_V3_Weights
 
 
@@ -25,8 +26,9 @@ def make_concept_model(config: dict) -> ConceptModel:
     residual_dim = config['residual_dim']
     bottleneck_dim = concept_dim + residual_dim
     return ConceptModel(
-        concept_network=make_cnn(concept_dim),
-        residual_network=make_cnn(residual_dim),
+        base_network=make_cnn(bottleneck_dim),
+        concept_network=Apply(lambda x: x[..., :concept_dim]),
+        residual_network=Apply(lambda x: x[..., concept_dim:]),
         target_network=nn.Linear(bottleneck_dim, num_classes),
         bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
         **config,
@@ -53,9 +55,10 @@ def get_config(**kwargs) -> dict:
         'alpha': 1.0,
         'beta': 1.0,
         'mi_estimator_hidden_dim': 256,
-        'mi_optimizer_lr': 1e-3,
+        'mi_optimizer_lr': 1e-4,
         'cw_alignment_frequency': 20,
         'checkpoint_frequency': 5,
+        'gpu_memory_per_worker': '11000 MiB',
     }
     config.update(kwargs)
     return config

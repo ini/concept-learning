@@ -112,7 +112,8 @@ def oai_loss_fn(
     model.log("concept_loss", concept_loss, **model.log_kwargs)
 
     # Residual loss
-    residual_loss = model.residual_loss_fn(residual, concept_logits)
+    concept_preds = model.concept_model.get_concept_predictions(concept_logits)
+    residual_loss = model.residual_loss_fn(residual, concept_preds)
     if residual_loss.requires_grad:
         model.log("residual_loss", residual_loss, **model.log_kwargs)
 
@@ -270,7 +271,7 @@ class ConceptLightningModel(pl.LightningModule):
             Concept model
         concept_loss_fn : Callable(concept_logits, concepts) -> loss
             Concept loss function
-        residual_loss_fn : Callable(residual, concept_logits) -> loss
+        residual_loss_fn : Callable(residual, concept_preds) -> loss
             Residual loss function
         lr : float
             Learning rate
@@ -334,7 +335,8 @@ class ConceptLightningModel(pl.LightningModule):
             self.log('concept_loss', concept_loss, **self.log_kwargs)
 
         # Residual loss
-        residual_loss = self.residual_loss_fn(residual, concept_logits)
+        concept_preds = self.concept_model.get_concept_predictions(concept_logits)
+        residual_loss = self.residual_loss_fn(residual, concept_preds.detach())
         if residual_loss.requires_grad:
             self.log('residual_loss', residual_loss, **self.log_kwargs)
 

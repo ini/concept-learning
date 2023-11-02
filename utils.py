@@ -33,6 +33,22 @@ def accuracy(logits: Tensor, targets: Tensor, task: str = 'multiclass') -> Tenso
 
     return accuracy_fn(preds, targets)
 
+def random_log_uniform(low: float, high: float, size: int | tuple[int] = ()) -> Tensor:
+    """
+    Sample from a log-uniform distribution.
+
+    Parameters
+    ----------
+    low : float
+        Lower bound
+    high : float
+        Upper bound
+    size : int | tuple[int]
+        Size of the sample
+    """
+    low, high = torch.as_tensor(low).log(), torch.as_tensor(high).log()
+    return torch.exp(torch.rand(size) * (high - low) + low)
+
 def is_sigmoid(fn: Callable) -> bool:
     """
     Check if a function is a sigmoid function.
@@ -43,11 +59,12 @@ def is_sigmoid(fn: Callable) -> bool:
     return fn in (
         torch.sigmoid, torch.sigmoid_, F.sigmoid, Tensor.sigmoid, Tensor.sigmoid_)
 
-def logit_fn(p: Tensor, eps: float = 1e-6):
+def logit_fn(probs: Tensor):
     """
     Logit function (i.e. inverse sigmoid function).
     """
-    return torch.log(p + eps) - torch.log(1 - p + eps)
+    eps = random_log_uniform(1e-12, 1e-6)
+    return torch.log(probs + eps) - torch.log(1 - probs + eps)
 
 def to_device(
     data: Tensor | tuple[Tensor] | list[Tensor],

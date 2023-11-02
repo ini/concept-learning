@@ -445,13 +445,13 @@ class RayCallback(pl.Callback):
         self.metrics.clear()
         torch.cuda.empty_cache()
 
-    def on_validation_epoch_end(
+    def on_train_epoch_end(
         self,
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
     ):
         """
-        Report metrics when a validation epoch ends.
+        Report metrics when a train epoch ends.
 
         Parameters
         ----------

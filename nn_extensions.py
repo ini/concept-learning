@@ -1,5 +1,6 @@
 import torch.nn as nn
 
+from functools import partial
 from inspect import signature, _ParameterKind
 from torch import Tensor
 from typing import Callable
@@ -13,11 +14,7 @@ class Apply(nn.Module):
 
     def __init__(self, fn: Callable, **fn_kwargs):
         super().__init__()
-        self.fn = fn
-        self.fn_kwargs = fn_kwargs
-
-    def forward(self, *args, **kwargs):
-        return self.fn(*args, **kwargs, **self.fn_kwargs)
+        self.forward = partial(fn, **fn_kwargs)
 
 
 class BatchNormNd(nn.Module):
