@@ -1,11 +1,11 @@
-import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from torch import Tensor
+from typing import Any
 
-from .base import ConceptBatch, ConceptModel, ConceptLightningModel
+from .base import ConceptModel, ConceptLightningModel
 from lib.club import CLUB
 
 
@@ -82,44 +82,6 @@ class MutualInformationLoss(nn.Module):
         return estimation_loss
 
 
-class MutualInfoCallback(nn.Module, pl.Callback):
-    """
-    Callback class for `MutualInfoConceptLightningModel`.
-    """
-
-    def on_train_batch_start(
-        self,
-        trainer: pl.Trainer,
-        pl_module: ConceptLightningModel,
-        batch: ConceptBatch,
-        batch_idx: int):
-        """
-        Run one training step for the mutual information estimator.
-
-        Parameters
-        ----------
-        trainer : pl.Trainer
-            PyTorch Lightning trainer
-        pl_module : ConceptLightningModel
-            Concept model
-        batch : ConceptBatch
-            Batch of ((data, concepts), targets)
-        batch_idx : int
-            Batch index
-        """
-        assert isinstance(pl_module.residual_loss_fn, MutualInformationLoss)
-
-        # Get concepts and residual
-        with torch.no_grad():
-            (data, concepts), targets = batch
-            concept_logits, residual, target_logits = pl_module(data, concepts=concepts)
-
-        # Calculate mutual information estimator loss
-        concept_preds = pl_module.concept_model.get_concept_predictions(concept_logits)
-        mi_estimator_loss = pl_module.residual_loss_fn.step(residual, concept_preds)
-        pl_module.log('mi_estimator_loss', mi_estimator_loss, **pl_module.log_kwargs)
-
-
 class MutualInfoConceptLightningModel(ConceptLightningModel):
     """
     Concept model that minimizes the mutual information between
@@ -156,8 +118,25 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
         )
         super().__init__(concept_model, residual_loss_fn=residual_loss_fn, **kwargs)
 
-    def callback(self) -> MutualInfoCallback:
+    def on_train_batch_start(self, batch: Any, batch_idx: int):
         """
-        Callback for this model.
+        Run one training step for the mutual information estimator.
+
+        Parameters
+        ----------
+        batch : ConceptBatch
+            Batch of ((data, concepts), targets)
+        batch_idx : int
+            Batch index
         """
-        return MutualInfoCallback()
+        assert isinstance(self.residual_loss_fn, MutualInformationLoss)
+
+        # Get concepts and residual
+        with torch.no_grad():
+            (data, concepts), targets = batch
+            concept_logits, residual, target_logits = self(data, concepts=concepts)
+
+        # Calculate mutual information estimator loss
+        concept_preds = self.concept_model.get_concept_predictions(concept_logits)
+        mi_estimator_loss = self.residual_loss_fn.step(residual, concept_preds)
+        self.log('mi_estimator_loss', mi_estimator_loss, **self.log_kwargs)

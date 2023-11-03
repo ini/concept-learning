@@ -173,7 +173,6 @@ if __name__ == '__main__':
         make_concept_model,
         make_datamodule,
         param_space=config,
-        callbacks_creator=lambda **kwargs: [make_concept_model(**kwargs).callback()],
         save_dir=args.save_dir or config.get('save_dir'),
         experiment_name=experiment_name,
         num_workers_per_trial=config.get('num_workers', 1),

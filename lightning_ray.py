@@ -429,24 +429,29 @@ class GroupScheduler(TrialScheduler):
 class RayCallback(pl.Callback):
     """
     Callback class for using Ray Tune with PyTorch Lightning.
-    Handles checkpointing and reporting metrics to Ray.
     """
 
-    def __init__(self, checkpoint_frequency: int = 1, **kwargs):
+    def __init__(
+        self,
+        checkpoint_frequency: int = 1,
+        checkpoint_at_end: bool = True,
+        **kwargs):
         """
         Parameters
         ----------
         checkpoint_frequency : int
             Frequency of checkpoints (i.e. every N epochs)
+        checkpoint_at_end : bool
+            Whether to checkpoint at the end of training
         """
         super().__init__()
         self.checkpoint_frequency = checkpoint_frequency
+        self.checkpoint_at_end = checkpoint_at_end
         self.metrics = {}
 
     def create_checkpoint(
         self,
         trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
         checkpoint_dir: Path | str,
     ) -> Checkpoint:
         """
@@ -456,20 +461,14 @@ class RayCallback(pl.Callback):
         ----------
         trainer : pl.Trainer
             PyTorch Lightning trainer
-        pl_module : pl.LightningModule
-            PyTorch Lightning module
         checkpoint_dir : Path or str
-            Path to checkpoint directory
+            Directory to save checkpoint to
         """
-        checkpoint_dir = Path(checkpoint_dir)
-        trainer.save_checkpoint(checkpoint_dir / 'checkpoint.pt')
+        checkpoint_path = Path(checkpoint_dir, 'checkpoint.pt')
+        trainer.save_checkpoint(checkpoint_path)
         return Checkpoint.from_directory(checkpoint_dir)
 
-    def on_train_epoch_start(
-        self,
-        trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
-    ):
+    def on_train_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         """
         Clear metrics when a train epoch starts.
 
@@ -483,11 +482,7 @@ class RayCallback(pl.Callback):
         self.metrics.clear()
         torch.cuda.empty_cache()
 
-    def on_train_epoch_end(
-        self,
-        trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
-    ):
+    def on_train_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         """
         Report metrics when a train epoch ends.
 
@@ -503,17 +498,30 @@ class RayCallback(pl.Callback):
         self.metrics['epoch'] = self.metrics['step'] = trainer.current_epoch
 
         # Report metrics
+        checkpoint = None
+        should_checkpoint = (trainer.current_epoch + 1) % self.checkpoint_frequency == 0
         if ray.train.get_context().get_local_rank() == 0:
-            if self.checkpoint_frequency:
-                if (trainer.current_epoch + 1) % self.checkpoint_frequency == 0:
-                    with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
-                        temp_checkpoint_dir = Path(temp_checkpoint_dir)
-                        trainer.save_checkpoint(temp_checkpoint_dir / 'checkpoint.pt')
-                        checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
-                        ray.train.report(metrics=self.metrics, checkpoint=checkpoint)
+            with tempfile.TemporaryDirectory() as temp_dir:
+                if should_checkpoint:
+                    checkpoint = self.create_checkpoint(trainer, temp_dir)
 
-                else:
-                    ray.train.report(metrics=self.metrics)
+                ray.train.report(metrics=self.metrics, checkpoint=checkpoint)
+
+    def on_train_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+        """
+        Save final checkpoint when training ends.
+
+        Parameters
+        ----------
+        trainer : pl.Trainer
+            PyTorch Lightning trainer
+        pl_module : pl.LightningModule
+            PyTorch Lightning module
+        """
+        if self.checkpoint_at_end:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                checkpoint = self.create_checkpoint(trainer, temp_dir)
+                ray.train.report(metrics=self.metrics, checkpoint=checkpoint)
 
 
 

@@ -12,6 +12,12 @@ from typing import Callable
 
 
 
+def zero_loss_fn(*tensors: Tensor):
+    """
+    Dummy loss function that returns zero.
+    """
+    return torch.tensor(0.0, device=tensors[0].device)
+
 def accuracy(logits: Tensor, targets: Tensor, task: str = 'multiclass') -> Tensor:
     """
     Compute accuracy from logits and targets.

@@ -9,7 +9,7 @@ from torch.nn import functional as F
 from typing import Any, Callable, Iterable, Literal
 
 from nn_extensions import VariableKwargs
-from utils import accuracy, unwrap
+from utils import accuracy, unwrap, zero_loss_fn
 
 
 
@@ -257,8 +257,8 @@ class ConceptLightningModel(pl.LightningModule):
     def __init__(
         self,
         concept_model: ConceptModel,
-        concept_loss_fn: Callable = F.binary_cross_entropy_with_logits,
-        residual_loss_fn: Callable = lambda r, c: torch.tensor(0.0, device=r.device),
+        concept_loss_fn: Callable | None = F.binary_cross_entropy_with_logits,
+        residual_loss_fn: Callable | None = None,
         lr: float = 1e-3,
         alpha: float = 1.0,
         beta: float = 1.0,
@@ -282,8 +282,8 @@ class ConceptLightningModel(pl.LightningModule):
         """
         super().__init__()
         self.concept_model = concept_model
-        self.concept_loss_fn = concept_loss_fn
-        self.residual_loss_fn = residual_loss_fn
+        self.concept_loss_fn = concept_loss_fn or zero_loss_fn
+        self.residual_loss_fn = residual_loss_fn or zero_loss_fn
         self.lr = lr
         self.alpha = alpha
         self.beta = beta
@@ -428,9 +428,3 @@ class ConceptLightningModel(pl.LightningModule):
             Batch index
         """
         return self.step(batch, split='test')
-
-    def callback(self) -> pl.Callback:
-        """
-        Callback for this model.
-        """
-        return pl.Callback()
