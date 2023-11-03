@@ -16,10 +16,11 @@ from ray import air, tune
 from torch import Tensor
 from torch.utils.data import DataLoader
 
+from lightning_ray import LightningTuner
 from loader import get_datamodule, DATASET_INFO
 from nn_extensions import Chain
 from models import ConceptLightningModel
-from train import ConceptModelTuner
+from train import make_concept_model
 from utils import set_cuda_visible_devices
 
 
@@ -216,7 +217,8 @@ def evaluate(config: dict):
     ).test_dataloader()
 
     # Load model
-    model = ConceptModelTuner('val_acc', 'max').load_model(config['train_result'])
+    tuner = LightningTuner('val_acc', 'max')
+    model = tuner.load_model(make_concept_model, config['train_result'])
 
     # Evaluate model
     if config['eval_mode'] == 'accuracy':
@@ -281,7 +283,7 @@ if __name__ == '__main__':
 
     # Load train results
     print('Loading training results from', experiment_path / 'train')
-    tuner = ConceptModelTuner.restore(experiment_path / 'train')
+    tuner = LightningTuner.restore(experiment_path / 'train')
     if args.all:
         results = tuner.get_results()
     else:
