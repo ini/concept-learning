@@ -20,7 +20,7 @@ from loader import get_datamodule, DATASET_INFO
 from nn_extensions import Chain
 from models import ConceptLightningModel
 from train import ConceptModelTuner
-from utils import logit_fn, set_cuda_visible_devices
+from utils import set_cuda_visible_devices
 
 
 
@@ -58,9 +58,8 @@ class Intervention(nn.Module):
             concepts = 1 - concepts   # flip binary concepts to opposite values
 
         concept_dim = concepts.shape[-1]
-        concept_logits = logit_fn(concepts)
         idx = torch.randperm(concept_dim)[:self.num_interventions]
-        x[:, idx] = concept_logits[:, idx]
+        x[..., idx] = concepts[..., idx]
         return x
 
 
@@ -111,8 +110,10 @@ def test_interventions(
     for i, num_interventions in enumerate(x):
         intervention = Intervention(num_interventions, negative=negative)
         new_model = deepcopy(model)
-        new_model.concept_model.bottleneck_layer = Chain(
-            new_model.concept_model.bottleneck_layer, intervention)
+        new_model.concept_model.target_network = Chain(
+            intervention,
+            new_model.concept_model.target_network,
+        )
         results = test(new_model, test_loader)
         y[i] = results['test_acc']
 

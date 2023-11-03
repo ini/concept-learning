@@ -49,7 +49,7 @@ def get_config(**kwargs) -> dict:
         'training_mode': 'independent',
         'residual_dim': 64,
         'num_epochs': 100,
-        'lr': ray.tune.grid_search([k * 1e-4 for k in range(1, 11)]),
+        'lr': 2e-4,
         'batch_size': 64,
         'alpha': 1.0,
         'beta': 1.0,
