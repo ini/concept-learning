@@ -40,7 +40,9 @@ class CUB(Dataset):
         split: Literal['train', 'val', 'test'] = 'train',
         transform: Callable | None = None,
         download: bool = False,
-        use_reduced_concept_subset: bool = True):
+        use_reduced_concept_subset: bool = True,
+        use_majority_voted_concepts: bool = True,
+    ):
         """
         Parameters
         ----------
@@ -55,6 +57,11 @@ class CUB(Dataset):
             Whether to download the dataset if it is not found in root
         use_reduced_concept_subset : bool, default=True
             Whether to use a reduced subset of 112 concepts
+        use_majority_voted_concepts : bool, default=True
+            Whether to aggregate instance-level concept annotations into
+            class-level concepts via majority voting
+            (e.g. if more than 50% of crows have black wings in the data,
+            then set all crows to have black wings)
         """
         super().__init__()
         self.root = root
@@ -63,6 +70,7 @@ class CUB(Dataset):
         self.dataset_dir = (Path(root) / self.__class__.__name__).resolve()
         self.dataset_dir.mkdir(parents=True, exist_ok=True)
         self.use_reduced_concept_subset = use_reduced_concept_subset
+        self.use_majority_voted_concepts = use_majority_voted_concepts
 
         # Check if data already exists
         resource_paths = (
@@ -92,6 +100,21 @@ class CUB(Dataset):
         with open(split_path, 'rb') as file:
             self.data = pickle.load(file)
 
+        # Aggregate instance-level concept annotations into
+        # class-level concepts via majority voting
+        train_path = self.dataset_dir / f'CUB_processed/class_attr_data_10/train.pkl'
+        with open(train_path, 'rb') as file:
+            train_data = pickle.load(file)
+            concept_dim = len(train_data[0]['attribute_label'])
+            num_classes = 200
+            self.majority_voted_concepts = torch.zeros(num_classes, concept_dim)
+            for target in range(num_classes):
+                concepts = torch.stack([
+                    img_data['attribute_label'] for img_data in train_data
+                    if img_data['class_label'] == target
+                ])
+                self.majority_voted_concepts[target] = concepts.mode(dim=0).values
+
     def __len__(self):
         return len(self.data)
 
@@ -104,7 +127,10 @@ class CUB(Dataset):
             img = self.transform(img)
 
         target = img_data['class_label']
-        attributes = torch.as_tensor(img_data['attribute_label']).float()
+        if self.use_majority_voted_concepts:
+            attributes = self.majority_voted_concepts[target]
+        else:
+            attributes = torch.as_tensor(img_data['attribute_label']).float()
         if self.use_reduced_concept_subset:
             attributes = attributes[self.REDUCED_CONCEPT_IDX]
 
