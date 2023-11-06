@@ -380,6 +380,7 @@ class ConceptLightningModel(pl.LightningModule):
             Dataset split
         """
         (data, concepts), targets = batch
+
         outputs = self.concept_model(data, concepts=concepts)
         concept_logits, residual, target_logits = outputs
 

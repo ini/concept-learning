@@ -17,7 +17,7 @@ def get_config(**kwargs) -> dict:
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/oia/",
         "ray_storage_dir": "/data/renos/ray_results/",
-        "residual_dim": 1,  # tune.grid_search([1, 2, 4, 8, 16, 32]),
+        "residual_dim": tune.grid_search([1, 2, 4, 8, 16, 32]),
         "lr": 1e-4,
         "num_epochs": 100,
         "alpha": 1.0,

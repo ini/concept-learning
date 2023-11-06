@@ -19,7 +19,6 @@ from typing import Any, Callable, Iterable
 from utils import unwrap
 
 
-
 def config_get(config: dict[str, Any], key: str, default: Any = ...) -> Any:
     """
     Get a value from a Ray-style configuration dictionary
@@ -36,21 +35,22 @@ def config_get(config: dict[str, Any], key: str, default: Any = ...) -> Any:
     """
     if key in config:
         value = config[key]
-        if isinstance(value, dict) and len(value) == 1 and 'grid_search' in value:
-            return value['grid_search']
+        if isinstance(value, dict) and len(value) == 1 and "grid_search" in value:
+            return value["grid_search"]
         else:
             return value
-    elif 'train_loop_config' in config:
-        return config_get(config['train_loop_config'], key, default=default)
-    elif 'grid_search' in config:
-        values = {item[key] for item in config['grid_search']}
-        assert len(values) == 1, f'Inconsistent values for {key}: {values}'
+    elif "train_loop_config" in config:
+        return config_get(config["train_loop_config"], key, default=default)
+    elif "grid_search" in config:
+        values = {item[key] for item in config["grid_search"]}
+        assert len(values) == 1, f"Inconsistent values for {key}: {values}"
         return next(iter(values))
 
     if default is not ...:
         return default
 
-    raise KeyError(f'Key not found: {key}')
+    raise KeyError(f"Key not found: {key}")
+
 
 def config_set(config: dict[str, Any], key: str, value: Any):
     """
@@ -66,11 +66,12 @@ def config_set(config: dict[str, Any], key: str, value: Any):
     value : Any
         Configuration value
     """
-    if 'grid_search' in config:
-        for config in config['grid_search']:
+    if "grid_search" in config:
+        for config in config["grid_search"]:
             config[key] = value
     else:
         config[key] = value
+
 
 def filter_results(fn: Callable[[Trial], bool], results: ResultGrid):
     """
@@ -93,8 +94,10 @@ def filter_results(fn: Callable[[Trial], bool], results: ResultGrid):
         )
     )
 
+
 def group_results(
-    results: ResultGrid, groupby: str | Iterable[str]) -> dict[tuple[str], ResultGrid]:
+    results: ResultGrid, groupby: str | Iterable[str]
+) -> dict[tuple[str], ResultGrid]:
     """
     Map each unique combination of config values for keys specified by `groupby`
     to a ResultGrid containing only the results with those config values.
@@ -116,10 +119,8 @@ def group_results(
             trials[group].append(trial)
 
     return {
-        group: filter_results(trials[group].__contains__, results)
-        for group in trials
+        group: filter_results(trials[group].__contains__, results) for group in trials
     }
-
 
 
 class RayCallback(pl.Callback):
@@ -142,7 +143,8 @@ class RayCallback(pl.Callback):
         self,
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
-        checkpoint_dir: Path | str) -> Checkpoint:
+        checkpoint_dir: Path | str,
+    ) -> Checkpoint:
         """
         Create a checkpoint.
 
@@ -160,15 +162,14 @@ class RayCallback(pl.Callback):
         # Save current model weights (for backwards compatibility)
         torch.save(
             unwrap(pl_module.concept_model).state_dict(),
-            checkpoint_dir / 'model.pt',
+            checkpoint_dir / "model.pt",
         )
 
         # Save lightning checkpoint
-        trainer.save_checkpoint(checkpoint_dir / 'checkpoint.pt')
+        trainer.save_checkpoint(checkpoint_dir / "checkpoint.pt")
         return Checkpoint.from_directory(checkpoint_dir)
 
-    def on_train_epoch_start(
-        self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+    def on_train_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         """
         Clear metrics when a train epoch starts.
 
@@ -183,7 +184,8 @@ class RayCallback(pl.Callback):
         torch.cuda.empty_cache()
 
     def on_validation_epoch_end(
-        self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+        self, trainer: pl.Trainer, pl_module: pl.LightningModule
+    ):
         """
         Report metrics when a validation epoch ends.
 
@@ -196,7 +198,7 @@ class RayCallback(pl.Callback):
         """
         # Update metrics
         self.metrics.update({k: v.item() for k, v in trainer.callback_metrics.items()})
-        self.metrics['epoch'] = self.metrics['step'] = trainer.current_epoch
+        self.metrics["epoch"] = self.metrics["step"] = trainer.current_epoch
 
         # Report metrics
         if ray.train.get_context().get_local_rank() == 0:
@@ -204,7 +206,8 @@ class RayCallback(pl.Callback):
                 if (trainer.current_epoch + 1) % self.checkpoint_frequency == 0:
                     with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
                         checkpoint = self.create_checkpoint(
-                            trainer, pl_module, temp_checkpoint_dir)
+                            trainer, pl_module, temp_checkpoint_dir
+                        )
                         ray.train.report(metrics=self.metrics, checkpoint=checkpoint)
 
                 else:
@@ -244,7 +247,8 @@ class GroupScheduler(TrialScheduler):
         self.schedulers[key].on_trial_error(tune_controller, trial)
 
     def on_trial_result(
-        self, tune_controller: TuneController, trial: Trial, result: dict) -> str:
+        self, tune_controller: TuneController, trial: Trial, result: dict
+    ) -> str:
         """
         Called on each intermediate result returned by a trial.
         """
@@ -252,7 +256,8 @@ class GroupScheduler(TrialScheduler):
         return self.schedulers[key].on_trial_result(tune_controller, trial, result)
 
     def on_trial_complete(
-        self, tune_controller: TuneController, trial: Trial, result: dict):
+        self, tune_controller: TuneController, trial: Trial, result: dict
+    ):
         """
         Notification for the completion of trial.
         """
@@ -284,7 +289,9 @@ class GroupScheduler(TrialScheduler):
         """
         Returns a human readable message for printing to the console.
         """
-        return '\n'.join([
-            f'{key}: {scheduler.debug_string()}'
-            for key, scheduler in self.schedulers.items()
-        ])
+        return "\n".join(
+            [
+                f"{key}: {scheduler.debug_string()}"
+                for key, scheduler in self.schedulers.items()
+            ]
+        )
