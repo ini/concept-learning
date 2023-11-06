@@ -95,7 +95,7 @@ def test_interventions(
     x = np.linspace(
         0, concept_dim + 1, num=min(concept_dim + 2, max_samples), dtype=int
     )
-    y = np.zeros_like(x)
+    y = np.zeros(len(x))
     for i, num_interventions in enumerate(x):
         intervention = Intervention(num_interventions, negative=negative)
         new_model = deepcopy(model)
