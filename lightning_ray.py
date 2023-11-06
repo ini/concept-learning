@@ -529,7 +529,7 @@ class RayCallback(pl.Callback):
 
 class LightningTuner:
     """
-    Use Ray Tune to run hyperparamter optimization for a PyTorch Lightning model.
+    Use Ray Tune to train multiple PyTorch Lightning models in parallel.
 
     TODO:
     * Implement GroupSearcher
@@ -573,13 +573,13 @@ class LightningTuner:
         mode : one of {'min', 'max'}
             Whether to minimize or maximize the metric
         search_alg : Searcher or SearchAlgorithm
-            Search algorithm for optimization (see `ray.tune.search`)
+            Ray search algorithm for optimization (see `ray.tune.search`)
         scheduler : TrialScheduler
-            Trial scheduler for executing the experiment (see `ray.tune.schedulers`)
+            Ray trial scheduler for executing the experiment (see `ray.tune.schedulers`)
         num_samples : int
             Number of times to sample from the hyperparameter space
-        tune_config_kwargs : dict[str, Any]
-            Additional arguments to pass to TuneConfig
+            (if `grid_search` is provided as an argument,
+            the grid will be repeated `num_samples` of times)
         """
         self.tuner = None
         self.tune_config = TuneConfig(

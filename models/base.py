@@ -352,7 +352,10 @@ class ConceptLightningModel(pl.LightningModule):
         Configure optimizer and learning rate scheduler.
         """
         optimizer = torch.optim.Adam(self.concept_model.parameters(), lr=self.lr)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=self.trainer.max_epochs if self.trainer.max_epochs else 100,
+        )
         return {'optimizer': optimizer, 'lr_scheduler': scheduler}
 
     def step(
