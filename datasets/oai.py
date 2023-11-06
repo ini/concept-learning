@@ -516,8 +516,11 @@ def load_data_from_different_splits(
     Load dataset a couple images at a time using DataLoader class, as shown in pytorch dataset tutorial.
     Checked.
     """
-    limit = 500 if use_small_subset else CACHE_LIMIT
-    cache_train = get_image_cache_for_split("train", limit=limit)
+    limit = 50 if use_small_subset else CACHE_LIMIT
+    if not use_small_subset:
+        cache_train = get_image_cache_for_split("train", limit=limit)
+    else:
+        cache_train = {}
     train_dataset = PytorchImagesDataset(
         dataset="train",
         transform_statistics=None,
@@ -547,8 +550,10 @@ def load_data_from_different_splits(
         sampler=train_sampler,
         pin_memory=False,
     )
-
-    cache_val = get_image_cache_for_split("val", limit=limit)
+    if not use_small_subset:
+        cache_val = get_image_cache_for_split("val", limit=limit)
+    else:
+        cache_val = {}
     val_dataset = PytorchImagesDataset(
         dataset="val",
         transform_statistics=train_dataset.transform_statistics,

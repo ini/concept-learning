@@ -57,7 +57,7 @@ class Intervention(nn.Module):
 
     def forward(self, x: Tensor, concepts: Tensor):
         if self.negative:
-            concepts = 1 - concepts   # flip binary concepts to opposite values
+            concepts = 1 - concepts  # flip binary concepts to opposite values
 
         concept_dim = concepts.shape[-1]
         idx = torch.randperm(concept_dim)[:self.num_interventions]
@@ -90,7 +90,8 @@ def test_interventions(
     test_loader: DataLoader,
     concept_dim: int,
     negative: bool,
-    max_samples = 10) -> float:
+    max_samples=10,
+) -> float:
     """
     Test model accuracy with concept interventions.
 
@@ -121,7 +122,9 @@ def test_interventions(
 
     return {'x': x, 'y': y}
 
-def test_random_concepts(model: ConceptLightningModel, test_loader: DataLoader) -> float:
+def test_random_concepts(
+    model: ConceptLightningModel, test_loader: DataLoader
+) -> float:
     """
     Test model accuracy with randomized concept predictions.
 
@@ -147,7 +150,9 @@ def test_random_concepts(model: ConceptLightningModel, test_loader: DataLoader) 
     results = test(new_model, test_loader)
     return results['test_acc']
 
-def test_random_residual(model: ConceptLightningModel, test_loader: DataLoader) -> float:
+def test_random_residual(
+    model: ConceptLightningModel, test_loader: DataLoader
+) -> float:
     """
     Test model accuracy with randomized residual values.
 
@@ -231,6 +236,7 @@ def test_mutual_info(
 
 
 
+
 ### Loading & Execution
 
 def filter_eval_configs(configs: list[dict]) -> list[dict]:
@@ -245,9 +251,9 @@ def filter_eval_configs(configs: list[dict]) -> list[dict]:
     configs_to_keep = []
     for config in configs:
         # TODO: support interventions for concept whitening models
-        if config['eval_mode'].endswith('intervention'):
-            if config['model_type'] == 'concept_whitening':
-                print('Interventions not supported for concept whitening models')
+        if config["eval_mode"].endswith("intervention"):
+            if config["model_type"] == "concept_whitening":
+                print("Interventions not supported for concept whitening models")
                 continue
 
         configs_to_keep.append(config)
@@ -310,8 +316,7 @@ def evaluate(config: dict):
     ray.train.report(metrics)
 
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     MODES = [
         'accuracy',
         'neg_intervention',
@@ -324,26 +329,35 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--exp-dir', type=str, default=os.environ.get('CONCEPT_SAVE_DIR', './saved'),
-        help='Experiment directory')
+        "--exp-dir",
+        type=str,
+        default=os.environ.get("CONCEPT_SAVE_DIR", "./saved"),
+        help="Experiment directory",
+    )
+    parser.add_argument("--mode", nargs="+", default=MODES, help="Evaluation modes")
     parser.add_argument(
-        '--mode', nargs='+', default=MODES, help='Evaluation modes')
+        "--groupby",
+        nargs="+",
+        default=["dataset", "model_type"],
+        help="Config keys to group by when selecting best trial results",
+    )
     parser.add_argument(
-        '--groupby', nargs='+', default=['dataset', 'model_type'],
-        help='Config keys to group by when selecting best trial results')
+        "--all",
+        action="store_true",
+        help="Evaluate all trained models (instead of best trial per group)",
+    )
     parser.add_argument(
-        '--all', action='store_true',
-        help='Evaluate all trained models (instead of best trial per group)')
+        "--num-cpus", type=float, default=1, help="Number of CPUs to use (per model)"
+    )
     parser.add_argument(
-        '--num-cpus', type=float, default=1, help='Number of CPUs to use (per model)')
-    parser.add_argument(
-        '--num-gpus', type=float, default=1, help='Number of GPUs to use (per model)')
+        "--num-gpus", type=float, default=1, help="Number of GPUs to use (per model)"
+    )
 
     args = parser.parse_args()
 
     # Recursively search for 'tuner.pkl' file within the provided directory
     # If multiple are found, use the most recently modified one
-    experiment_paths = Path(args.exp_dir).resolve().glob('**/train/tuner.pkl')
+    experiment_paths = Path(args.exp_dir).resolve().glob("**/train/tuner.pkl")
     experiment_path = sorted(experiment_paths, key=os.path.getmtime)[-1].parent.parent
 
     # Load train results
@@ -358,15 +372,17 @@ if __name__ == '__main__':
         ]
 
     # Create evaluation configs
-    eval_configs = filter_eval_configs([
-        {
-            **result.config['train_loop_config'],
-            'train_result': result,
-            'eval_mode': mode,
-        }
-        for result in results
-        for mode in args.mode
-    ])
+    eval_configs = filter_eval_configs(
+        [
+            {
+                **result.config["train_loop_config"],
+                "train_result": result,
+                "eval_mode": mode,
+            }
+            for result in results
+            for mode in args.mode
+        ]
+    )
 
     # Get available resources
     if args.num_gpus < 1:
@@ -377,11 +393,11 @@ if __name__ == '__main__':
         tune.with_resources(
             evaluate,
             resources={
-                'cpu': args.num_cpus,
-                'gpu': args.num_gpus if torch.cuda.is_available() else 0
+                "cpu": args.num_cpus,
+                "gpu": args.num_gpus if torch.cuda.is_available() else 0,
             },
         ),
         param_space=tune.grid_search(eval_configs),
-        run_config=air.RunConfig(name='eval', storage_path=experiment_path),
+        run_config=air.RunConfig(name="eval", storage_path=experiment_path),
     )
     eval_results = tuner.fit()

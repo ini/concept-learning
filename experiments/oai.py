@@ -49,9 +49,10 @@ def get_config(**kwargs) -> dict:
         #         "concept_whitening",
         #     ]
         # ),
+        "num_gpus": 1.0,
         "training_mode": "independent",
         "residual_dim": 16,
-        "num_epochs": 100,
+        "num_epochs": 10,
         "lr": 1e-4,
         "batch_size": 8,
         "alpha": 1.0,

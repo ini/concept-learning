@@ -270,13 +270,13 @@ class ConceptLightningModel(pl.LightningModule):
             Dataset split
         """
         (data, concepts), targets = batch
+
         outputs = self.concept_model(data, concepts=concepts)
         concept_logits, residual, target_logits = outputs
 
         # Track loss
         loss = self.loss_fn(batch, outputs)
         self.log(f"{split}_loss", loss, **self.log_kwargs)
-
         # Track accuracy
         acc = accuracy(target_logits, targets)
         self.log(f"{split}_acc", acc, **self.log_kwargs)
