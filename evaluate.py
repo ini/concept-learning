@@ -20,8 +20,9 @@ from lightning_ray import LightningTuner
 from loader import get_datamodule, DATASET_INFO
 from nn_extensions import Chain
 from models import ConceptLightningModel
+from models.mutual_info import MutualInformationLoss
 from train import make_concept_model
-from utils import set_cuda_visible_devices
+from utils import cross_correlation, set_cuda_visible_devices
 
 
 
@@ -172,6 +173,62 @@ def test_random_residual(model: ConceptLightningModel, test_loader: DataLoader) 
     results = test(new_model, test_loader)
     return results['test_acc']
 
+def test_correlation(model: ConceptLightningModel, test_loader: DataLoader) -> float:
+    """
+    Test mean absolute cross correlation between concepts and residuals.
+
+    Parameters
+    ----------
+    model : ConceptLightningModel
+        Model to evaluate
+    test_loader : DataLoader
+        Test data loader
+    """
+    correlations = []
+    for (data, concepts), target in test_loader:
+        _, residual, _ = model(data, concepts=concepts)
+        correlations.append(cross_correlation(concepts, residual).abs().mean().item())
+
+    return np.mean(correlations)
+
+def test_mutual_info(
+    model: ConceptLightningModel,
+    test_loader: DataLoader,
+    num_mi_epochs: int = 5,
+) -> float:
+    """
+    Test mutual information between concepts and residuals.
+
+    Parameters
+    ----------
+    model : ConceptLightningModel
+        Model to evaluate
+    test_loader : DataLoader
+        Test data loader
+    num_mi_epochs : int
+        Number of epochs to train mutual information estimator
+    """
+    # Get mutual information estimator
+    (data, concepts), targets = next(iter(test_loader))
+    _, residual, _ = model(data, concepts=concepts)
+    concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
+    mutual_info_estimator = MutualInformationLoss(residual_dim, concept_dim)
+
+    # Learn mutual information estimator
+    for epoch in range(num_mi_epochs):
+        for (data, concepts), targets in test_loader:
+            with torch.no_grad():
+                _, residual, _ = model(data, concepts=concepts)
+            mutual_info_estimator.step(residual, concepts)
+
+    # Calculate mutual information
+    mutual_infos = []
+    for (data, concepts), target in test_loader:
+        _, residual, _ = model(data, concepts=concepts)
+        mutual_infos.append(mutual_info_estimator(residual, concepts).item())
+
+    return np.mean(mutual_infos)
+
 
 
 ### Loading & Execution
@@ -243,6 +300,12 @@ def evaluate(config: dict):
     elif config['eval_mode'] == 'random_residual':
         metrics['random_residual_acc'] = test_random_residual(model, test_loader)
 
+    elif config['eval_mode'] == 'correlation':
+        metrics['mean_abs_cross_correlation'] = test_correlation(model, test_loader)
+
+    elif config['eval_mode'] == 'mutual_info':
+        metrics['mutual_info'] = test_mutual_info(model, test_loader)
+
     # Report evaluation metrics
     ray.train.report(metrics)
 
@@ -255,6 +318,8 @@ if __name__ == '__main__':
         'pos_intervention',
         'random_concepts',
         'random_residual',
+        'correlation',
+        'mutual_info',
     ]
 
     parser = argparse.ArgumentParser()

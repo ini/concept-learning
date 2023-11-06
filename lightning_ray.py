@@ -17,7 +17,7 @@ from pathlib import Path
 from pytorch_lightning.accelerators.mps import MPSAccelerator
 from ray.air import CheckpointConfig, RunConfig, ScalingConfig
 from ray.experimental.tqdm_ray import safe_print
-from ray.train import Checkpoint
+from ray.train import Checkpoint, Result
 from ray.train.lightning import RayDDPStrategy, RayLightningEnvironment
 from ray.train.torch import TorchTrainer
 from ray.train.trainer import BaseTrainer
@@ -277,8 +277,33 @@ def restore_ray_tuner(
 
 ### Ray Tune Results
 
+def filter_results(
+    filter_fn: Callable[[Result], bool],
+    results: ResultGrid) -> ResultGrid:
+    """
+    Filter results by a given function.
+
+    Parameters
+    ----------
+    filter_fn : Callable(Result) -> bool
+        A function that takes a `Result` object and
+        returns a boolean indicating whether to keep the result or not
+    results : ResultGrid
+        Results to filter
+    """
+    return ResultGrid(
+        ExperimentAnalysis(
+            results._experiment_analysis.experiment_path,
+            storage_filesystem=results._experiment_analysis._fs,
+            trials=list(filter(filter_fn, results._experiment_analysis.trials)),
+            default_metric=results._experiment_analysis.default_metric,
+            default_mode=results._experiment_analysis.default_mode,
+        )
+    )
+
 def group_results(
-    results: ResultGrid, groupby: str | Iterable[str],
+    results: ResultGrid,
+    groupby: str | Iterable[str],
 ) -> dict[str | tuple[str], ResultGrid]:
     """
     Map each unique combination of config values for keys specified by `groupby`
@@ -773,7 +798,7 @@ class LightningTuner:
     def load_model(
         self,
         model_creator: Callable[..., pl.LightningModule],
-        result: ray.train.Result,
+        result: Result,
     ) -> pl.LightningModule:
         """
         Load trained model from the given Ray Tune result.
@@ -782,7 +807,7 @@ class LightningTuner:
         ----------
         model_creator : Callable(**config) -> pl.LightningModule
             Model creator
-        result : ray.train.Result
+        result : Result
             Ray Tune result
         """
         checkpoint_path = result.get_best_checkpoint(
@@ -790,7 +815,15 @@ class LightningTuner:
         checkpoint_path = Path(checkpoint_path, 'checkpoint.pt')
         model_creator = variable_kwargs_fn_wrapper(model_creator)
         model = model_creator(**result.config['train_loop_config'])
-        model.load_state_dict(torch.load(checkpoint_path)['state_dict'])
+        state_dict = torch.load(checkpoint_path)['state_dict']
+
+        try:
+            model.load_state_dict(state_dict, strict=True)
+        except Exception as e:
+            print("Loading model failed with strict=True:", e)
+            print("Loading model with strict=False")
+            model.load_state_dict(state_dict, strict=False)
+
         return model
 
     @classmethod
