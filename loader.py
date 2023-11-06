@@ -115,6 +115,9 @@ def get_concept_loss_fn(dataset_name: str, data_dir: str) -> nn.BCEWithLogitsLos
     data_dir : str
         Directory where data is stored (or will be downloaded to)
     """
+    if dataset_name == 'oai':
+        return None
+
     train_loader = get_datamodule(dataset_name, data_dir).train_dataloader()
     concept_dim = DATASET_INFO[dataset_name]['concept_dim']
     concepts_pos_count = torch.zeros(concept_dim)
