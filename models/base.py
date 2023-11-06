@@ -277,6 +277,7 @@ class ConceptLightningModel(pl.LightningModule):
         # Track loss
         loss = self.loss_fn(batch, outputs)
         self.log(f"{split}_loss", loss, **self.log_kwargs)
+
         # Track accuracy
         acc = accuracy(target_logits, targets)
         self.log(f"{split}_acc", acc, **self.log_kwargs)
