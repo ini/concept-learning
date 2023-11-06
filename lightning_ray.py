@@ -605,6 +605,8 @@ class LightningTuner:
             Number of times to sample from the hyperparameter space
             (if `grid_search` is provided as an argument,
             the grid will be repeated `num_samples` of times)
+        kwargs : Any
+            Additional arguments to pass to `ray.tune.TuneConfig()`
         """
         self.tuner = None
         self.tune_config = TuneConfig(
@@ -641,17 +643,17 @@ class LightningTuner:
         model_creator = variable_kwargs_fn_wrapper(model_creator)
         datamodule_creator = variable_kwargs_fn_wrapper(datamodule_creator)
         callbacks_creator = variable_kwargs_fn_wrapper(callbacks_creator)
-        trainer = pl.Trainer(
+        trainer = variable_kwargs_fn_wrapper(pl.Trainer)(
             accelerator='cpu' if MPSAccelerator.is_available() else 'auto',
             strategy=RayDDPStrategy(find_unused_parameters=True),
             devices='auto',
             num_nodes=num_workers,
             logger=False, # logging metrics is handled by RayCallback
             callbacks=[*callbacks_creator(**config), RayCallback(**config)],
-            max_epochs=config.get('max_epochs', None),
             enable_checkpointing=False, # checkpointing is handled by RayCallback
             enable_progress_bar=False,
             plugins=[RayLightningEnvironment()],
+            **config,
         )
         trainer.fit(model_creator(**config), datamodule_creator(**config))
 
@@ -680,7 +682,7 @@ class LightningTuner:
             * Model creator keyword arguments
             * Data module creator keyword arguments
             * Callbacks creator keyword arguments
-            * 'max_epochs' (number of training epochs)
+            * PyTorch Lightning `Trainer` keyword arguments
             * 'checkpoint_frequency' (frequency of checkpoints, in epochs)
 
         Parameters
@@ -827,10 +829,7 @@ class LightningTuner:
         return model
 
     @classmethod
-    def restore(
-        cls,
-        path: Path | str,
-        **kwargs) -> 'LightningTuner':
+    def restore(cls, path: Path | str, **kwargs) -> 'LightningTuner':
         """
         Restore from a previous run.
 
@@ -838,7 +837,7 @@ class LightningTuner:
         ----------
         path : Path or str
             Experiment directory
-        kwargs : dict[str, Any]
+        kwargs : Any
             Additional arguments to pass to `ray.tune.Tuner.restore()`
         """
         # Recursively search for 'tuner.pkl' file within the provided directory
