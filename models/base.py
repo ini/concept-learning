@@ -167,7 +167,7 @@ class ConceptLightningModel(pl.LightningModule):
             Concept model
         concept_loss_fn : Callable(concept_logits, concepts) -> loss
             Concept loss function
-        residual_loss_fn : Callable(residual, concept_preds) -> loss
+        residual_loss_fn : Callable(residual, concepts) -> loss
             Residual loss function
         lr : float
             Learning rate
@@ -176,6 +176,11 @@ class ConceptLightningModel(pl.LightningModule):
         beta : float
             Weight for residual loss
         """
+        if 'concept_dim' in kwargs and kwargs['concept_dim'] == 0:
+            concept_loss_fn = None
+        if 'residual_dim' in kwargs and kwargs['residual_dim'] == 0:
+            residual_loss_fn = None
+
         super().__init__()
         self.concept_model = concept_model
         self.concept_loss_fn = concept_loss_fn or zero_loss_fn
@@ -231,8 +236,7 @@ class ConceptLightningModel(pl.LightningModule):
             self.log('concept_loss', concept_loss, **self.log_kwargs)
 
         # Residual loss
-        concept_preds = self.concept_model.get_concept_predictions(concept_logits)
-        residual_loss = self.residual_loss_fn(residual, concept_preds.detach())
+        residual_loss = self.residual_loss_fn(residual, concepts)
         if residual_loss.requires_grad:
             self.log('residual_loss', residual_loss, **self.log_kwargs)
 
@@ -277,6 +281,7 @@ class ConceptLightningModel(pl.LightningModule):
         # Track loss
         loss = self.loss_fn(batch, outputs)
         self.log(f"{split}_loss", loss, **self.log_kwargs)
+
         # Track accuracy
         acc = accuracy(target_logits, targets)
         self.log(f"{split}_acc", acc, **self.log_kwargs)
@@ -422,8 +427,7 @@ class ConceptLightningModel(pl.LightningModule):
         self.log("concept_loss", concept_loss, **self.log_kwargs)
 
         # Residual loss
-        concept_preds = self.concept_model.get_concept_predictions(concept_logits)
-        residual_loss = self.residual_loss_fn(residual, concept_preds)
+        residual_loss = self.residual_loss_fn(residual, concepts)
         if residual_loss.requires_grad:
             self.log("residual_loss", residual_loss, **self.log_kwargs)
 

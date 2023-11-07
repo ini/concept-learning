@@ -191,12 +191,9 @@ def test_correlation(model: ConceptLightningModel, test_loader: DataLoader) -> f
     """
     correlations = []
     for (data, concepts), target in test_loader:
-        _, residual, _ = model(data, concepts=concepts)
-        if isinstance(concepts, list) and len(concepts) > 0:
-            concepts_ = concepts[0]
-        else:
-            concepts_ = concepts
-        correlations.append(cross_correlation(concepts_, residual).abs().mean().item())
+        with torch.no_grad():
+            _, residual, _ = model(data, concepts=concepts)
+        correlations.append(cross_correlation(concepts, residual).abs().mean().item())
 
     return np.mean(correlations)
 
@@ -241,12 +238,9 @@ def test_mutual_info(
     # Calculate mutual information
     mutual_infos = []
     for (data, concepts), target in test_loader:
-        if isinstance(concepts, list) and len(concepts) > 0:
-            concepts_ = concepts[0]
-        else:
-            concepts_ = concepts
-        _, residual, _ = model(data, concepts=concepts)
-        mutual_infos.append(mutual_info_estimator(residual, concepts_).item())
+        with torch.no_grad():
+            _, residual, _ = model(data, concepts=concepts)
+        mutual_infos.append(mutual_info_estimator(residual, concepts).item())
 
     return np.mean(mutual_infos)
 
@@ -266,10 +260,14 @@ def filter_eval_configs(configs: list[dict]) -> list[dict]:
     """
     configs_to_keep = []
     for config in configs:
-        # TODO: support interventions for concept whitening models
-        if config["eval_mode"].endswith("intervention"):
-            if config["model_type"] == "concept_whitening":
+        if config['model_type'] == 'concept_whitening':
+            if config['eval_mode'].endswith('intervention'):
                 print("Interventions not supported for concept whitening models")
+                continue
+
+        if config['model_type'] == 'no_residual':
+            if config['eval_mode'] in ('correlation', 'mutual_info'):
+                print("Correlation / MI metrics not available for no-residual models")
                 continue
 
         configs_to_keep.append(config)
