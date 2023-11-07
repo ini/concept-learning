@@ -176,6 +176,11 @@ class ConceptLightningModel(pl.LightningModule):
         beta : float
             Weight for residual loss
         """
+        if 'concept_dim' in kwargs and kwargs['concept_dim'] == 0:
+            concept_loss_fn = None
+        if 'residual_dim' in kwargs and kwargs['residual_dim'] == 0:
+            residual_loss_fn = None
+
         super().__init__()
         self.concept_model = concept_model
         self.concept_loss_fn = concept_loss_fn or zero_loss_fn

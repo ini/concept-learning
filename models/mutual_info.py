@@ -116,11 +116,7 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
             hidden_dim=mi_estimator_hidden_dim,
             lr=mi_optimizer_lr,
         )
-        super().__init__(
-            concept_model,
-            residual_loss_fn=residual_loss_fn if residual_dim > 0 else None,
-            **kwargs,
-        )
+        super().__init__(concept_model, residual_loss_fn=residual_loss_fn, **kwargs)
 
     def on_train_batch_start(self, batch: Any, batch_idx: int):
         """
