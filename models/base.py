@@ -427,7 +427,7 @@ class ConceptLightningModel(pl.LightningModule):
         self.log("concept_loss", concept_loss, **self.log_kwargs)
 
         # Residual loss
-        residual_loss = self.residual_loss_fn(residual, concepts)
+        residual_loss = self.residual_loss_fn(residual, concepts[0])
         if residual_loss.requires_grad:
             self.log("residual_loss", residual_loss, **self.log_kwargs)
 

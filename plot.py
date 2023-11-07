@@ -12,7 +12,7 @@ from ray.tune import ResultGrid
 from typing import Iterable, Union
 
 from evaluate import evaluate
-from lightning_ray import group_results
+from lightning_ray import group_results, filter_by
 
 
 
@@ -49,6 +49,7 @@ def plot_negative_interventions(
     groupby: list[str] = ['model_type'],
     save_dir: Path | str = './plots',
     show: bool = True,
+    name: str = "",
 ):
     """
     Plot negative intervention results.
@@ -78,11 +79,12 @@ def plot_negative_interventions(
 
     plt.xlabel("# of Concepts Intervened")
     plt.ylabel("Classification Error")
-    plt.title(f"Negative Interventions: {get_dataset_title(dataset_name)}")
+    plt.title(f"Negative Interventions: {get_dataset_title(dataset_name)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{dataset_name}_neg_intervention.png")
+    plt.savefig(save_dir / f"{dataset_name}_neg_intervention{name}.png")
     if show:
         plt.show()
+    plt.clf()
 
 def plot_positive_interventions(
     dataset_results: ResultGrid,
@@ -90,6 +92,7 @@ def plot_positive_interventions(
     groupby: list[str] = ['model_type'],
     save_dir: Path | str = './plots',
     show: bool = True,
+    name: str = "",
 ):
     """
     Plot negative intervention results.
@@ -119,11 +122,12 @@ def plot_positive_interventions(
 
     plt.xlabel("# of Concepts Intervened")
     plt.ylabel("Classification Accuracy")
-    plt.title(f"Positive Interventions: {get_dataset_title(dataset_name)}")
+    plt.title(f"Positive Interventions: {get_dataset_title(dataset_name)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{dataset_name}_pos_intervention.png")
+    plt.savefig(save_dir / f"{dataset_name}_pos_intervention{name}.png")
     if show:
         plt.show()
+    plt.clf()
 
 def plot_random_concepts_residual(
     dataset_results: ResultGrid,
@@ -131,6 +135,7 @@ def plot_random_concepts_residual(
     groupby: list[str] = ['model_type'],
     save_dir: Path | str = './plots',
     show: bool = True,
+    name: str = "",
 ):
     """
     Plot results with randomized concepts and residuals.
@@ -188,11 +193,12 @@ def plot_random_concepts_residual(
     plt.xticks(np.arange(len(keys)), keys)
     plt.ylim(max(0, y_min - 0.1), 1)
     plt.ylabel("Classification Accuracy")
-    plt.title(f"Random Concepts & Residual: {get_dataset_title(dataset_name)}")
+    plt.title(f"Random Concepts & Residual: {get_dataset_title(dataset_name)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{dataset_name}_random.png")
+    plt.savefig(save_dir / f"{dataset_name}_random{name}.png")
     if show:
         plt.show()
+    plt.clf()
 
 def plot_disentanglement(
     dataset_results: ResultGrid,
@@ -200,6 +206,7 @@ def plot_disentanglement(
     groupby: list[str] = ['model_type'],
     save_dir: Path | str = './plots',
     show: bool = True,
+    name: str = "",
 ):
     """
     Plot disentanglement metrics.
@@ -237,11 +244,12 @@ def plot_disentanglement(
 
     plt.xlabel("Mean Absolute Cross-Correlation")
     plt.ylabel("Mutual Information")
-    plt.title(f"Disentanglement Metrics: {get_dataset_title(dataset_name)}")
+    plt.title(f"Disentanglement Metrics: {get_dataset_title(dataset_name)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{dataset_name}_disentanglement.png")
+    plt.savefig(save_dir / f"{dataset_name}_disentanglement{name}.png")
     if show:
         plt.show()
+    plt.clf()
 
 
 

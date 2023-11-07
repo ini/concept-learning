@@ -136,5 +136,10 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
                 concept_logits, residual, target_logits = self(data, concepts=concepts)
 
             # Calculate mutual information estimator loss
-            mi_estimator_loss = self.residual_loss_fn.step(residual, concepts)
+            if isinstance(concepts, list):
+                concepts_ = concepts[0]
+            else:
+                concepts_ = concepts
+
+            mi_estimator_loss = self.residual_loss_fn.step(residual, concepts_)
             self.log('mi_estimator_loss', mi_estimator_loss, **self.log_kwargs)

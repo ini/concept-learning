@@ -24,10 +24,17 @@ def make_concept_model(config: dict) -> ConceptModel:
     concept_dim = config["concept_dim"]
     residual_dim = config["residual_dim"]
     bottleneck_dim = concept_dim + residual_dim
+    target_network = nn.Sequential(
+        nn.Linear(bottleneck_dim, 50),
+        nn.ReLU(),
+        nn.Linear(50, 50),
+        nn.ReLU(),
+        nn.Linear(50, num_classes)
+    )
     return ConceptModel(
         concept_network=make_cnn(concept_dim),
         residual_network=make_cnn(residual_dim),
-        target_network=nn.Linear(bottleneck_dim, num_classes),
+        target_network=target_network,
         bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
         **config,
     )
