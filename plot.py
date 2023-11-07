@@ -255,14 +255,33 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--exp-dir', type=str, default=os.environ.get('CONCEPT_SAVE_DIR', './saved'),
-        help="Experiment directory")
+        '--exp-dir',
+        type=str,
+        default=os.environ.get('CONCEPT_SAVE_DIR', './saved'),
+        help="Experiment directory",
+    )
     parser.add_argument(
-        '--mode', nargs='+', default=PLOT_FUNCTIONS.keys(),
-        help='Evaluation modes')
+        '--mode',
+        nargs='+',
+        default=PLOT_FUNCTIONS.keys(),
+        help="Plot modes",
+    )
     parser.add_argument(
-        '--groupby', nargs='+', default=['model_type'],
-        help="Config keys to group plots by")
+        '--plotby',
+        nargs='+',
+        default=['dataset'],
+        help=(
+            "Config keys to group plots by "
+            "(e.g. `--plotby dataset model_type` creates separate plots "
+            "for each (dataset, model_type) combination)"
+        )
+    )
+    parser.add_argument(
+        '--groupby',
+        nargs='+',
+        default=['model_type'],
+        help="Config keys to group results on each plot by",
+    )
 
     args = parser.parse_args()
 
@@ -273,14 +292,14 @@ if __name__ == '__main__':
 
     # Load evaluation results
     tuner = tune.Tuner.restore(str(experiment_path / 'eval'), trainable=evaluate)
-    results = group_results(tuner.get_results(), groupby='dataset')
+    results = group_results(tuner.get_results(), groupby=args.plotby)
 
-    # Plot results for each dataset
-    for dataset_name, dataset_results in results.items():
+    # Plot results
+    for plot_key, plot_results in results.items():
         for mode in args.mode:
             PLOT_FUNCTIONS[mode](
-                dataset_results,
-                dataset_name,
+                plot_results,
+                plot_key,
                 groupby=args.groupby,
                 save_dir=experiment_path / 'plots',
             )
