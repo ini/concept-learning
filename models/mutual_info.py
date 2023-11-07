@@ -31,7 +31,7 @@ class MutualInformationLoss(nn.Module):
         """
         super().__init__()
         self.mi_estimator = CLUB(x_dim, y_dim, hidden_dim)
-        self.mi_optimizer = torch.optim.Adam(self.mi_estimator.parameters(), lr=lr)
+        self.mi_optimizer = torch.optim.RMSprop(self.mi_estimator.parameters(), lr=lr)
 
         # Freeze all params for MI estimator inference
         self.eval()
@@ -85,7 +85,7 @@ class MutualInformationLoss(nn.Module):
 class MutualInfoConceptLightningModel(ConceptLightningModel):
     """
     Concept model that minimizes the mutual information between
-    the residual and concept predictions.
+    concepts and residual.
     """
 
     def __init__(
@@ -116,7 +116,11 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
             hidden_dim=mi_estimator_hidden_dim,
             lr=mi_optimizer_lr,
         )
-        super().__init__(concept_model, residual_loss_fn=residual_loss_fn, **kwargs)
+        super().__init__(
+            concept_model,
+            residual_loss_fn=residual_loss_fn if residual_dim > 0 else None,
+            **kwargs,
+        )
 
     def on_train_batch_start(self, batch: Any, batch_idx: int):
         """
@@ -129,14 +133,12 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
         batch_idx : int
             Batch index
         """
-        assert isinstance(self.residual_loss_fn, MutualInformationLoss)
+        if isinstance(self.residual_loss_fn, MutualInformationLoss):
+            # Get concepts and residual
+            with torch.no_grad():
+                (data, concepts), targets = batch
+                concept_logits, residual, target_logits = self(data, concepts=concepts)
 
-        # Get concepts and residual
-        with torch.no_grad():
-            (data, concepts), targets = batch
-            concept_logits, residual, target_logits = self(data, concepts=concepts)
-
-        # Calculate mutual information estimator loss
-        concept_preds = self.concept_model.get_concept_predictions(concept_logits)
-        mi_estimator_loss = self.residual_loss_fn.step(residual, concept_preds)
-        self.log('mi_estimator_loss', mi_estimator_loss, **self.log_kwargs)
+            # Calculate mutual information estimator loss
+            mi_estimator_loss = self.residual_loss_fn.step(residual, concepts)
+            self.log('mi_estimator_loss', mi_estimator_loss, **self.log_kwargs)
