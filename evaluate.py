@@ -217,15 +217,23 @@ def test_mutual_info(
     # Get mutual information estimator
     (data, concepts), targets = next(iter(test_loader))
     _, residual, _ = model(data, concepts=concepts)
-    concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
+    if isinstance(concepts, list) and len(concepts) > 0:
+        concepts_ = concepts[0]
+    else:
+        concepts_ = concepts
+    concept_dim, residual_dim = concepts_.shape[-1], residual.shape[-1]
     mutual_info_estimator = MutualInformationLoss(residual_dim, concept_dim)
 
     # Learn mutual information estimator
     for epoch in range(num_mi_epochs):
         for (data, concepts), targets in test_loader:
+            if isinstance(concepts, list) and len(concepts) > 0:
+                concepts_ = concepts[0]
+            else:
+                concepts_ = concepts
             with torch.no_grad():
                 _, residual, _ = model(data, concepts=concepts)
-            mutual_info_estimator.step(residual, concepts)
+            mutual_info_estimator.step(residual, concepts_)
 
     # Calculate mutual information
     mutual_infos = []
@@ -378,6 +386,7 @@ if __name__ == "__main__":
         ]
 
     # Create evaluation configs
+    results = [result for result in results if result.config is not None]
     eval_configs = filter_eval_configs(
         [
             {
