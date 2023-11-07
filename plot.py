@@ -12,7 +12,7 @@ from ray.tune import ResultGrid
 from typing import Iterable, Union
 
 from evaluate import evaluate
-from lightning_ray import group_results, filter_by
+from lightning_ray import filter_results, group_results
 
 
 
@@ -24,28 +24,35 @@ Results = Union[Iterable[ray.train.Result], dict[str, "Results"]]
 
 ### Helper Functions
 
-def get_dataset_title(dataset_name: str) -> str:
+def format_plot_title(plot_key: str | tuple[str] | tuple[str]) -> str:
     """
     Get a nicely-formatted title for the given dataset.
 
     Parameters
     ----------
-    dataset_name : str
-        Name of the dataset
+    plot_key : str or tuple[str]
+        Plot key to format
     """
-    dataset_title = dataset_name.replace("_", " ").title()
-    dataset_title = dataset_title.replace("Mnist", "MNIST")
-    dataset_title = dataset_title.replace("Cifar", "CIFAR")
-    dataset_title = dataset_title.replace("Cub", "CUB")
-    return dataset_title
+    if isinstance(plot_key, tuple):
+        if len(plot_key) > 1:
+            return tuple(format_plot_title(key) for key in plot_key)
+        else:
+            plot_key = plot_key[0]
+
+    plot_key = plot_key.replace("_", " ").title()
+    plot_key = plot_key.replace("Mnist", "MNIST")
+    plot_key = plot_key.replace("Cifar", "CIFAR")
+    plot_key = plot_key.replace("Cub", "CUB")
+
+    return plot_key
 
 
 
 ### Plotting
 
 def plot_negative_interventions(
-    dataset_results: ResultGrid,
-    dataset_name: str,
+    plot_results: ResultGrid,
+    plot_key: str | tuple[str],
     groupby: list[str] = ['model_type'],
     save_dir: Path | str = './plots',
     show: bool = True,
@@ -56,10 +63,10 @@ def plot_negative_interventions(
 
     Parameters
     ----------
-    dataset_results : ResultGrid
-        Results for the given dataset, grouped by model type and evaluation mode
-    dataset_name : str
-        Name of the dataset
+    plot_results : ResultGrid
+        Results for the given plot
+    plot_key : str
+        Identifier for this plot
     groupby : list[str]
         List of train config keys to group by
     save_dir : Path or str
@@ -70,7 +77,7 @@ def plot_negative_interventions(
     save_dir = Path(save_dir)
     save_dir.mkdir(exist_ok=True, parents=True)
     groupby = groupby[0] if len(groupby) == 1 else groupby
-    for key, results in group_results(dataset_results, groupby=groupby).items():
+    for key, results in group_results(plot_results, groupby=groupby).items():
         results = group_results(results, groupby="eval_mode")
         for result in results.get('neg_intervention', []):
             num_interventions = result.metrics['neg_intervention_accs']['x']
@@ -79,16 +86,16 @@ def plot_negative_interventions(
 
     plt.xlabel("# of Concepts Intervened")
     plt.ylabel("Classification Error")
-    plt.title(f"Negative Interventions: {get_dataset_title(dataset_name)} {name}")
+    plt.title(f"Negative Interventions: {get_dataset_title(dataset_name)}")
     plt.legend()
-    plt.savefig(save_dir / f"{dataset_name}_neg_intervention{name}.png")
+    plt.savefig(save_dir / f"{dataset_name}_neg_intervention.png")
     if show:
         plt.show()
     plt.clf()
 
 def plot_positive_interventions(
-    dataset_results: ResultGrid,
-    dataset_name: str,
+    plot_results: ResultGrid,
+    plot_key: str | tuple[str],
     groupby: list[str] = ['model_type'],
     save_dir: Path | str = './plots',
     show: bool = True,
@@ -99,10 +106,10 @@ def plot_positive_interventions(
 
     Parameters
     ----------
-    dataset_results : ResultGrid
-        Results for the given dataset, grouped by model type and evaluation mode
-    dataset_name : str
-        Name of the dataset
+    plot_results : ResultGrid
+        Results for the given plot
+    plot_key : str
+        Identifier for this plot
     groupby : list[str]
         List of train config keys to group by
     save_dir : Path or str
@@ -113,7 +120,7 @@ def plot_positive_interventions(
     save_dir = Path(save_dir)
     save_dir.mkdir(exist_ok=True, parents=True)
     groupby = groupby[0] if len(groupby) == 1 else groupby
-    for key, results in group_results(dataset_results, groupby=groupby).items():
+    for key, results in group_results(plot_results, groupby=groupby).items():
         results = group_results(results, groupby='eval_mode')
         for result in results.get('pos_intervention', []):
             num_interventions = result.metrics['pos_intervention_accs']['x']
@@ -122,16 +129,16 @@ def plot_positive_interventions(
 
     plt.xlabel("# of Concepts Intervened")
     plt.ylabel("Classification Accuracy")
-    plt.title(f"Positive Interventions: {get_dataset_title(dataset_name)} {name}")
+    plt.title(f"Positive Interventions: {format_plot_title(plot_key)}")
     plt.legend()
-    plt.savefig(save_dir / f"{dataset_name}_pos_intervention{name}.png")
+    plt.savefig(save_dir / f"{plot_key}_pos_intervention.png")
     if show:
         plt.show()
     plt.clf()
 
 def plot_random_concepts_residual(
-    dataset_results: ResultGrid,
-    dataset_name: str,
+    plot_results: ResultGrid,
+    plot_key: str | tuple[str],
     groupby: list[str] = ['model_type'],
     save_dir: Path | str = './plots',
     show: bool = True,
@@ -142,10 +149,10 @@ def plot_random_concepts_residual(
 
     Parameters
     ----------
-    dataset_results : ResultGrid
-        Results for the given dataset
-    dataset_name : str
-        Name of the dataset
+    plot_results : ResultGrid
+        Results for the given plot
+    plot_key : str
+        Identifier for this plot
     groupby : list[str]
         List of train config keys to group by
     save_dir : Path or str
@@ -162,15 +169,15 @@ def plot_random_concepts_residual(
 
     # Aggregate results
     groupby = groupby[0] if len(groupby) == 1 else groupby
-    dataset_results = group_results(dataset_results, groupby=groupby)
-    keys = sorted(dataset_results.keys())
+    plot_results = group_results(plot_results, groupby=groupby)
+    keys = sorted(plot_results.keys())
     info = (
         (baseline_accuracies, 'accuracy', 'test_acc'),
         (random_concept_accuracies, 'random_concepts', 'random_concept_acc'),
         (random_residual_accuracies, 'random_residual', 'random_residual_acc'),
     )
     for key in keys:
-        results = group_results(dataset_results[key], groupby='eval_mode')
+        results = group_results(plot_results[key], groupby='eval_mode')
         for collection, eval_mode, metric in info:
             collection.append(
                 np.mean([
@@ -193,16 +200,16 @@ def plot_random_concepts_residual(
     plt.xticks(np.arange(len(keys)), keys)
     plt.ylim(max(0, y_min - 0.1), 1)
     plt.ylabel("Classification Accuracy")
-    plt.title(f"Random Concepts & Residual: {get_dataset_title(dataset_name)} {name}")
+    plt.title(f"Random Concepts & Residual: {format_plot_title(plot_key)}")
     plt.legend()
-    plt.savefig(save_dir / f"{dataset_name}_random{name}.png")
+    plt.savefig(save_dir / f"{plot_key}_random.png")
     if show:
         plt.show()
     plt.clf()
 
 def plot_disentanglement(
-    dataset_results: ResultGrid,
-    dataset_name: str,
+    plot_results: ResultGrid,
+    plot_key: str | tuple[str],
     groupby: list[str] = ['model_type'],
     save_dir: Path | str = './plots',
     show: bool = True,
@@ -213,10 +220,10 @@ def plot_disentanglement(
 
     Parameters
     ----------
-    dataset_results : ResultGrid
-        Results for the given dataset
-    dataset_name : str
-        Name of the dataset
+    plot_results : ResultGrid
+        Results for the given plot
+    plot_key : str
+        Identifier for this plot
     groupby : list[str]
         List of train config keys to group by
     save_dir : Path or str
@@ -228,10 +235,12 @@ def plot_disentanglement(
     save_dir.mkdir(exist_ok=True, parents=True)
 
     groupby = groupby[0] if len(groupby) == 1 else groupby
-    dataset_results = group_results(dataset_results, groupby=groupby)
-    keys = sorted(dataset_results.keys())
+    plot_results = group_results(plot_results, groupby=groupby)
+    keys = sorted(plot_results.keys())
     for key in keys:
-        results = group_results(dataset_results[key], groupby='eval_mode')
+        results = filter_results(
+            lambda r: r.config['model_type'] != 'no_residual', plot_results[key])
+        results = group_results(results, groupby='eval_mode')
         correlation = np.mean([
             result.metrics['mean_abs_cross_correlation']
             for result in results['correlation']
@@ -244,9 +253,9 @@ def plot_disentanglement(
 
     plt.xlabel("Mean Absolute Cross-Correlation")
     plt.ylabel("Mutual Information")
-    plt.title(f"Disentanglement Metrics: {get_dataset_title(dataset_name)} {name}")
+    plt.title(f"Disentanglement Metrics: {format_plot_title(plot_key)}")
     plt.legend()
-    plt.savefig(save_dir / f"{dataset_name}_disentanglement{name}.png")
+    plt.savefig(save_dir / f"{plot_key}_disentanglement.png")
     if show:
         plt.show()
     plt.clf()
@@ -263,14 +272,33 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--exp-dir', type=str, default=os.environ.get('CONCEPT_SAVE_DIR', './saved'),
-        help="Experiment directory")
+        '--exp-dir',
+        type=str,
+        default=os.environ.get('CONCEPT_SAVE_DIR', './saved'),
+        help="Experiment directory",
+    )
     parser.add_argument(
-        '--mode', nargs='+', default=PLOT_FUNCTIONS.keys(),
-        help='Evaluation modes')
+        '--mode',
+        nargs='+',
+        default=PLOT_FUNCTIONS.keys(),
+        help="Plot modes",
+    )
     parser.add_argument(
-        '--groupby', nargs='+', default=['model_type'],
-        help="Config keys to group plots by")
+        '--plotby',
+        nargs='+',
+        default=['dataset'],
+        help=(
+            "Config keys to group plots by "
+            "(e.g. `--plotby dataset model_type` creates separate plots "
+            "for each (dataset, model_type) combination)"
+        )
+    )
+    parser.add_argument(
+        '--groupby',
+        nargs='+',
+        default=['model_type'],
+        help="Config keys to group results on each plot by",
+    )
 
     args = parser.parse_args()
 
@@ -281,14 +309,14 @@ if __name__ == '__main__':
 
     # Load evaluation results
     tuner = tune.Tuner.restore(str(experiment_path / 'eval'), trainable=evaluate)
-    results = group_results(tuner.get_results(), groupby='dataset')
+    results = group_results(tuner.get_results(), groupby=args.plotby)
 
-    # Plot results for each dataset
-    for dataset_name, dataset_results in results.items():
+    # Plot results
+    for plot_key, plot_results in results.items():
         for mode in args.mode:
             PLOT_FUNCTIONS[mode](
-                dataset_results,
-                dataset_name,
+                plot_results,
+                plot_key,
                 groupby=args.groupby,
                 save_dir=experiment_path / 'plots',
             )
