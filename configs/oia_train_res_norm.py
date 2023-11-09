@@ -21,10 +21,10 @@ def get_config(**kwargs) -> dict:
         "cw_alignment_frequency": 20,
         "num_cpus": 8,
         "num_gpus": 1.0,
-        "num_samples": 1,
+        "num_samples": 3,
         "batch_size": 8,
         "checkpoint_frequency": 5,
-        "norm_type": tune.grid_search([None, "iter_norm"]),
+        "norm_type": "iter_norm",
         "T_whitening": 3,
     }
     experiment_config.update(kwargs)
