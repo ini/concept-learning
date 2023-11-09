@@ -165,10 +165,14 @@ if __name__ == '__main__':
 
     # Train models
     config.set('max_epochs', config.get('num_epochs'))
+    if "num_samples" in config:
+        num_samples = config.get('num_samples')
+    else:
+        num_samples = 1
     if args.restore_path:
         tuner = LightningTuner.restore(args.restore_path, resume_errored=True)
     else:
-        tuner = LightningTuner(metric='val_acc', mode='max', scheduler=scheduler)
+        tuner = LightningTuner(metric='val_acc', mode='max', scheduler=scheduler, num_samples=num_samples)
     tuner.fit(
         make_concept_model,
         make_datamodule,
