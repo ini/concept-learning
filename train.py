@@ -13,7 +13,9 @@ from loader import get_concept_loss_fn, get_dummy_batch, get_datamodule, DATASET
 from models import *
 from ray_utils import RayConfig
 from utils import cross_correlation
+import os
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,2,3"
 
 
 def make_concept_model(**config) -> ConceptLightningModel:
