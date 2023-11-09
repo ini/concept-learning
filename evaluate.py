@@ -193,7 +193,11 @@ def test_correlation(model: ConceptLightningModel, test_loader: DataLoader) -> f
     for (data, concepts), target in test_loader:
         with torch.no_grad():
             _, residual, _ = model(data, concepts=concepts)
-        correlations.append(cross_correlation(concepts, residual).abs().mean().item())
+        if isinstance(concepts, list) and len(concepts) > 0:
+            concepts_ = concepts[0]
+        else:
+            concepts_ = concepts
+        correlations.append(cross_correlation(concepts_, residual).abs().mean().item())
 
     return np.mean(correlations)
 
@@ -240,7 +244,11 @@ def test_mutual_info(
     for (data, concepts), target in test_loader:
         with torch.no_grad():
             _, residual, _ = model(data, concepts=concepts)
-        mutual_infos.append(mutual_info_estimator(residual, concepts).item())
+        if isinstance(concepts, list) and len(concepts) > 0:
+                concepts_ = concepts[0]
+        else:
+            concepts_ = concepts
+        mutual_infos.append(mutual_info_estimator(residual, concepts_).item())
 
     return np.mean(mutual_infos)
 
