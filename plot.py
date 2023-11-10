@@ -78,19 +78,25 @@ def plot_negative_interventions(
     save_dir.mkdir(exist_ok=True, parents=True)
     groupby = groupby[0] if len(groupby) == 1 else groupby
     for key, results in group_results(plot_results, groupby=groupby).items():
-        results = group_results(results, groupby="eval_mode")
-        for result in results.get('neg_intervention', []):
-            num_interventions = result.metrics['neg_intervention_accs']['x']
-            accuracies = result.metrics['neg_intervention_accs']['y']
-            plt.plot(num_interventions, 1 - accuracies, label=key)
+        results = group_results(results, groupby='eval_mode')
+        if 'neg_intervention' not in results:
+            print("No negative intervention results found for:", key)
+            continue
+
+        accuracies = np.mean(
+            np.stack([
+                result.metrics['neg_intervention_accs']['y']
+                for result in results['neg_intervention']
+            ]),
+            axis=0,
+        )
+        plt.plot(np.linspace(0, 1, len(accuracies)), 1 - accuracies, label=key)
 
     plt.xlabel("# of Concepts Intervened")
     plt.ylabel("Classification Error")
-    if name != "":
-        name = "("+ name + ")"
     plt.title(f"Negative Interventions: {format_plot_title(plot_key)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{name}{plot_key}_neg_intervention.png")
+    plt.savefig(save_dir / f"{name}_{plot_key}_neg_intervention.png")
     if show:
         plt.show()
     plt.clf()
@@ -124,18 +130,24 @@ def plot_positive_interventions(
     groupby = groupby[0] if len(groupby) == 1 else groupby
     for key, results in group_results(plot_results, groupby=groupby).items():
         results = group_results(results, groupby='eval_mode')
-        for result in results.get('pos_intervention', []):
-            num_interventions = result.metrics['pos_intervention_accs']['x']
-            accuracies = result.metrics['pos_intervention_accs']['y']
-            plt.plot(num_interventions, accuracies, label=key)
+        if 'pos_intervention' not in results:
+            print("No positive intervention results found for:", key)
+            continue
 
-    plt.xlabel("# of Concepts Intervened")
+        accuracies = np.mean(
+            np.stack([
+                result.metrics['pos_intervention_accs']['y']
+                for result in results['pos_intervention']
+            ]),
+            axis=0,
+        )
+        plt.plot(np.linspace(0, 1, len(accuracies)), accuracies, label=key)
+
+    plt.xlabel("Fraction of Concepts Intervened")
     plt.ylabel("Classification Accuracy")
-    if name != "":
-        name = "("+ name + ")"
     plt.title(f"Positive Interventions: {format_plot_title(plot_key)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{name}{plot_key}_pos_intervention.png")
+    plt.savefig(save_dir / f"{name}_{plot_key}_pos_intervention.png")
     if show:
         plt.show()
     plt.clf()
@@ -204,11 +216,9 @@ def plot_random_concepts_residual(
     plt.xticks(np.arange(len(keys)), keys)
     plt.ylim(max(0, y_min - 0.1), 1)
     plt.ylabel("Classification Accuracy")
-    if name != "":
-        name = "("+ name + ")"
     plt.title(f"Random Concepts & Residual: {format_plot_title(plot_key)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{name}{plot_key}_random.png")
+    plt.savefig(save_dir / f"{name}_{plot_key}_random.png")
     if show:
         plt.show()
     plt.clf()
@@ -244,9 +254,14 @@ def plot_disentanglement(
     plot_results = group_results(plot_results, groupby=groupby)
     keys = sorted(plot_results.keys())
     for key in keys:
-        results = filter_results(
-            lambda r: r.config['model_type'] != 'no_residual', plot_results[key])
-        results = group_results(results, groupby='eval_mode')
+        results = group_results(plot_results[key], groupby='eval_mode')
+        if 'correlation' not in results:
+            print("No correlation results found for:", key)
+            continue
+        if 'mutual_info' not in results:
+            print("No mutual information results found for:", key)
+            continue
+
         correlation = np.mean([
             result.metrics['mean_abs_cross_correlation']
             for result in results['correlation']
@@ -259,11 +274,9 @@ def plot_disentanglement(
 
     plt.xlabel("Mean Absolute Cross-Correlation")
     plt.ylabel("Mutual Information")
-    if name != "":
-        name = "("+ name + ")"
     plt.title(f"Disentanglement Metrics: {format_plot_title(plot_key)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{name}{plot_key}_disentanglement.png")
+    plt.savefig(save_dir / f"{name}_{plot_key}_disentanglement.png")
     if show:
         plt.show()
     plt.clf()
