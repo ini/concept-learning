@@ -6,7 +6,7 @@ if __name__ == '__main__':
         'neg_intervention': plot_negative_interventions,
         'pos_intervention': plot_positive_interventions,
         'random': plot_random_concepts_residual,
-        'disentanglement': plot_disentanglement,
+        #'disentanglement': plot_disentanglement,
     }
 
     parser = argparse.ArgumentParser()

@@ -86,9 +86,11 @@ def plot_negative_interventions(
 
     plt.xlabel("# of Concepts Intervened")
     plt.ylabel("Classification Error")
-    plt.title(f"Negative Interventions: {get_dataset_title(dataset_name)}")
+    if name != "":
+        name = "("+ name + ")"
+    plt.title(f"Negative Interventions: {format_plot_title(plot_key)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{dataset_name}_neg_intervention.png")
+    plt.savefig(save_dir / f"{name}{plot_key}_neg_intervention.png")
     if show:
         plt.show()
     plt.clf()
@@ -129,9 +131,11 @@ def plot_positive_interventions(
 
     plt.xlabel("# of Concepts Intervened")
     plt.ylabel("Classification Accuracy")
-    plt.title(f"Positive Interventions: {format_plot_title(plot_key)}")
+    if name != "":
+        name = "("+ name + ")"
+    plt.title(f"Positive Interventions: {format_plot_title(plot_key)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{plot_key}_pos_intervention.png")
+    plt.savefig(save_dir / f"{name}{plot_key}_pos_intervention.png")
     if show:
         plt.show()
     plt.clf()
@@ -200,9 +204,11 @@ def plot_random_concepts_residual(
     plt.xticks(np.arange(len(keys)), keys)
     plt.ylim(max(0, y_min - 0.1), 1)
     plt.ylabel("Classification Accuracy")
-    plt.title(f"Random Concepts & Residual: {format_plot_title(plot_key)}")
+    if name != "":
+        name = "("+ name + ")"
+    plt.title(f"Random Concepts & Residual: {format_plot_title(plot_key)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{plot_key}_random.png")
+    plt.savefig(save_dir / f"{name}{plot_key}_random.png")
     if show:
         plt.show()
     plt.clf()
@@ -253,9 +259,11 @@ def plot_disentanglement(
 
     plt.xlabel("Mean Absolute Cross-Correlation")
     plt.ylabel("Mutual Information")
-    plt.title(f"Disentanglement Metrics: {format_plot_title(plot_key)}")
+    if name != "":
+        name = "("+ name + ")"
+    plt.title(f"Disentanglement Metrics: {format_plot_title(plot_key)} {name}")
     plt.legend()
-    plt.savefig(save_dir / f"{plot_key}_disentanglement.png")
+    plt.savefig(save_dir / f"{name}{plot_key}_disentanglement.png")
     if show:
         plt.show()
     plt.clf()
