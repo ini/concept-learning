@@ -15,7 +15,11 @@ from .pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 
 
 @functools.cache
-def get_datasets(dataset_name: str, data_dir: str) -> tuple[Dataset, Dataset, Dataset]:
+def get_datasets(
+    dataset_name: str,
+    data_dir: str,
+    resize_oai: bool = True,
+) -> tuple[Dataset, Dataset, Dataset]:
     """
     Get train, validation, and test splits for the given dataset.
 
@@ -96,13 +100,13 @@ def get_datasets(dataset_name: str, data_dir: str) -> tuple[Dataset, Dataset, Da
 
     elif dataset_name == 'oai':
         transform_train = transforms.Compose([
-            transforms.Resize(224, antialias=False),
+            transforms.Resize(224, antialias=False) if resize_oai else lambda x: x,
             transforms.Normalize(mean=-31334.48612, std=1324.959356),
             RandomTranslation(0.1, 0.1),
             lambda x: x.expand(3, -1, -1) # expand to 3 channels
         ])
         transform_test = transforms.Compose([
-            transforms.Resize(224, antialias=False),
+            transforms.Resize(224, antialias=False) if resize_oai else lambda x: x,
             transforms.Normalize(mean=-31334.48612, std=1324.959356),
             lambda x: x.expand(3, -1, -1) # expand to 3 channels
         ])

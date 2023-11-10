@@ -12,10 +12,21 @@ from utils import make_mlp
 
 ### Helper Methods
 
-def make_cnn(output_dim: int):
-    model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
-    model.fc = nn.Linear(model.fc.in_features, output_dim)
-    return model
+def make_cnn(output_dim: int, cnn_type='resnet'):
+    if cnn_type == 'resnet':
+        from torchvision.models.resnet import resnet18, ResNet18_Weights
+        model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        model.fc = nn.Linear(model.fc.in_features, output_dim)
+        return model
+
+    elif cnn_type == 'inception':
+        from torchvision.models.inception import inception_v3, Inception_V3_Weights
+        model = inception_v3(weights=Inception_V3_Weights.IMAGENET1K_V1)
+        model.fc = nn.Linear(model.fc.in_features, output_dim)
+        model.aux_logits = False
+        return model
+
+    raise ValueError(f'Unknown CNN type: {cnn_type}')
 
 
 
@@ -26,14 +37,25 @@ def make_concept_model(config: dict) -> ConceptModel:
     concept_dim = config['concept_dim']
     residual_dim = config['residual_dim']
     bottleneck_dim = concept_dim + residual_dim
-    return ConceptModel(
-        base_network=make_cnn(bottleneck_dim),
-        concept_network=Apply(lambda x: x[..., :concept_dim]),
-        residual_network=Apply(lambda x: x[..., concept_dim:]),
-        target_network=make_mlp(num_classes, num_hidden_layers=2, hidden_dim=50),
-        bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
-        **config,
-    )
+
+    if config.get('separate_branches', False):
+        return ConceptModel(
+            concept_network=make_cnn(concept_dim),
+            residual_network=make_cnn(residual_dim),
+            target_network=make_mlp(num_classes, num_hidden_layers=2, hidden_dim=50),
+            bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
+            **config,
+        )
+
+    else:
+        return ConceptModel(
+            base_network=make_cnn(bottleneck_dim),
+            concept_network=Apply(lambda x: x[..., :concept_dim]),
+            residual_network=Apply(lambda x: x[..., concept_dim:]),
+            target_network=make_mlp(num_classes, num_hidden_layers=2, hidden_dim=50),
+            bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
+            **config,
+        )
 
 def get_config(**kwargs) -> dict:
     config = {

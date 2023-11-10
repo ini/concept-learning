@@ -26,6 +26,7 @@ def get_datamodule(
     data_dir: str,
     batch_size: int = 64,
     num_workers: int = 0,
+    resize_oai: bool = True,
 ) -> pl.LightningDataModule:
     """
     Get a LightningDataModule for the specified dataset.
@@ -41,7 +42,8 @@ def get_datamodule(
     num_workers : int
         Number of workers for the data loaders
     """
-    train_dataset, val_dataset, test_dataset = get_datasets(dataset_name, data_dir)
+    train_dataset, val_dataset, test_dataset = get_datasets(
+        dataset_name, data_dir, resize_oai)
     return pl.LightningDataModule.from_datasets(
         train_dataset=train_dataset,
         val_dataset=val_dataset,
