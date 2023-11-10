@@ -151,12 +151,15 @@ def configure_gpus(gpu_memory_per_worker: str | int | float) -> float:
                 break
 
     gpu_memory_per_worker = int(gpu_memory_per_worker)
-    total_num_gpus = pynvml.nvmlDeviceGetCount()
+    devices = os.environ.get('CUDA_VISIBLE_DEVICES', '').split(',')
+    if devices == ['']:
+        devices = range(pynvml.nvmlDeviceGetCount())
 
     # For each GPU, calculate the number of workers that can fit in memory
+    total_num_gpus = len(devices)
     num_workers = np.zeros(total_num_gpus)
-    for i in range(total_num_gpus):
-        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+    for i in devices:
+        handle = pynvml.nvmlDeviceGetHandleByIndex(int(i))
         memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
         num_workers[i] = memory_info.free // gpu_memory_per_worker
 
@@ -338,38 +341,6 @@ def group_results(
         )
         for group in trials
     }
-
-def filter_by(
-    results: ResultGrid,
-    filter_fn: Callable[[Result], bool],
-    ) -> ResultGrid:
-    """
-    Filter results by a given function.
-
-    Parameters
-    ----------
-    filter_fn : Callable(Result) -> bool
-        A function that takes a `Result` object and
-        returns a boolean indicating whether to keep the result or not
-    results : ResultGrid
-        Results to filter
-    """
-    trials = []
-    for trial in results._experiment_analysis.trials:
-        config = trial.config.get('train_loop_config', trial.config)
-        if filter_fn(config):
-            print("here")
-            trials.append(trial)
-    to_return = ResultGrid(
-            ExperimentAnalysis(
-                results._experiment_analysis.experiment_path,
-                storage_filesystem=results._experiment_analysis._fs,
-                trials=trials,
-                default_metric=results._experiment_analysis.default_metric,
-                default_mode=results._experiment_analysis.default_mode,
-            )
-        )
-    return to_return
 
 
 

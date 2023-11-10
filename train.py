@@ -59,7 +59,7 @@ def make_concept_model(**config) -> ConceptLightningModel:
         model = ConceptLightningModel(model, **config)
 
     # With latent residual
-    elif model_type in 'latent_residual':
+    elif model_type == 'latent_residual':
         model = experiment_module.make_concept_model(config)
         model = ConceptLightningModel(model, **config)
 
@@ -105,7 +105,7 @@ def make_datamodule(**config) -> pl.LightningDataModule:
         dataset_name=config['dataset'],
         data_dir=config['data_dir'],
         batch_size=config['batch_size'],
-        num_workers=config.get('num_cpus', 1) - 1,
+        num_workers=int(config.get('num_cpus', 1)) - 1,
     )
 
 
@@ -121,12 +121,6 @@ if __name__ == '__main__':
         '--save-dir', type=str, help="Directory to save models to")
     parser.add_argument(
         '--restore-path', type=str, help="Path to restore model from")
-    parser.add_argument(
-        '--num-workers', type=int, help="Number of workers to use (per model)")
-    parser.add_argument(
-        '--num-cpus', type=float, help="Number of CPUs to use (per worker)")
-    parser.add_argument(
-        '--num-gpus', type=float, help="Number of GPUs to use (per worker)")
     parser.add_argument(
         '--groupby', type=str, nargs='+', help="Config keys to group by")
     parser.add_argument(
@@ -168,7 +162,12 @@ if __name__ == '__main__':
     if args.restore_path:
         tuner = LightningTuner.restore(args.restore_path, resume_errored=True)
     else:
-        tuner = LightningTuner(metric='val_acc', mode='max', scheduler=scheduler)
+        tuner = LightningTuner(
+            metric='val_acc',
+            mode='max',
+            scheduler=scheduler,
+            num_samples=config.get('num_samples', 1),
+        )
     tuner.fit(
         make_concept_model,
         make_datamodule,

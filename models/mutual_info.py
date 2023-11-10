@@ -88,14 +88,7 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
     concepts and residual.
     """
 
-    def __init__(
-        self,
-        concept_model: ConceptModel,
-        concept_dim: int,
-        residual_dim: int,
-        mi_estimator_hidden_dim: int = 64,
-        mi_optimizer_lr: float = 1e-3,
-        **kwargs):
+    def __init__(self, concept_model: ConceptModel, **kwargs):
         """
         Parameters
         ----------
@@ -111,10 +104,10 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
             Learning rate for mutual information estimator optimizer
         """
         residual_loss_fn = MutualInformationLoss(
-            residual_dim,
-            concept_dim,
-            hidden_dim=mi_estimator_hidden_dim,
-            lr=mi_optimizer_lr,
+            kwargs['residual_dim'],
+            kwargs['concept_dim'],
+            hidden_dim=kwargs['mi_estimator_hidden_dim'],
+            lr=kwargs['mi_optimizer_lr'],
         )
         super().__init__(concept_model, residual_loss_fn=residual_loss_fn, **kwargs)
 
@@ -136,10 +129,5 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
                 concept_logits, residual, target_logits = self(data, concepts=concepts)
 
             # Calculate mutual information estimator loss
-            if isinstance(concepts, list):
-                concepts_ = concepts[0]
-            else:
-                concepts_ = concepts
-
-            mi_estimator_loss = self.residual_loss_fn.step(residual, concepts_)
+            mi_estimator_loss = self.residual_loss_fn.step(residual, concepts)
             self.log('mi_estimator_loss', mi_estimator_loss, **self.log_kwargs)

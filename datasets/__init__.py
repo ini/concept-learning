@@ -1,12 +1,14 @@
 import functools
+import numpy as np
 import torch
 
-from pathlib import Path
+from torch import Tensor
 from torch.utils.data import Dataset, random_split
 from torchvision import transforms
 
 from .cifar import CIFAR100
 from .cub import CUB
+from .oai import OAI
 from .other import MNISTModulo
 from .pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 
@@ -92,14 +94,60 @@ def get_datasets(dataset_name: str, data_dir: str) -> tuple[Dataset, Dataset, Da
         test_dataset = CUB(
             root=data_dir, split='test', transform=transform_test, download=True)
 
+    elif dataset_name == 'oai':
+        transform_train = transforms.Compose([
+            transforms.Resize(224, antialias=False),
+            transforms.Normalize(mean=-31334.48612, std=1324.959356),
+            RandomTranslation(0.1, 0.1),
+            lambda x: x.expand(3, -1, -1) # expand to 3 channels
+        ])
+        transform_test = transforms.Compose([
+            transforms.Resize(224, antialias=False),
+            transforms.Normalize(mean=-31334.48612, std=1324.959356),
+            lambda x: x.expand(3, -1, -1) # expand to 3 channels
+        ])
+        train_dataset = OAI(
+            root=data_dir, split='train', transform=transform_train)
+        val_dataset = OAI(
+            root=data_dir, split='val', transform=transform_test)
+        test_dataset = OAI(
+            root=data_dir, split='test', transform=transform_test)
+
     else:
         raise ValueError(f"Invalid dataset name:", dataset_name)
 
     # Create validation set if necessary
     if val_dataset is None:
         N = len(train_dataset)
-        lengths = [N - int(0.15 * N), int(0.15 * N)]
         train_dataset, val_dataset = random_split(
-            train_dataset, lengths, generator=torch.Generator().manual_seed(0))
+            train_dataset,
+            lengths=[N - int(0.15 * N), int(0.15 * N)],
+            generator=torch.Generator().manual_seed(0),
+        )
 
     return train_dataset, val_dataset, test_dataset
+
+
+class RandomTranslation:
+    """
+    Random translation transform.
+    """
+
+    def __init__(self, max_dx: float, max_dy: float, seed: int = 0):
+        """
+        Parameters
+        ----------
+        max_dx : float in interval [0, 1]
+            Maximum absolute fraction for horizontal translation
+        max_dy : float in interval [0, 1]
+            Maximum absolute fraction for vertical translation
+        seed : int
+            Seed for the random number generator
+        """
+        self.max_dx, self.max_dy = max_dx, max_dy
+        self.random = np.random.default_rng(seed)
+
+    def __call__(self, img: Tensor) -> Tensor:
+        dx = int(self.max_dx * img.shape[-2] * self.random.uniform(-1, -1))
+        dy = int(self.max_dy * img.shape[-1] * self.random.uniform(-1, -1))
+        return torch.roll(img, shifts=(dx, dy), dims=(-2, -1))

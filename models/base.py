@@ -105,8 +105,6 @@ class ConceptModel(nn.Module):
         target_logits : Tensor
             Target logits
         """
-        concepts = concepts[0] if isinstance(concepts, (list, tuple)) else concepts
-
         # Get concept logits & residual
         x = self.base_network(x, concepts=concepts)
         concept_logits = self.concept_network(x, concepts=concepts)
@@ -227,9 +225,6 @@ class ConceptLightningModel(pl.LightningModule):
         (data, concepts), targets = batch
         concept_logits, residual, target_logits = outputs
 
-        if isinstance(concepts, (list, tuple)):
-            return self.oai_loss_fn(batch, outputs)
-
         # Concept loss
         concept_loss = self.concept_loss_fn(concept_logits, concepts)
         if concept_loss.requires_grad:
@@ -288,9 +283,11 @@ class ConceptLightningModel(pl.LightningModule):
 
         # Track concept accuracy
         if self.concept_model.concept_type == 'binary':
-            concepts = concepts[0] if isinstance(concepts, (list, tuple)) else concepts
             concept_acc = accuracy(concept_logits, concepts, task='binary')
             self.log(f"{split}_concept_acc", concept_acc, **self.log_kwargs)
+        else:
+            concept_rmse = F.mse_loss(concept_logits, concepts).sqrt()
+            self.log(f"{split}_concept_rmse", concept_rmse, **self.log_kwargs)
 
         return loss
 
@@ -332,107 +329,3 @@ class ConceptLightningModel(pl.LightningModule):
             Batch index
         """
         return self.step(batch, split='test')
-
-    def oai_loss_fn(
-        self,
-        batch: ConceptBatch,
-        outputs: tuple[Tensor, Tensor, Tensor],
-    ) -> Tensor:
-        """
-        Compute loss for the OAI dataset.
-        """
-        (data, concepts), targets = batch
-        concept_logits, residual, target_logits = outputs
-
-        assert isinstance(concepts, list) and len(concepts) == 3
-
-        if len(targets.shape) == 1:
-            targets = targets.unsqueeze(1)
-        y = targets
-        C_feats, C_feats_not_nan, C_feats_loss_class_wts = concepts
-
-        # Parse outputs from deep model
-        C_hat = concept_logits  # outputs['C']
-        y_hat = target_logits  # outputs['y']
-
-        # Loss for y
-        # if self.y_loss_type == "reg":
-        #     loss_y = nn.MSELoss()(input=y_hat, target=y)
-        # elif self.y_loss_type == "cls":
-        classes_per_y_col = [4]
-        C_loss_type = "reg"
-        # they use regression so this effectively does nothing
-        classes_per_C_col = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
-        C_loss_weigh_class = False
-        additional_loss_weighting = [
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-        ]
-        y_long = y.long()
-        loss_y = []
-        start_id = 0
-        for i, N_cls in enumerate(classes_per_y_col):
-            loss_y.append(
-                nn.CrossEntropyLoss(reduction="none")(
-                    y_hat[:, start_id : start_id + N_cls], y_long[:, i]
-                )
-            )
-            start_id += N_cls
-            loss_y = torch.stack(loss_y, dim=1)
-            loss_y = loss_y.sum(dim=1).mean(dim=0)
-            assert start_id == sum(classes_per_y_col)
-
-            # Loss for C
-            if C_loss_type == "reg":
-                loss_C = (C_feats - C_hat) ** 2
-            elif C_loss_type == "cls":
-                C_feats_long = C_feats.long()
-                loss_C = []
-                start_id = 0
-                for i, N_cls in enumerate(classes_per_C_col):
-                    loss_C.append(
-                        nn.CrossEntropyLoss(reduction="none")(
-                            C_hat[:, start_id : start_id + N_cls], C_feats_long[:, i]
-                        )
-                    )
-                    start_id += N_cls
-                loss_C = torch.stack(loss_C, dim=1)
-                assert start_id == sum(classes_per_C_col)
-
-        # Compute loss only if feature is not NaN.
-        loss_C = loss_C * C_feats_not_nan
-        # We upweigh rare classes (within each concept)
-        # to allow the model to pay attention to it.
-        if C_loss_weigh_class:
-            loss_class_wts = C_feats_loss_class_wts
-            loss_C *= loss_class_wts.float().cuda()
-        loss_C *= torch.FloatTensor([additional_loss_weighting]).cuda()
-        concept_loss = loss_C.sum(dim=1).mean(dim=0) / (
-            sum(additional_loss_weighting) + 1.0
-        )
-        target_loss = loss_y
-
-        # # Final loss
-        # loss = loss_y + loss_C
-        # loss /= (sum(self.additional_loss_weighting) + 1.)
-
-        self.log("concept_loss", concept_loss, **self.log_kwargs)
-
-        # Residual loss
-        residual_loss = self.residual_loss_fn(residual, concepts[0])
-        if residual_loss.requires_grad:
-            self.log("residual_loss", residual_loss, **self.log_kwargs)
-
-        # Target loss
-        if target_loss.requires_grad:
-            self.log("target_loss", target_loss, **self.log_kwargs)
-
-        return target_loss + (self.alpha * concept_loss) + (self.beta * residual_loss)
