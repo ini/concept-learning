@@ -156,12 +156,12 @@ def configure_gpus(gpu_memory_per_worker: str | int | float) -> float:
         devices = range(pynvml.nvmlDeviceGetCount())
 
     # For each GPU, calculate the number of workers that can fit in memory
-    total_num_gpus = len(devices)
+    total_num_gpus = pynvml.nvmlDeviceGetCount()
     num_workers = np.zeros(total_num_gpus)
     for i in devices:
         handle = pynvml.nvmlDeviceGetHandleByIndex(int(i))
         memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        num_workers[i] = memory_info.free // gpu_memory_per_worker
+        num_workers[int(i)] = memory_info.free // gpu_memory_per_worker
 
     if num_workers.max() == 0:
         return 0

@@ -4,6 +4,7 @@ import torch.nn as nn
 
 from models import ConceptModel, make_bottleneck_layer
 from nn_extensions import Apply
+from ray_utils import process_grid_search_tuples
 from torchvision.models.resnet import resnet18, ResNet18_Weights
 from utils import make_mlp
 
@@ -36,29 +37,30 @@ def make_concept_model(config: dict) -> ConceptModel:
 
 def get_config(**kwargs) -> dict:
     config = {
+        ('model_type', 'beta'): ray.tune.grid_search([
+            ('no_residual', 0),
+            ('latent_residual', 0),
+            ('decorrelated_residual', 10.0),
+            ('iter_norm', 0),
+            ('mi_residual', 1.0),
+        ]),
         'dataset': 'oai',
         'data_dir': os.environ.get('CONCEPT_DATA_DIR', './data'),
         'save_dir': os.environ.get('CONCEPT_SAVE_DIR', './saved'),
-        'model_type': ray.tune.grid_search([
-            'no_residual',
-            'latent_residual',
-            'decorrelated_residual',
-            'mi_residual',
-            'iter_norm',
-        ]),
-        'num_gpus': 1.0,
+        'num_cpus': 8,
+        'gpu_memory_per_worker': '5000 MiB',
         'training_mode': 'independent',
         'residual_dim': ray.tune.grid_search([0, 1, 2, 4, 8, 16, 32, 64]),
         'num_epochs': 100,
         'lr': 1e-4,
-        'batch_size': 8,
+        'batch_size': 64,
         'alpha': 1.0,
         'beta': 1.0,
         'mi_estimator_hidden_dim': 256,
         'mi_optimizer_lr': 1e-5,
         'cw_alignment_frequency': 20,
         'checkpoint_frequency': 5,
-        'gpu_memory_per_worker': '9000 MiB',
     }
     config.update(kwargs)
+    config = process_grid_search_tuples(config)
     return config
