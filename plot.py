@@ -92,7 +92,7 @@ def plot_negative_interventions(
         )
         plt.plot(np.linspace(0, 1, len(accuracies)), 1 - accuracies, label=key)
 
-    plt.xlabel("# of Concepts Intervened")
+    plt.xlabel("Fraction of Concepts Intervened")
     plt.ylabel("Classification Error")
     plt.title(f"Negative Interventions: {format_plot_title(plot_key)} {name}")
     plt.legend()

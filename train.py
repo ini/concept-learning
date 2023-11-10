@@ -42,7 +42,7 @@ def make_concept_model(**config) -> ConceptLightningModel:
         Frequency of concept alignment for whitening (in epochs)
     """
     experiment_module = importlib.import_module(config['experiment_module_name'])
-    model_type = config['model_type']
+    model_type = config.get('model_type', 'latent_residual')
 
     # Update config with any missing dataset information (e.g. concept_dim, num_classes)
     dataset_info = DATASET_INFO[config['dataset']]
@@ -106,6 +106,7 @@ def make_datamodule(**config) -> pl.LightningDataModule:
         data_dir=config['data_dir'],
         batch_size=config['batch_size'],
         num_workers=int(config.get('num_cpus', 1)) - 1,
+        resize_oai=config.get('resize_oai', True),
     )
 
 
