@@ -74,9 +74,9 @@ def make_concept_model(**config) -> ConceptLightningModel:
         model = experiment_module.make_concept_model(config)
         model = MutualInfoConceptLightningModel(model, **config)
 
-    # With iterative normalization
-    elif model_type == 'iter_norm':
-        config = {**config, 'norm_type': 'iter_norm'}
+    # With iterative / layer normalization
+    elif model_type in ('iter_norm', 'layer_norm'):
+        config = {**config, 'norm_type': model_type}
         model = experiment_module.make_concept_model(config)
         model = ConceptLightningModel(model, **config)
 
