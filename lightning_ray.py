@@ -339,7 +339,7 @@ def group_results(
                 default_mode=results._experiment_analysis.default_mode,
             )
         )
-        for group in trials
+        for group in sorted(trials.keys())
     }
 
 

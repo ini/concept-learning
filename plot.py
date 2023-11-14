@@ -297,7 +297,7 @@ def plot_mi_vs_intervention(
     name: str = "",
 ):
     """
-    Plot disentanglement metrics.
+    Plot mutual information vs positive intervention accuracy.
 
     Parameters
     ----------
@@ -378,7 +378,7 @@ def plot_mi_vs_intervention(
         ]:
             x_axis_list = eval(x_axis_type)
             y_axis_list = eval(y_axis_type)
-            plt.plot(x_axis_list, y_axis_list)
+            plt.scatter(x_axis_list, y_axis_list)
             plt.xlabel(f"{x_axis_type}")
             plt.ylabel(f"{y_axis_type}")
             plt.title(f": {format_plot_title((x_axis_type, y_axis_type))} {name}")
