@@ -30,7 +30,7 @@ def format_plot_title(plot_key: str | tuple[str, ...] | list[str]) -> str:
     """
     if isinstance(plot_key, (list, tuple)):
         if len(plot_key) > 1:
-            return tuple(format_plot_title(key) for key in plot_key)
+            return ', '.join([format_plot_title(key) for key in plot_key])
         else:
             plot_key = plot_key[0]
 
@@ -40,7 +40,7 @@ def format_plot_title(plot_key: str | tuple[str, ...] | list[str]) -> str:
         plot_key = plot_key.replace("Cifar", "CIFAR")
         plot_key = plot_key.replace("Cub", "CUB")
 
-    return plot_key
+    return str(plot_key)
 
 def get_save_path(
     plot_key: tuple,
@@ -86,7 +86,7 @@ def plot_curves(
     for key, results in plot_results.items():
         results = group_results(results, groupby='eval_mode')
         if eval_mode not in results:
-            print(f"No {eval_mode} results found for:", key)
+            print(f"No {eval_mode} results found for:", plot_key, groupby, key)
             continue
 
         x = get_x(results[eval_mode])
@@ -101,6 +101,62 @@ def plot_curves(
     columns.insert(0, x_label)
     df = pd.DataFrame(data, columns=columns)
     df.to_csv(save_path.with_suffix('.csv'), index=False)
+
+    # Create figure
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.legend()
+    plt.savefig(save_path.with_suffix('.png'))
+    if show:
+        plt.show()
+
+def plot_scatter(
+    plot_results: ResultGrid,
+    plot_key: tuple[str, ...],
+    groupby: list[str],
+    title: str,
+    x_label: str,
+    y_label: str,
+    x_eval_mode: str,
+    y_eval_mode: str,
+    get_x: Callable[[ResultGrid], float | np.ndarray],
+    get_y: Callable[[ResultGrid], float | np.ndarray],
+    save_dir: Path | str,
+    save_name: str,
+    prefix: str | None = None,
+    show: bool = True,
+):
+    plt.clf()
+    save_path = get_save_path(
+        plot_key, prefix=prefix, suffix=save_name, save_dir=save_dir)
+
+    groupby = groupby[0] if len(groupby) == 1 else groupby
+    plot_results = group_results(plot_results, groupby=groupby)
+    x_values, y_values = [], []
+    for key in plot_results.keys():
+        results = group_results(plot_results[key], groupby='eval_mode')
+        if x_eval_mode not in results:
+            print(f"No {x_eval_mode} results found for:", plot_key, groupby, key)
+            continue
+        if y_eval_mode not in results:
+            print(f"No {y_eval_mode} results found for:", plot_key, groupby, key)
+            continue
+
+        x = get_x(results[x_eval_mode])
+        y = get_y(results[y_eval_mode])
+        x_values.append(x)
+        y_values.append(y)
+        plt.scatter(x, y, label=key)
+
+    if len(x_values) == 0 or len(y_values) == 0:
+        print("No results found for:", plot_key)
+        return
+
+    # Create CSV file
+    data = np.stack([x_values, y_values], axis=1)
+    df = pd.DataFrame(data, index=plot_results.keys(), columns=[x_label, y_label])
+    df.to_csv(save_path.with_suffix('.csv'), index=True)
 
     # Create figure
     plt.xlabel(x_label)
@@ -249,7 +305,7 @@ def plot_random_concepts_residual(
         random_concept_accuracies,
         random_residual_accuracies,
     ], axis=1)
-    columns = ['Baseline', 'Random Concepts', 'Random Residual']
+    columns = ["Baseline", "Random Concepts", "Random Residual"]
     df = pd.DataFrame(data, columns=columns)
     df.to_csv(save_path.with_suffix('.csv'), index=False)
 
@@ -290,49 +346,23 @@ def plot_disentanglement(
     show : bool
         Whether to show the plot
     """
-    plt.clf()
-    save_path = get_save_path(
-        plot_key, prefix=name, suffix='disentanglement', save_dir=save_dir)
-
-    groupby = groupby[0] if len(groupby) == 1 else groupby
-    plot_results = group_results(plot_results, groupby=groupby)
-    correlations, mutual_infos = [], []
-    for key in plot_results.keys():
-        results = group_results(plot_results[key], groupby="eval_mode")
-        if "correlation" not in results:
-            print("No correlation results found for:", key)
-            continue
-        if "mutual_info" not in results:
-            print("No mutual information results found for:", key)
-            continue
-
-        correlation = np.mean(
-            [
-                result.metrics["mean_abs_cross_correlation"]
-                for result in results["correlation"]
-            ]
-        )
-        mutual_info = np.mean(
-            [result.metrics["mutual_info"] for result in results["mutual_info"]]
-        )
-        correlations.append(correlation)
-        mutual_infos.append(mutual_info)
-        plt.scatter(correlation, mutual_info, label=key)
-
-    # Create CSV file
-    data = np.stack([correlations, mutual_infos], axis=1)
-    columns = ['Mean Absolute Cross-Correlation', 'Mutual Information']
-    df = pd.DataFrame(data, columns=columns)
-    df.to_csv(save_path.with_suffix('.csv'), index=False)
-
-    # Create figure
-    plt.xlabel("Mean Absolute Cross-Correlation")
-    plt.ylabel("Mutual Information")
-    plt.title(f"Disentanglement Metrics: {format_plot_title(plot_key)} {name}")
-    plt.legend()
-    plt.savefig(save_path)
-    if show:
-        plt.show()
+    x_metric, y_metric = 'mean_abs_cross_correlation', 'mutual_info'
+    plot_scatter(
+        plot_results,
+        plot_key,
+        groupby=groupby,
+        title=f"Disentanglement Metrics: {format_plot_title(plot_key)} {name}",
+        x_label="Mean Absolute Cross Correlation",
+        y_label="Mutual Information",
+        x_eval_mode='correlation',
+        y_eval_mode='mutual_info',
+        get_x=lambda results: np.mean([result.metrics[x_metric] for result in results]),
+        get_y=lambda results: np.mean([result.metrics[y_metric] for result in results]),
+        save_dir=save_dir,
+        save_name='disentanglement',
+        prefix=name,
+        show=show,
+    )
 
 def plot_mi_vs_intervention(
     plot_results: ResultGrid,
@@ -343,7 +373,7 @@ def plot_mi_vs_intervention(
     name: str = "",
 ):
     """
-    Plot mutual information vs positive intervention accuracy.
+    Plot intervention accuracy metrics vs disentanglement metrics.
 
     Parameters
     ----------
@@ -358,97 +388,41 @@ def plot_mi_vs_intervention(
     show : bool
         Whether to show the plot
     """
-    save_dir = Path(save_dir)
-    save_dir.mkdir(exist_ok=True, parents=True)
-
-    groupby = groupby[0] if len(groupby) == 1 else groupby
-    plot_results = group_results(plot_results, groupby=groupby)
-    keys = sorted(plot_results.keys())
-
-    baseline_accuracies = []
-    random_concept_accuracies = []
-    random_residual_accuracies = []
-    info = (
-        (baseline_accuracies, "accuracy", "test_acc"),
-        (random_concept_accuracies, "random_concepts", "random_concept_acc"),
-        (random_residual_accuracies, "random_residual", "random_residual_acc"),
-    )
-    cross_corr = []
-    mi_list = []
-    pos_intervention = []
-
-    for key in keys:
-        results = group_results(plot_results[key], groupby="eval_mode")
-        if "correlation" not in results:
-            print("No correlation results found for:", key)
-            continue
-        if "mutual_info" not in results:
-            print("No mutual information results found for:", key)
-            continue
-        if "pos_intervention" not in results:
-            print("No positive intervention results found for:", key)
-            continue
-
-        for collection, eval_mode, metric in info:
-            collection.append(
-                np.mean([result.metrics[metric] for result in results[eval_mode]])
-            )
-
-        correlation = np.mean(
-            [
-                result.metrics["mean_abs_cross_correlation"]
-                for result in results["correlation"]
-            ]
-        )
-
-        accuracies = np.mean(
-            np.stack(
-                [
-                    result.metrics["pos_intervention_accs"]["y"]
-                    for result in results["pos_intervention"]
-                ]
-            ),
-            axis=0,
-        )[-1]
-        pos_intervention.append(accuracies)
-
-        cross_corr.append(correlation)
-        mutual_info = np.mean(
-            [result.metrics["mutual_info"] for result in results["mutual_info"]]
-        )
-        mi_list.append(mutual_info)
-
-    for x_axis_type in ["cross_corr", "mi_list"]:
-        for y_axis_type in [
-            "baseline_accuracies",
-            "random_concept_accuracies",
-            "random_residual_accuracies",
-            "pos_intervention",
-        ]:
-            save_path = get_save_path(
+    x_info = [
+        ("Mean Absolute Cross Correlation", 'correlation', 'mean_abs_cross_correlation'),
+        ("Mutual Information", 'mutual_info', 'mutual_info'),
+    ]
+    y_info = [
+        ("Baseline Accuracy", 'accuracy', 'test_acc'),
+        ("Positive Intervention Accuracy", 'pos_intervention', 'pos_intervention_accs'),
+        ("Accuracy w/ Random Concepts", 'random_concepts', 'random_concept_acc'),
+        ("Accuracy w/ Random Residual", 'random_residual', 'random_residual_acc'),
+    ]
+    for x_label, x_eval_mode, x_metric in x_info:
+        for y_label, y_eval_mode, y_metric in y_info:
+            if y_metric == 'pos_intervention_accs':
+                get_y = lambda results: np.mean(np.stack([
+                    result.metrics[y_metric]['y'] for result in results]), axis=0)[-1]
+            else:
+                get_y = lambda results: np.mean([
+                    result.metrics[y_metric] for result in results])
+            plot_scatter(
+                plot_results,
                 plot_key,
-                prefix=name,
-                suffix=f'{x_axis_type}_vs_{y_axis_type}',
+                groupby=groupby,
+                title=f"{y_label} vs {x_label}\n{format_plot_title(plot_key)} {name}",
+                x_label=x_label,
+                y_label=y_label,
+                x_eval_mode=x_eval_mode,
+                y_eval_mode=y_eval_mode,
+                get_x=lambda results: np.mean([
+                    result.metrics[x_metric] for result in results]),
+                get_y=get_y,
                 save_dir=save_dir,
+                save_name=f'{y_metric}_vs_{x_metric}',
+                prefix=name,
+                show=show,
             )
-
-            # Create CSV file
-            x, y = eval(x_axis_type), eval(y_axis_type)
-            data = np.stack([x, y], axis=1)
-            columns = [x_axis_type, y_axis_type]
-            df = pd.DataFrame(data, columns=columns)
-            df.to_csv(save_path.with_suffix('.csv'), index=False)
-
-            # Create figure
-            plt.clf()
-            plt.scatter(x, y)
-            plt.xlabel(f"{x_axis_type}")
-            plt.ylabel(f"{y_axis_type}")
-            plt.title(f": {format_plot_title((x_axis_type, y_axis_type))} {name}")
-            #plt.legend()
-            plt.savefig(save_path.with_suffix('.png'))
-            if show:
-                plt.show()
 
 
 
@@ -490,17 +464,22 @@ if __name__ == "__main__":
         default=["model_type"],
         help="Config keys to group results on each plot by",
     )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Whether to show the plot(s)",
+    )
 
     args = parser.parse_args()
 
     # Recursively search for 'tuner.pkl' file within the provided directory
     # If multiple are found, use the most recently modified one
-    experiment_paths = Path(args.exp_dir).resolve().glob("**/eval/tuner.pkl")
+    experiment_paths = Path(args.exp_dir).resolve().glob('**/eval/tuner.pkl')
     experiment_path = sorted(experiment_paths, key=os.path.getmtime)[-1].parent.parent
 
     # Load evaluation results
     print("Loading evaluation results from", experiment_path / 'eval')
-    tuner = tune.Tuner.restore(str(experiment_path / "eval"), trainable=evaluate)
+    tuner = tune.Tuner.restore(str(experiment_path / 'eval'), trainable=evaluate)
     results = group_results(tuner.get_results(), groupby=args.plotby)
 
     # Plot results
@@ -510,5 +489,6 @@ if __name__ == "__main__":
                 plot_results,
                 plot_key,
                 groupby=args.groupby,
-                save_dir=experiment_path / "plots",
+                save_dir=experiment_path / 'plots',
+                show=args.show,
             )
