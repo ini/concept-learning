@@ -4,11 +4,9 @@ import os
 import pynvml
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from torch import Tensor
 from torchmetrics import Accuracy
-from typing import Callable
 
 
 
@@ -38,39 +36,6 @@ def accuracy(logits: Tensor, targets: Tensor, task: str = 'multiclass') -> Tenso
             task='multiclass', num_classes=logits.shape[-1]).to(logits.device)
 
     return accuracy_fn(preds, targets)
-
-def random_log_uniform(low: float, high: float, size: int | tuple[int] = ()) -> Tensor:
-    """
-    Sample from a log-uniform distribution.
-
-    Parameters
-    ----------
-    low : float
-        Lower bound
-    high : float
-        Upper bound
-    size : int | tuple[int]
-        Size of the sample
-    """
-    low, high = torch.as_tensor(low).log(), torch.as_tensor(high).log()
-    return torch.exp(torch.rand(size) * (high - low) + low)
-
-def is_sigmoid(fn: Callable) -> bool:
-    """
-    Check if a function is a sigmoid function.
-    """
-    if isinstance(fn, nn.Sigmoid):
-        return True
-
-    return fn in (
-        torch.sigmoid, torch.sigmoid_, F.sigmoid, Tensor.sigmoid, Tensor.sigmoid_)
-
-def logit_fn(probs: Tensor):
-    """
-    Logit function (i.e. inverse sigmoid function).
-    """
-    eps = random_log_uniform(1e-12, 1e-6)
-    return torch.log(probs + eps) - torch.log(1 - probs + eps)
 
 def to_device(
     data: Tensor | tuple[Tensor] | list[Tensor],
@@ -131,6 +96,32 @@ def make_mlp(
 
     pre_input_layer = nn.Flatten() if flatten_input else nn.Identity()
     return nn.Sequential(pre_input_layer, *hidden_layers, nn.LazyLinear(output_dim))
+
+def make_cnn(output_dim: int, cnn_type: str = 'resnet18') -> nn.Module:
+    """
+    Create a convolutional neural network.
+
+    Parameters
+    ----------
+    output_dim : int
+        Dimension of the output
+    cnn_type : str
+        CNN architecture
+    """
+    if cnn_type == 'resnet18':
+        from torchvision.models.resnet import resnet18, ResNet18_Weights
+        model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        model.fc = nn.Linear(model.fc.in_features, output_dim)
+        return model
+
+    elif cnn_type == 'inception_v3':
+        from torchvision.models.inception import inception_v3, Inception_V3_Weights
+        model = inception_v3(weights=Inception_V3_Weights.IMAGENET1K_V1)
+        model.fc = nn.Linear(model.fc.in_features, output_dim)
+        model.aux_logits = False
+        return model
+
+    raise ValueError(f"Unknown CNN type: {cnn_type}")
 
 def cross_correlation(X: Tensor, Y: Tensor):
     """

@@ -445,7 +445,7 @@ def plot_mi_vs_intervention(
             plt.xlabel(f"{x_axis_type}")
             plt.ylabel(f"{y_axis_type}")
             plt.title(f": {format_plot_title((x_axis_type, y_axis_type))} {name}")
-            plt.legend()
+            #plt.legend()
             plt.savefig(save_path.with_suffix('.png'))
             if show:
                 plt.show()

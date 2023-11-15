@@ -12,28 +12,26 @@ import torch
 from argparse import ArgumentParser, Namespace
 from collections import defaultdict
 from copy import deepcopy
+from datetime import datetime
 from inspect import signature
 from pathlib import Path
 from pytorch_lightning.accelerators.mps import MPSAccelerator
 from ray.air import CheckpointConfig, RunConfig, ScalingConfig
 from ray.experimental.tqdm_ray import safe_print
-from ray.train import Checkpoint, Result
 from ray.train.lightning import RayDDPStrategy, RayLightningEnvironment
 from ray.train.torch import TorchTrainer
-from ray.train.trainer import BaseTrainer
-from ray.tune import ExperimentAnalysis, ResultGrid, Trainable, TuneConfig, Tuner
-from ray.tune.execution.experiment_state import _ResumeConfig
+from ray.tune import ResultGrid
 from ray.tune.execution.tune_controller import TuneController
 from ray.tune.experiment import Trial
 from ray.tune.schedulers import FIFOScheduler, TrialScheduler
 from ray.tune.search import SearchAlgorithm, Searcher
 from ray.tune.tuner import TunerInternal
 from tensorboard import program as tensorboard
-from typing import Any, Callable, Iterable, Literal, Type
+from typing import Any, Callable, Iterable, Literal
 
 
 
-def variable_kwargs_fn_wrapper(fn: Callable):
+def variable_kwargs_fn_wrapper(fn: Callable) -> Callable:
     """
     Function wrapper that supports variable keyword arguments.
 
@@ -55,7 +53,9 @@ def variable_kwargs_fn_wrapper(fn: Callable):
 
     return wrapper_fn
 
-def parse_args_dynamic(parser: ArgumentParser) -> tuple[Namespace, dict[str, Any]]:
+def parse_args_dynamic(
+    parser: ArgumentParser = None,
+) -> tuple[Namespace, dict[str, Any]]:
     """
     Parse command-line arguments, and dynamically add any extra arguments
     to a Ray-style configuration dictionary.
@@ -76,6 +76,7 @@ def parse_args_dynamic(parser: ArgumentParser) -> tuple[Namespace, dict[str, Any
     -------
     Python:
     ```
+    parser = argparse.ArgumentParser()
     parser.add_argument('--foo')
     args, config = parse_args_dynamic(parser)
     print('args:', args)
@@ -89,9 +90,12 @@ def parse_args_dynamic(parser: ArgumentParser) -> tuple[Namespace, dict[str, Any
     config: {'other': 1, 'thing': {'grid_search': ['a', 'b', 'c']}}
     ```
     """
+    parser = parser or ArgumentParser()
     args, extra_args_names = parser.parse_known_args()
 
     def infer_type(s: str):
+        if s in ('None', 'True', 'False'):
+            return eval(s)
         try:
             s = float(s)
             if s // 1 == s:
@@ -151,12 +155,11 @@ def configure_gpus(gpu_memory_per_worker: str | int | float) -> float:
                 break
 
     gpu_memory_per_worker = int(gpu_memory_per_worker)
-    devices = os.environ.get('CUDA_VISIBLE_DEVICES', '').split(',')
-    if devices == ['']:
-        devices = range(pynvml.nvmlDeviceGetCount())
+    total_num_gpus = pynvml.nvmlDeviceGetCount()
+    devices = os.environ.get('CUDA_VISIBLE_DEVICES', None)
+    devices = range(total_num_gpus) if devices is None else devices.split(',')
 
     # For each GPU, calculate the number of workers that can fit in memory
-    total_num_gpus = pynvml.nvmlDeviceGetCount()
     num_workers = np.zeros(total_num_gpus)
     for i in devices:
         handle = pynvml.nvmlDeviceGetHandleByIndex(int(i))
@@ -188,7 +191,7 @@ def configure_gpus(gpu_memory_per_worker: str | int | float) -> float:
 
 ### Ray Tune Tuner
 
-def get_internal_tuner(tuner: Tuner | LightningTuner) -> TunerInternal:
+def get_internal_tuner(tuner: ray.tune.Tuner | LightningTuner) -> TunerInternal:
     """
     Get the internal Ray Tune tuner.
 
@@ -202,100 +205,26 @@ def get_internal_tuner(tuner: Tuner | LightningTuner) -> TunerInternal:
 
     return tuner._local_tuner or tuner._remote_tuner
 
-def restore_ray_tuner(
-    path: str | Path,
-    trainable: str | Callable | Type[Trainable] | BaseTrainer,
-    **kwargs,
-) -> Tuner:
-    """
-    Restore Ray Tuner.
-
-    NOTE: This is a patch to prevent the experiment name and storage path
-    from being changed when restoring a tuner. This is necessary because,
-    as of Ray 2.7.1, the Tuner.restore() implementation does not support experiment
-    names specified as subdirectories (i.e. experiment_name = 'exp/train').
-
-    Parameters
-    ----------
-    path : str or Path
-        Experiment directory
-    trainable : str or callable or type[Trainable] or BaseTrainer
-        Trainable to be tuned
-    """
-
-    class RestoredTunerInternal(TunerInternal):
-        """
-        Ray TunerInternal class that wraps the RunConfig to prevent
-        the experiment name and storage path from being changed on restore.
-        """
-
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            if isinstance(self._run_config, RestoredRunConfig):
-                self._run_config = self._run_config.run_config  # unwrap after init
-
-        def _set_trainable_on_restore(self, *args, **kwargs):
-            super()._set_trainable_on_restore(*args, **kwargs)
-            self._run_config = RestoredRunConfig(self._run_config)
-
-    class RestoredRunConfig(RunConfig):
-        """
-        RunConfig wrapper that prevents the experiment name and storage
-        path from being changed.
-        """
-
-        def __init__(self, run_config: RunConfig):
-            self.run_config = run_config
-
-        def __getattribute__(self, name: str) -> Any:
-            if name == 'run_config':
-                return super().__getattribute__(name)
-            else:
-                return getattr(self.run_config, name)
-
-        def __setattr__(self, name: str, value: Any):
-            if name in ('name', 'storage_path'):
-                print(f"{self} cannot set attribute '{name}'")
-            else:
-                super().__setattr__(name, value)
-
-    if not ray.util.client.ray.is_connected():
-        resume_config = _ResumeConfig(
-            resume_unfinished=kwargs.get('resume_unfinished', True),
-            resume_errored=kwargs.get('resume_errored', False),
-            restart_errored=kwargs.get('restart_errored', False),
-        )
-        tuner_internal = RestoredTunerInternal(
-            restore_path=str(path),
-            resume_config=resume_config,
-            trainable=trainable,
-            param_space=kwargs.get('param_space', None),
-            storage_filesystem=kwargs.get('storage_filesystem', None),
-        )
-        return Tuner(_tuner_internal=tuner_internal)
-
-    return Tuner.restore(path, trainable, **kwargs)
-
 
 
 ### Ray Tune Results
 
 def filter_results(
-    filter_fn: Callable[[Result], bool],
+    filter_fn: Callable[[ray.train.Result], bool],
     results: ResultGrid) -> ResultGrid:
     """
     Filter results by a given function.
 
     Parameters
     ----------
-    filter_fn : Callable(Result) -> bool
-        A function that takes a `Result` object and
+    filter_fn : Callable(ray.train.Result) -> bool
+        A function that takes a `ray.train.Result` object and
         returns a boolean indicating whether to keep the result or not
     results : ResultGrid
         Results to filter
     """
     return ResultGrid(
-        ExperimentAnalysis(
+        ray.tune.ExperimentAnalysis(
             results._experiment_analysis.experiment_path,
             storage_filesystem=results._experiment_analysis._fs,
             trials=list(filter(filter_fn, results._experiment_analysis.trials)),
@@ -307,7 +236,7 @@ def filter_results(
 def group_results(
     results: ResultGrid,
     groupby: str | Iterable[str],
-) -> dict[str | tuple[str], ResultGrid]:
+) -> dict[str | tuple[str, ...], ResultGrid]:
     """
     Map each unique combination of config values for keys specified by `groupby`
     to a ResultGrid containing only the results with those config values.
@@ -331,7 +260,7 @@ def group_results(
 
     return {
         group: ResultGrid(
-            ExperimentAnalysis(
+            ray.tune.ExperimentAnalysis(
                 results._experiment_analysis.experiment_path,
                 storage_filesystem=results._experiment_analysis._fs,
                 trials=trials[group],
@@ -463,7 +392,8 @@ class RayCallback(pl.Callback):
         self,
         checkpoint_frequency: int = 1,
         checkpoint_at_end: bool = True,
-        **kwargs):
+        **kwargs,
+    ):
         """
         Parameters
         ----------
@@ -481,7 +411,7 @@ class RayCallback(pl.Callback):
         self,
         trainer: pl.Trainer,
         checkpoint_dir: Path | str,
-    ) -> Checkpoint:
+    ) -> ray.train.Checkpoint:
         """
         Create a checkpoint.
 
@@ -494,7 +424,7 @@ class RayCallback(pl.Callback):
         """
         checkpoint_path = Path(checkpoint_dir, 'checkpoint.pt')
         trainer.save_checkpoint(checkpoint_path)
-        return Checkpoint.from_directory(checkpoint_dir)
+        return ray.train.Checkpoint.from_directory(checkpoint_dir)
 
     def on_train_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         """
@@ -606,13 +536,13 @@ class LightningTuner:
             Ray trial scheduler for executing the experiment (see `ray.tune.schedulers`)
         num_samples : int
             Number of times to sample from the hyperparameter space
-            (if `grid_search` is provided as an argument,
+            (if `grid_search` is provided in the parameter search space,
             the grid will be repeated `num_samples` of times)
         kwargs : Any
             Additional arguments to pass to `ray.tune.TuneConfig()`
         """
         self.tuner = None
-        self.tune_config = TuneConfig(
+        self.tune_config = ray.tune.TuneConfig(
             metric=metric,
             mode=mode,
             search_alg=search_alg,
@@ -626,7 +556,7 @@ class LightningTuner:
         config: dict[str, Any],
         model_creator: Callable[..., pl.LightningModule],
         datamodule_creator: Callable[..., pl.LightningDataModule],
-        callbacks_creator: Callable[..., list[pl.Callback]] = lambda **kwargs: [],
+        callbacks: list[pl.Callback] = [],
         num_workers: int = 1,
     ):
         """
@@ -640,31 +570,45 @@ class LightningTuner:
             Model creator
         datamodule_creator : Callable(**config) -> pl.LightningDataModule
             Data module creator
-        callbacks_creator : Callable(**config) -> list[pl.Callback]
-            Callbacks creator
+        callbacks : list[pl.Callback]
+            List of PyTorch Lightning callbacks
         """
         model_creator = variable_kwargs_fn_wrapper(model_creator)
         datamodule_creator = variable_kwargs_fn_wrapper(datamodule_creator)
-        callbacks_creator = variable_kwargs_fn_wrapper(callbacks_creator)
-        trainer = variable_kwargs_fn_wrapper(pl.Trainer)(
-            accelerator='cpu' if MPSAccelerator.is_available() else 'auto',
-            strategy=RayDDPStrategy(find_unused_parameters=True),
-            devices='auto',
-            num_nodes=num_workers,
-            logger=False, # logging metrics is handled by RayCallback
-            callbacks=[*callbacks_creator(**config), RayCallback(**config)],
-            enable_checkpointing=False, # checkpointing is handled by RayCallback
-            enable_progress_bar=False,
-            plugins=[RayLightningEnvironment()],
+
+        # Create PyTorch Lightning trainer
+        trainer_kwargs = {
+            'accelerator': 'cpu' if MPSAccelerator.is_available() else 'auto',
+            'strategy': RayDDPStrategy(),
+            'devices': 'auto',
+            'num_nodes': num_workers,
+            'logger': False, # logging metrics is handled by RayCallback
+            'callbacks': [*callbacks, RayCallback(**config)],
+            'enable_checkpointing': False, # checkpointing is handled by RayCallback
+            'enable_progress_bar': False,
+            'plugins': [RayLightningEnvironment()],
             **config,
+        }
+        trainer = variable_kwargs_fn_wrapper(pl.Trainer)(**trainer_kwargs)
+
+        # Load checkpoint if available
+        checkpoint = ray.train.get_checkpoint()
+        checkpoint_path = None
+        if checkpoint:
+            with checkpoint.as_directory() as checkpoint_dir:
+                checkpoint_path = Path(checkpoint_dir, 'checkpoint.pt')
+
+        # Train model
+        trainer.fit(
+            model_creator(**config),
+            datamodule_creator(**config),
+            ckpt_path=checkpoint_path,
         )
-        trainer.fit(model_creator(**config), datamodule_creator(**config))
 
     def fit(
         self,
         model_creator: Callable[..., pl.LightningModule],
-        datamodule_creator: Callable[..., pl.LightningDataModule],
-        callbacks_creator: Callable[..., list[pl.Callback]] = lambda **config: [],
+        datamodule_creator: Callable[..., pl.LightningDataModule] | None = None,
         param_space: dict[str, Any] = {},
         save_dir: Path | str = './results',
         experiment_name: str | None = None,
@@ -672,6 +616,7 @@ class LightningTuner:
         num_cpus_per_worker: int = 1,
         num_gpus_per_worker: int = 1 if torch.cuda.is_available() else 0,
         gpu_memory_per_worker: str | int | float | None = None,
+        callbacks: list[pl.Callback] = [],
         tensorboard_port: int = 0,
         groupby: str | Iterable[str] = (),
     ) -> ResultGrid:
@@ -679,29 +624,27 @@ class LightningTuner:
         Train PyTorch Lightning models using Ray Tune.
 
         The `param_space` dictionary specifies the hyperparameter search space over
-        model, data module, and callback creator keyword arguments.
+        model, data module, and trainer keyword arguments.
 
         Hyperparameters that can be specified in `param_space` include:
             * Model creator keyword arguments
             * Data module creator keyword arguments
-            * Callbacks creator keyword arguments
             * PyTorch Lightning `Trainer` keyword arguments
             * 'checkpoint_frequency' (frequency of checkpoints, in epochs)
+            * 'checkpoint_at_end' (whether to checkpoint at the end of training)
 
         Parameters
         ----------
-        model_creator : Callable(**config) -> pl.LightningModule
+        model_creator : Callable(**params) -> pl.LightningModule
             Model creator
-        datamodule_creator : Callable(**config) -> pl.LightningDataModule
+        datamodule_creator : Callable(**params) -> pl.LightningDataModule
             Data module creator
-        callbacks_creator : Callable(**config) -> list[pl.Callback]
-            Callbacks creator
         param_space : dict[str, Any]
             Ray Tune hyperparameter search space
             (see https://docs.ray.io/en/latest/tune/api/search_space.html)
         save_dir : Path or str
             Directory to save results to
-        experiment_name : str or None
+        experiment_name : str
             Name of the experiment (generated automatically if not provided)
         num_workers_per_trial : int
             Number of workers per trial
@@ -712,16 +655,26 @@ class LightningTuner:
         gpu_memory_per_worker : str or int or float
             Amount of GPU memory to allocate to each worker
             (overrides `num_gpus_per_worker`)
+        callbacks : list[pl.Callback]
+            List of PyTorch Lightning callbacks
         tensorboard_port : int
             Port for TensorBoard to visualize results
         groupby : str or Iterable[str]
             Config key(s) to group by
         """
+        datamodule_creator = datamodule_creator or (lambda **config: None)
+
         # Set Ray storage directory
-        if self.tuner is not None:
-            save_dir = get_internal_tuner(self.tuner).get_run_config().storage_path
-        save_dir = Path(save_dir).expanduser().resolve()
-        os.environ.setdefault('RAY_AIR_LOCAL_CACHE_DIR', str(save_dir))
+        if self.tuner is None:
+            date = datetime.today().strftime('%Y-%m-%d_%H_%M_%S')
+            experiment_name = experiment_name or date
+            experiment_dir = Path(save_dir, experiment_name).expanduser().resolve()
+            save_dir, experiment_name = experiment_dir.parent, experiment_dir.name
+            os.environ.setdefault('RAY_AIR_LOCAL_CACHE_DIR', str(save_dir))
+        else:
+            run_config = get_internal_tuner(self.tuner).get_run_config()
+            save_dir, experiment_name = run_config.storage_path, run_config.name
+            os.environ.setdefault('RAY_AIR_LOCAL_CACHE_DIR', str(save_dir))
 
         # Create Ray tuner
         if self.tuner is None:
@@ -731,8 +684,8 @@ class LightningTuner:
                 self.tune_config.scheduler = GroupScheduler(
                     self.tune_config.scheduler or FIFOScheduler(), groupby)
 
-            self.tuner = Tuner(
-                TorchTrainer(lambda config: None), # dummy trainer
+            self.tuner = ray.tune.Tuner(
+                TorchTrainer(lambda train_loop_config: None), # dummy trainer
                 param_space={'train_loop_config': param_space},
                 tune_config=self.tune_config,
                 run_config=RunConfig(
@@ -765,7 +718,7 @@ class LightningTuner:
             config,
             model_creator=model_creator,
             datamodule_creator=datamodule_creator,
-            callbacks_creator=callbacks_creator,
+            callbacks=callbacks,
             num_workers=num_workers_per_trial,
         )
         get_internal_tuner(self.tuner).trainable = TorchTrainer(
@@ -775,7 +728,7 @@ class LightningTuner:
 
         # Launch TensorBoard
         experiment_name = get_internal_tuner(self.tuner).get_run_config().name
-        logdir = str(save_dir / experiment_name)
+        logdir = str(Path(save_dir, experiment_name))
         tb = tensorboard.TensorBoard()
         tb.configure(argv=[None, '--logdir', logdir, '--port', str(tensorboard_port)])
         url = tb.launch()
@@ -787,7 +740,7 @@ class LightningTuner:
     def get_results(
         self,
         groupby: str | Iterable[str] | None = None,
-    ) -> ResultGrid | dict[str | tuple[str], ResultGrid]:
+    ) -> ResultGrid | dict[str | tuple[str, ...], ResultGrid]:
         """
         Get results of a hyperparameter tuning run.
 
@@ -803,7 +756,7 @@ class LightningTuner:
     def load_model(
         self,
         model_creator: Callable[..., pl.LightningModule],
-        result: Result,
+        result: ray.train.Result,
     ) -> pl.LightningModule:
         """
         Load trained model from the given Ray Tune result.
@@ -812,12 +765,12 @@ class LightningTuner:
         ----------
         model_creator : Callable(**config) -> pl.LightningModule
             Model creator
-        result : Result
+        result : ray.train.Result
             Ray Tune result
         """
-        checkpoint_path = result.get_best_checkpoint(
-            self.tune_config.metric, self.tune_config.mode).path
-        checkpoint_path = Path(checkpoint_path, 'checkpoint.pt')
+        metric, mode = self.tune_config.metric, self.tune_config.mode
+        checkpoint = result.get_best_checkpoint(metric, mode) or result.checkpoint
+        checkpoint_path = Path(checkpoint.path, 'checkpoint.pt')
         model_creator = variable_kwargs_fn_wrapper(model_creator)
         model = model_creator(**result.config['train_loop_config'])
         state_dict = torch.load(checkpoint_path)['state_dict']
@@ -825,8 +778,8 @@ class LightningTuner:
         try:
             model.load_state_dict(state_dict, strict=True)
         except Exception as e:
-            print("Loading model failed with strict=True:", e)
-            print("Loading model with strict=False")
+            safe_print("Loading model failed with strict=True:", e)
+            safe_print("Loading model with strict=False")
             model.load_state_dict(state_dict, strict=False)
 
         return model
@@ -848,11 +801,12 @@ class LightningTuner:
         path = Path(path).expanduser().resolve()
         path = path if path.is_dir() else path.parent
         path = sorted(path.glob('**/tuner.pkl'), key=os.path.getmtime)[-1].parent
+        path = str(path)
 
         # Restore tuner
         lightning_tuner = cls.__new__(cls)
-        dummy_trainer = TorchTrainer(lambda config: None)
-        lightning_tuner.tuner = restore_ray_tuner(path, dummy_trainer, **kwargs)
+        dummy_trainer = TorchTrainer(lambda train_loop_config: None)
+        lightning_tuner.tuner = ray.tune.Tuner.restore(path, dummy_trainer, **kwargs)
         lightning_tuner.tune_config = get_internal_tuner(lightning_tuner)._tune_config
 
         return lightning_tuner
