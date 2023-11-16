@@ -48,3 +48,6 @@ local_settings.py
 
 # Environment
 .env
+
+# Extra
+plot_oai.py

@@ -80,6 +80,9 @@ def plot_curves(
     prefix: str | None = None,
     show: bool = True,
 ):
+    """
+    Create a plot with curve(s) for the specified results.
+    """
     plt.clf()
     save_path = get_save_path(
         plot_key, prefix=prefix, suffix=save_name, save_dir=save_dir)
@@ -132,6 +135,9 @@ def plot_scatter(
     show_regression_line: bool = False,
     show: bool = True,
 ):
+    """
+    Create a scatter plot for the specified results.
+    """
     plt.clf()
     save_path = get_save_path(
         plot_key, prefix=prefix, suffix=save_name, save_dir=save_dir)
@@ -418,10 +424,7 @@ def plot_intervention_vs_disentanglement(
         ("Mutual Information", 'mutual_info', 'mutual_info'),
     ]
     y_info = [
-        # ("Baseline Accuracy", 'accuracy', 'test_acc'),
         ("Positive Intervention Accuracy", 'pos_intervention', 'pos_intervention_accs'),
-        # ("Accuracy w/ Random Concepts", 'random_concepts', 'random_concept_acc'),
-        # ("Accuracy w/ Random Residual", 'random_residual', 'random_residual_acc'),
     ]
     for x_label, x_eval_mode, x_metric in x_info:
         for y_label, y_eval_mode, y_metric in y_info:
