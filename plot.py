@@ -310,40 +310,47 @@ def plot_random_concepts_residual(
     plt.clf()
     save_path = get_save_path(plot_key, prefix=name, suffix='random', save_dir=save_dir)
 
-    baseline_accuracies = []
-    random_concept_accuracies = []
-    random_residual_accuracies = []
+    baseline_accs, baseline_stds = [], []
+    random_concept_accs, random_concept_stds = [], []
+    random_residual_accs, random_residual_stds = [], []
 
     # Aggregate results
     groupby = groupby[0] if len(groupby) == 1 else groupby
     plot_results = group_results(plot_results, groupby=groupby)
     info = (
-        (baseline_accuracies, "accuracy", "test_acc"),
-        (random_concept_accuracies, "random_concepts", "random_concept_acc"),
-        (random_residual_accuracies, "random_residual", "random_residual_acc"),
+        (baseline_accs, baseline_stds, "accuracy", "test_acc"),
+        (random_concept_accs, random_concept_stds, "random_concepts", "random_concept_acc"),
+        (random_residual_accs, random_residual_stds, "random_residual", "random_residual_acc"),
     )
     for key in plot_results.keys():
         results = group_results(plot_results[key], groupby="eval_mode")
-        for collection, eval_mode, metric in info:
-            collection.append(
+        for values, stds, eval_mode, metric in info:
+            values.append(
                 np.mean([result.metrics[metric] for result in results[eval_mode]])
+            )
+            stds.append(
+                np.std([result.metrics[metric] for result in results[eval_mode]])
             )
 
     # Create CSV file
     data = np.stack([
-        baseline_accuracies,
-        random_concept_accuracies,
-        random_residual_accuracies,
+        baseline_accs, baseline_stds,
+        random_concept_accs, random_concept_stds,
+        random_residual_accs, random_residual_stds,
     ], axis=1)
-    columns = ["Baseline", "Random Concepts", "Random Residual"]
+    columns = [
+        "Baseline Acc.", "Baseline Std.",
+        "Random Concepts Acc.", "Random Concepts Std.",
+        "Random Residual Acc.", "Random Residual Std.",
+    ]
     df = pd.DataFrame(data, columns=columns)
     df.to_csv(save_path.with_suffix('.csv'), index=False)
 
     # Create figure
     x = np.arange(len(plot_results.keys()))
-    plt.bar(x - 0.25, baseline_accuracies, label="Baseline", width=0.25)
-    plt.bar(x, random_concept_accuracies, label="Random Concepts", width=0.25)
-    plt.bar(x + 0.25, random_residual_accuracies, label="Random Residual", width=0.25)
+    plt.bar(x - 0.25, baseline_accs, label="Baseline", width=0.25)
+    plt.bar(x, random_concept_accs, label="Random Concepts", width=0.25)
+    plt.bar(x + 0.25, random_residual_accs, label="Random Residual", width=0.25)
     plt.xticks(np.arange(len(plot_results.keys())), plot_results.keys())
     plt.ylabel("Classification Accuracy")
     plt.title(f"Random Concepts & Residual: {format_plot_title(plot_key)} {name}")
