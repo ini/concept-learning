@@ -7,7 +7,6 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import ray.train
-import ray.train.context
 
 from copy import deepcopy
 from pathlib import Path
@@ -16,8 +15,8 @@ from ray import air, tune
 from torch import Tensor
 from torch.utils.data import DataLoader
 
+from datasets import DATASET_INFO
 from lightning_ray import LightningTuner
-from loader import DATASET_INFO
 from nn_extensions import Chain
 from models import ConceptLightningModel
 from models.mutual_info import MutualInformationLoss
@@ -90,7 +89,7 @@ def test_interventions(
     test_loader: DataLoader,
     concept_dim: int,
     negative: bool,
-    max_samples=10,
+    max_samples: int = 10,
 ) -> float:
     """
     Test model accuracy with concept interventions.
