@@ -17,11 +17,11 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 
 from lightning_ray import LightningTuner
-from loader import get_datamodule, DATASET_INFO
+from loader import DATASET_INFO
 from nn_extensions import Chain
 from models import ConceptLightningModel
 from models.mutual_info import MutualInformationLoss
-from train import make_concept_model
+from train import make_concept_model, make_datamodule
 from utils import cross_correlation, set_cuda_visible_devices
 
 
@@ -256,7 +256,7 @@ def filter_eval_configs(configs: list[dict]) -> list[dict]:
                 print("Interventions not supported for concept whitening models")
                 continue
 
-        if config['model_type'] == 'no_residual':
+        if config['model_type'] == 'no_residual' or config['residual_dim'] == 0:
             if config['eval_mode'] in ('correlation', 'mutual_info'):
                 print("Correlation / MI metrics not available for no-residual models")
                 continue
@@ -277,12 +277,7 @@ def evaluate(config: dict):
     metrics = {}
 
     # Get data loader
-    test_loader = get_datamodule(
-        config['dataset'],
-        config['data_dir'],
-        batch_size=config['batch_size'],
-        num_workers=0,
-    ).test_dataloader()
+    test_loader = make_datamodule(**config).test_dataloader()
 
     # Load model
     tuner = LightningTuner('val_acc', 'max')

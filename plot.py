@@ -10,6 +10,7 @@ from pathlib import Path
 from ray import tune
 from ray.train import Result
 from ray.tune import ResultGrid
+from tqdm import tqdm
 from typing import Callable
 
 from evaluate import evaluate
@@ -39,6 +40,9 @@ def format_plot_title(plot_key: str | tuple[str, ...] | list[str]) -> str:
         plot_key = plot_key.replace("Mnist", "MNIST")
         plot_key = plot_key.replace("Cifar", "CIFAR")
         plot_key = plot_key.replace("Cub", "CUB")
+        plot_key = plot_key.replace("Oai", "OAI")
+        plot_key = plot_key.replace("Mi Residual", "Mutual Info Residual")
+        plot_key = plot_key.replace("Iter Norm", "IterNorm Residual")
 
     return str(plot_key)
 
@@ -86,7 +90,7 @@ def plot_curves(
     for key, results in plot_results.items():
         results = group_results(results, groupby='eval_mode')
         if eval_mode not in results:
-            print(f"No {eval_mode} results found for:", plot_key, groupby, key)
+            tqdm.write(f"No {eval_mode} results found for: {plot_key} {groupby} {key}")
             continue
 
         x = get_x(results[eval_mode])
@@ -125,6 +129,7 @@ def plot_scatter(
     save_dir: Path | str,
     save_name: str,
     prefix: str | None = None,
+    show_regression_line: bool = False,
     show: bool = True,
 ):
     plt.clf()
@@ -133,30 +138,49 @@ def plot_scatter(
 
     groupby = groupby[0] if len(groupby) == 1 else groupby
     plot_results = group_results(plot_results, groupby=groupby)
-    x_values, y_values = [], []
+    x_values, y_values, index = [], [], []
     for key in plot_results.keys():
         results = group_results(plot_results[key], groupby='eval_mode')
-        if x_eval_mode not in results:
-            print(f"No {x_eval_mode} results found for:", plot_key, groupby, key)
+        if x_eval_mode not in results or np.isnan(get_x(results[x_eval_mode])).any():
+            tqdm.write(f"No {x_eval_mode} results found for: {plot_key} {groupby} {key}")
             continue
-        if y_eval_mode not in results:
-            print(f"No {y_eval_mode} results found for:", plot_key, groupby, key)
+        if y_eval_mode not in results or np.isnan(get_y(results[y_eval_mode])).any():
+            tqdm.write(f"No {y_eval_mode} results found for: {plot_key} {groupby} {key}")
             continue
 
         x = get_x(results[x_eval_mode])
         y = get_y(results[y_eval_mode])
-        x_values.append(x)
-        y_values.append(y)
         plt.scatter(x, y, label=key)
+        if isinstance(x, np.ndarray) and isinstance(y, np.ndarray):
+            x_values.extend(x.flatten())
+            y_values.extend(y.flatten())
+            index += [key] * len(x)
+        else:
+            x_values.append(x)
+            y_values.append(y)
+            index.append(key)
 
     if len(x_values) == 0 or len(y_values) == 0:
-        print("No results found for:", plot_key)
+        tqdm.write(f"No {save_name} results found for: {plot_key}")
         return
 
     # Create CSV file
     data = np.stack([x_values, y_values], axis=1)
-    df = pd.DataFrame(data, index=plot_results.keys(), columns=[x_label, y_label])
+    df = pd.DataFrame(data, index=index, columns=[x_label, y_label])
     df.to_csv(save_path.with_suffix('.csv'), index=True)
+
+    # Add linear regression line
+    if show_regression_line:
+        from scipy.stats import linregress
+        x, y = np.array(x_values), np.array(y_values)
+        m, b, r, _, _ = linregress(x, y)
+        plt.plot(x, m * x + b, color='black')
+        plt.text(
+            x=0.5,
+            y=0.5,
+            s=f"$r^2$ = {r**2:.3f}", transform=plt.gca().transAxes,
+            bbox=dict(facecolor='white', alpha=0.75),
+        )
 
     # Create figure
     plt.xlabel(x_label)
@@ -361,10 +385,11 @@ def plot_disentanglement(
         save_dir=save_dir,
         save_name='disentanglement',
         prefix=name,
+        show_regression_line=False,
         show=show,
     )
 
-def plot_mi_vs_intervention(
+def plot_intervention_vs_disentanglement(
     plot_results: ResultGrid,
     plot_key: str | tuple[str],
     groupby: list[str] = ["model_type"],
@@ -393,34 +418,35 @@ def plot_mi_vs_intervention(
         ("Mutual Information", 'mutual_info', 'mutual_info'),
     ]
     y_info = [
-        ("Baseline Accuracy", 'accuracy', 'test_acc'),
+        # ("Baseline Accuracy", 'accuracy', 'test_acc'),
         ("Positive Intervention Accuracy", 'pos_intervention', 'pos_intervention_accs'),
-        ("Accuracy w/ Random Concepts", 'random_concepts', 'random_concept_acc'),
-        ("Accuracy w/ Random Residual", 'random_residual', 'random_residual_acc'),
+        # ("Accuracy w/ Random Concepts", 'random_concepts', 'random_concept_acc'),
+        # ("Accuracy w/ Random Residual", 'random_residual', 'random_residual_acc'),
     ]
     for x_label, x_eval_mode, x_metric in x_info:
         for y_label, y_eval_mode, y_metric in y_info:
             if y_metric == 'pos_intervention_accs':
-                get_y = lambda results: np.mean(np.stack([
-                    result.metrics[y_metric]['y'] for result in results]), axis=0)[-1]
+                get_y = lambda results: np.stack([
+                    result.metrics[y_metric]['y'][-1] for result in results])
             else:
-                get_y = lambda results: np.mean([
+                get_y = lambda results: np.stack([
                     result.metrics[y_metric] for result in results])
             plot_scatter(
                 plot_results,
                 plot_key,
                 groupby=groupby,
-                title=f"{y_label} vs {x_label}\n{format_plot_title(plot_key)} {name}",
+                title=f"{y_label} vs. {x_label}\n{format_plot_title(plot_key)} {name}",
                 x_label=x_label,
                 y_label=y_label,
                 x_eval_mode=x_eval_mode,
                 y_eval_mode=y_eval_mode,
-                get_x=lambda results: np.mean([
+                get_x=lambda results: np.stack([
                     result.metrics[x_metric] for result in results]),
                 get_y=get_y,
                 save_dir=save_dir,
                 save_name=f'{y_metric}_vs_{x_metric}',
                 prefix=name,
+                show_regression_line=True,
                 show=show,
             )
 
@@ -432,7 +458,7 @@ if __name__ == "__main__":
         "pos_intervention": plot_positive_interventions,
         "random": plot_random_concepts_residual,
         "disentanglement": plot_disentanglement,
-        "plot_mi_vs_intervention": plot_mi_vs_intervention,
+        "intervention_vs_disentanglement": plot_intervention_vs_disentanglement,
     }
 
     parser = argparse.ArgumentParser()
@@ -483,8 +509,8 @@ if __name__ == "__main__":
     results = group_results(tuner.get_results(), groupby=args.plotby)
 
     # Plot results
-    for plot_key, plot_results in results.items():
-        for mode in args.mode:
+    for plot_key, plot_results in tqdm(results.items()):
+        for mode in tqdm(args.mode):
             PLOT_FUNCTIONS[mode](
                 plot_results,
                 plot_key,
