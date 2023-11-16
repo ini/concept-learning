@@ -3,8 +3,7 @@ import ray
 
 from models import ConceptModel, make_bottleneck_layer
 from nn_extensions import Apply
-from ray_utils import process_grid_search_tuples
-from utils import make_cnn, make_mlp
+from utils import make_cnn, make_mlp, process_grid_search_tuples
 
 
 

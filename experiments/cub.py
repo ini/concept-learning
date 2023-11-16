@@ -4,8 +4,7 @@ import torch.nn as nn
 
 from models import ConceptModel, make_bottleneck_layer
 from nn_extensions import Apply
-from ray_utils import process_grid_search_tuples
-from utils import make_cnn
+from utils import make_cnn, process_grid_search_tuples
 
 
 

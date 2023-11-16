@@ -11,8 +11,7 @@ from ray.tune.schedulers import AsyncHyperBandScheduler
 from lightning_ray import LightningTuner, parse_args_dynamic
 from loader import get_concept_loss_fn, get_dummy_batch, get_datamodule, DATASET_INFO
 from models import *
-from ray_utils import RayConfig
-from utils import cross_correlation
+from utils import cross_correlation, RayConfig
 
 
 
