@@ -5,21 +5,9 @@ import torch.nn as nn
 from models import ConceptModel, make_bottleneck_layer
 from nn_extensions import Apply
 from ray_utils import process_grid_search_tuples
-from torchvision.models.inception import inception_v3, Inception_V3_Weights
+from utils import make_cnn
 
 
-
-### Helper Methods
-
-def make_cnn(output_dim: int):
-    model = inception_v3(weights=Inception_V3_Weights.IMAGENET1K_V1)
-    model.fc = nn.Linear(model.fc.in_features, output_dim)
-    model.aux_logits = False
-    return model
-
-
-
-### Experiment Module Methods
 
 def make_concept_model(config: dict) -> ConceptModel:
     num_classes = config['num_classes']
@@ -27,7 +15,7 @@ def make_concept_model(config: dict) -> ConceptModel:
     residual_dim = config['residual_dim']
     bottleneck_dim = concept_dim + residual_dim
     return ConceptModel(
-        base_network=make_cnn(bottleneck_dim),
+        base_network=make_cnn(bottleneck_dim, cnn_type='inception_v3'),
         concept_network=Apply(lambda x: x[..., :concept_dim]),
         residual_network=Apply(lambda x: x[..., concept_dim:]),
         target_network=nn.Linear(bottleneck_dim, num_classes),
@@ -38,19 +26,18 @@ def make_concept_model(config: dict) -> ConceptModel:
 def get_config(**kwargs) -> dict:
     config = {
         ('model_type', 'beta'): ray.tune.grid_search([
-            ('no_residual', 0),
             ('latent_residual', 0),
             ('decorrelated_residual', 10.0),
             ('iter_norm', 0),
             ('mi_residual', 1.0),
         ]),
+        'residual_dim': ray.tune.grid_search([0, 1, 2, 4, 8, 16, 32, 64]),
         'dataset': 'cub',
         'data_dir': os.environ.get('CONCEPT_DATA_DIR', './data'),
         'save_dir': os.environ.get('CONCEPT_SAVE_DIR', './saved'),
         'training_mode': 'independent',
-        'residual_dim': ray.tune.grid_search([0, 1, 2, 4, 8, 16, 32, 64]),
         'num_epochs': 100,
-        'lr': 1e-4,
+        'lr': 3e-4,
         'batch_size': 64,
         'alpha': 1.0,
         'mi_estimator_hidden_dim': 256,
@@ -58,6 +45,7 @@ def get_config(**kwargs) -> dict:
         'cw_alignment_frequency': 20,
         'checkpoint_frequency': 5,
         'gpu_memory_per_worker': '11000 MiB',
+        'strategy': ray.train.lightning.RayDDPStrategy(find_unused_parameters=True),
     }
     config.update(kwargs)
     config = process_grid_search_tuples(config)
