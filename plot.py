@@ -87,7 +87,7 @@ def plot_curves(
     save_path = get_save_path(
         plot_key, prefix=prefix, suffix=save_name, save_dir=save_dir)
 
-    y_values, columns = [], []
+    data, columns = [], []
     groupby = groupby[0] if len(groupby) == 1 else groupby
     plot_results = group_results(plot_results, groupby=groupby)
     for key, results in plot_results.items():
@@ -98,13 +98,14 @@ def plot_curves(
 
         x = get_x(results[eval_mode])
         y = np.stack([get_y(result) for result in results[eval_mode]]).mean(axis=0)
+        y_std = np.stack([get_y(result) for result in results[eval_mode]]).std(axis=0)
         plt.plot(x, y, label=key)
-        y_values.append(y)
-        columns.append(f'{key} {y_label}')
+        data.extend([y, y_std])
+        columns.extend([f'{key} {y_label}', f'{key} {y_label} Std.'])
 
     # Create CSV file
-    x = np.linspace(0, 1, len(y_values[0]))
-    data = np.stack([x, *y_values], axis=1)
+    x = np.linspace(0, 1, len(data[0]))
+    data = np.stack([x, *data], axis=1)
     columns.insert(0, x_label)
     df = pd.DataFrame(data, columns=columns)
     df.to_csv(save_path.with_suffix('.csv'), index=False)
