@@ -1,0 +1,53 @@
+data/
+saved/
+saved_models/
+results/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+dist/
+build/
+eggs/
+*.egg-info/
+*.egg
+MANIFEST
+
+# Installer logs
+pip-log.txt
+
+# Unit test / coverage reports
+htmlcov/
+.coverage
+.tox/
+nosetests.xml
+coverage.xml
+
+# Translations
+*.mo
+
+# Django stuff
+*.log
+local_settings.py
+
+# macOS
+.DS_Store
+
+# Editor/IDE specific files
+.idea/
+.vscode/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Environment
+.env
+
+# Extra
+plot_oai.py
