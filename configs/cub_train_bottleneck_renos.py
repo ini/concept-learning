@@ -1,6 +1,6 @@
 from ray import tune
-from experiments.cifar import (
-    get_config as get_cifar_config,
+from experiments.cub import (
+    get_config as get_cub_config,
     make_concept_model,
 )
 
@@ -9,7 +9,7 @@ def get_config(**kwargs) -> dict:
     experiment_config = {
         "model_type": "no_residual",
         "save_dir": "/data/renos/supervised_concept_learning/",
-        "data_dir": "/data/Datasets/cifar/",
+        "data_dir": "/data/Datasets/cub/",
         "ray_storage_dir": "/data/renos/ray_results/",
         "residual_dim": 0,
         "lr": 1e-4,
@@ -25,5 +25,5 @@ def get_config(**kwargs) -> dict:
         "checkpoint_frequency": 1,
     }
     experiment_config.update(kwargs)
-    experiment_config = get_cifar_config(**experiment_config)
+    experiment_config = get_cub_config(**experiment_config)
     return experiment_config
