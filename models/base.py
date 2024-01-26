@@ -12,14 +12,13 @@ from nn_extensions import VariableKwargs
 from utils import accuracy, unwrap, zero_loss_fn
 
 
-
 ### Typing
 
 ConceptBatch = tuple[tuple[Tensor, Tensor], Tensor]  # ((data, concepts), targets)
 
 
-
 ### Concept Models
+
 
 class ConceptModel(nn.Module):
     """
@@ -52,8 +51,8 @@ class ConceptModel(nn.Module):
         target_network: nn.Module,
         base_network: nn.Module = nn.Identity(),
         bottleneck_layer: nn.Module = nn.Identity(),
-        concept_type: Literal['binary', 'continuous'] = 'binary',
-        training_mode: Literal['independent', 'sequential', 'joint'] = 'independent',
+        concept_type: Literal["binary", "continuous"] = "binary",
+        training_mode: Literal["independent", "sequential", "joint"] = "independent",
         **kwargs,
     ):
         """
@@ -82,6 +81,12 @@ class ConceptModel(nn.Module):
         self.bottleneck_layer = VariableKwargs(bottleneck_layer)
         self.concept_type = concept_type
         self.training_mode = training_mode
+        self.ccm_mode = "" if "ccm_mode" not in kwargs else kwargs["ccm_mode"]
+        self.ccm_network = (
+            None
+            if "ccm_network" not in kwargs
+            else VariableKwargs(kwargs["ccm_network"])
+        )
 
     def forward(
         self,
@@ -108,7 +113,10 @@ class ConceptModel(nn.Module):
         # Get concept logits & residual
         x = self.base_network(x, concepts=concepts)
         concept_logits = self.concept_network(x, concepts=concepts)
-        residual = self.residual_network(x, concepts=concepts)
+        if self.ccm_mode == "ccm_r" or self.ccm_mode == "ccm_eye":
+            residual = self.residual_network(x.detach(), concepts=concepts)
+        else:
+            residual = self.residual_network(x, concepts=concepts)
 
         # Process concept logits & residual via bottleneck layer
         if not isinstance(unwrap(self.bottleneck_layer), nn.Identity):
@@ -117,31 +125,41 @@ class ConceptModel(nn.Module):
             concept_dim, residual_dim = concept_logits.shape[-1], residual.shape[-1]
             concept_logits, residual = x.split([concept_dim, residual_dim], dim=-1)
 
-        # Determine target network input based on training mode
-        concept_preds = self.get_concept_predictions(concept_logits)
-        if self.training and self.training_mode == 'independent':
-            x = torch.cat([concepts, residual], dim=-1)
-        elif self.training and self.training_mode == 'sequential':
-            x = torch.cat([concept_preds.detach(), residual], dim=-1)
-        else:
-            x = torch.cat([concept_preds, residual], dim=-1)
+        if self.ccm_mode == "" or self.ccm_mode == "ccm_eye":
+            # Determine target network input based on training mode
+            concept_preds = self.get_concept_predictions(concept_logits)
+            if self.training and self.training_mode == "independent":
+                x = torch.cat([concepts, residual], dim=-1)
+            elif self.training and self.training_mode == "sequential":
+                x = torch.cat([concept_preds.detach(), residual], dim=-1)
+            else:
+                x = torch.cat([concept_preds, residual], dim=-1)
 
-        # Get target logits
-        target_logits = self.target_network(x, concepts=concepts)
-        return concept_logits, residual, target_logits
+            # Get target logits
+            target_logits = self.target_network(x, concepts=concepts)
+            return concept_logits, residual, target_logits
+        else:
+            if self.ccm_mode == "ccm_r":
+                concept_preds = self.get_concept_predictions(concept_logits)
+                target_one = self.target_network(concept_preds, concepts=concepts)
+                target_two = self.ccm_network(residual, concepts=concepts)
+                target_logits = target_one.detach() + target_two
+                return concept_logits, residual, target_logits
+            else:
+                assert 0, f"{self.ccm_mode} not implemented yet"
 
     def get_concept_predictions(self, concept_logits: Tensor) -> Tensor:
         """
         Compute concept predictions from logits.
         """
-        if self.concept_type == 'binary':
+        if self.concept_type == "binary":
             return concept_logits.sigmoid()
 
         return concept_logits
 
 
-
 ### Concept Models with PyTorch Lightning
+
 
 class ConceptLightningModel(pl.LightningModule):
     """
@@ -174,9 +192,9 @@ class ConceptLightningModel(pl.LightningModule):
         beta : float
             Weight for residual loss
         """
-        if 'concept_dim' in kwargs and kwargs['concept_dim'] == 0:
+        if "concept_dim" in kwargs and kwargs["concept_dim"] == 0:
             concept_loss_fn = None
-        if 'residual_dim' in kwargs and kwargs['residual_dim'] == 0:
+        if "residual_dim" in kwargs and kwargs["residual_dim"] == 0:
             residual_loss_fn = None
 
         super().__init__()
@@ -186,7 +204,7 @@ class ConceptLightningModel(pl.LightningModule):
         self.lr = lr
         self.alpha = alpha
         self.beta = beta
-        self.log_kwargs = {'on_step': False, 'on_epoch': True, 'sync_dist': True}
+        self.log_kwargs = {"on_step": False, "on_epoch": True, "sync_dist": True}
 
     def dummy_pass(self, loader: Iterable[ConceptBatch]):
         """
@@ -228,17 +246,17 @@ class ConceptLightningModel(pl.LightningModule):
         # Concept loss
         concept_loss = self.concept_loss_fn(concept_logits, concepts)
         if concept_loss.requires_grad:
-            self.log('concept_loss', concept_loss, **self.log_kwargs)
+            self.log("concept_loss", concept_loss, **self.log_kwargs)
 
         # Residual loss
         residual_loss = self.residual_loss_fn(residual, concepts)
         if residual_loss.requires_grad:
-            self.log('residual_loss', residual_loss, **self.log_kwargs)
+            self.log("residual_loss", residual_loss, **self.log_kwargs)
 
         # Target loss
         target_loss = F.cross_entropy(target_logits, targets)
         if target_loss.requires_grad:
-            self.log('target_loss', target_loss, **self.log_kwargs)
+            self.log("target_loss", target_loss, **self.log_kwargs)
 
         return target_loss + (self.alpha * concept_loss) + (self.beta * residual_loss)
 
@@ -251,12 +269,12 @@ class ConceptLightningModel(pl.LightningModule):
             optimizer,
             T_max=self.trainer.max_epochs if self.trainer.max_epochs else 100,
         )
-        return {'optimizer': optimizer, 'lr_scheduler': scheduler}
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
     def step(
         self,
         batch: ConceptBatch,
-        split: Literal['train', 'val', 'test'],
+        split: Literal["train", "val", "test"],
     ) -> Tensor:
         """
         Training / validation / test step.
@@ -282,8 +300,8 @@ class ConceptLightningModel(pl.LightningModule):
         self.log(f"{split}_acc", acc, **self.log_kwargs)
 
         # Track concept accuracy
-        if self.concept_model.concept_type == 'binary':
-            concept_acc = accuracy(concept_logits, concepts, task='binary')
+        if self.concept_model.concept_type == "binary":
+            concept_acc = accuracy(concept_logits, concepts, task="binary")
             self.log(f"{split}_concept_acc", concept_acc, **self.log_kwargs)
         else:
             concept_rmse = F.mse_loss(concept_logits, concepts).sqrt()
@@ -302,7 +320,7 @@ class ConceptLightningModel(pl.LightningModule):
         batch_idx : int
             Batch index
         """
-        return self.step(batch, split='train')
+        return self.step(batch, split="train")
 
     def validation_step(self, batch: ConceptBatch, batch_idx: int) -> Tensor:
         """
@@ -315,7 +333,7 @@ class ConceptLightningModel(pl.LightningModule):
         batch_idx : int
             Batch index
         """
-        return self.step(batch, split='val')
+        return self.step(batch, split="val")
 
     def test_step(self, batch: ConceptBatch, batch_idx: int) -> Tensor:
         """
@@ -328,4 +346,4 @@ class ConceptLightningModel(pl.LightningModule):
         batch_idx : int
             Batch index
         """
-        return self.step(batch, split='test')
+        return self.step(batch, split="test")
