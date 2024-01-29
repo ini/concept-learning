@@ -110,12 +110,15 @@ class CCWConceptLightningModel(pl.LightningModule):
 
             # Residual loss
             net_y = self.concept_model.target_network.module
+            if not isinstance(net_y, nn.Linear):
+                net_y = net_y[1]
+
             device = residual.device
             r = torch.cat(
                 [torch.ones(concept_logits.shape[1]), torch.zeros(residual.shape[1])]
             ).to(device)
 
-            residual_loss = EYE(r, net_y[1].weight.abs().sum(0))
+            residual_loss = EYE(r, net_y.weight.abs().sum(0))
             if residual_loss.requires_grad:
                 self.log("residual_loss", residual_loss, **self.log_kwargs)
 
