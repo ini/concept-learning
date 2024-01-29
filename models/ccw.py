@@ -127,6 +127,13 @@ class CCWConceptLightningModel(pl.LightningModule):
             return (
                 target_loss + (self.alpha * concept_loss) + (self.beta * residual_loss)
             )
+        elif self.model_type == "ccm_r":
+            # Target loss
+            target_loss = F.cross_entropy(target_logits, targets)
+            if target_loss.requires_grad:
+                self.log("target_loss", target_loss, **self.log_kwargs)
+
+            return target_loss
         else:
             raise ValueError("Unknown model type:", self.model_type)
 
