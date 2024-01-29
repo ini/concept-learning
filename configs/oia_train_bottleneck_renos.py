@@ -7,7 +7,7 @@ from experiments.oai import (
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": "latent_residual",
+        "model_type": "no_residual",
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/oia/",
         "ray_storage_dir": "/data/renos/ray_results/",

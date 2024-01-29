@@ -14,7 +14,7 @@ def get_config(**kwargs) -> dict:
         "ray_storage_dir": "/data/renos/ray_results/",
         "residual_dim": 8,
         "lr": 1e-4,
-        "num_epochs": 100,
+        "num_epochs": 1000,
         "alpha": 1.0,
         "beta": tune.grid_search([0.001, 0.01, 0.1, 0.5, 1.0]),
         "mi_estimator_hidden_dim": 256,
