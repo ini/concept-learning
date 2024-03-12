@@ -109,9 +109,16 @@ class CCWConceptLightningModel(pl.LightningModule):
                 self.log("concept_loss", concept_loss, **self.log_kwargs)
 
             # Residual loss
-            net_y = self.concept_model.target_network.module
+            # at test time we're chaining an intervetnion here so we need to get the right network
+            if not hasattr(self.concept_model.target_network, "module"):
+                net_y = self.concept_model.target_network[1]
+            else:
+                net_y = self.concept_model.target_network
+
+            net_y = net_y.module
             if not isinstance(net_y, nn.Linear):
                 net_y = net_y[1]
+                print(net_y)
 
             device = residual.device
             r = torch.cat(

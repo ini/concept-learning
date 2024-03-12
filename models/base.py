@@ -9,7 +9,7 @@ from torch.nn import functional as F
 from typing import Any, Callable, Iterable, Literal
 
 from nn_extensions import VariableKwargs
-from utils import accuracy, unwrap, zero_loss_fn
+from utils import accuracy, make_mlp, unwrap, zero_loss_fn, make_cnn
 
 
 ### Typing
@@ -82,11 +82,26 @@ class ConceptModel(nn.Module):
         self.concept_type = concept_type
         self.training_mode = training_mode
         self.ccm_mode = "" if "ccm_mode" not in kwargs else kwargs["ccm_mode"]
-        self.ccm_network = (
-            None
-            if "ccm_network" not in kwargs
-            else VariableKwargs(kwargs["ccm_network"])
-        )
+
+        self.ccm_network = None
+        if self.ccm_mode == "ccm_r":
+            residual_dim = kwargs["real_residual_dim"]
+            if kwargs["dataset"] == "cub":
+                self.res_base_network = VariableKwargs(
+                    make_cnn(residual_dim, cnn_type="inception_v3")
+                )
+            else:
+                self.res_base_network = VariableKwargs(
+                    make_cnn(residual_dim, cnn_type="resnet18")
+                )
+            if kwargs["dataset"] == "oai":
+                num_classes = kwargs["num_classes"]
+                self.ccm_network = VariableKwargs(
+                    make_mlp(num_classes, num_hidden_layers=2, hidden_dim=50)
+                )
+            else:
+                num_classes = kwargs["num_classes"]
+                self.ccm_network = VariableKwargs(nn.Linear(residual_dim, num_classes))
 
     def forward(
         self,
@@ -111,11 +126,13 @@ class ConceptModel(nn.Module):
             Target logits
         """
         # Get concept logits & residual
+        if self.ccm_mode == "ccm_r":
+            residual = self.res_base_network(x, concepts=concepts)
         x = self.base_network(x, concepts=concepts)
         concept_logits = self.concept_network(x, concepts=concepts)
-        if self.ccm_mode == "ccm_r" or self.ccm_mode == "ccm_eye":
+        if self.ccm_mode == "ccm_eye":
             residual = self.residual_network(x.detach(), concepts=concepts)
-        else:
+        elif self.ccm_mode != "ccm_r":
             residual = self.residual_network(x, concepts=concepts)
 
         # Process concept logits & residual via bottleneck layer

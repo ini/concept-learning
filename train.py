@@ -12,6 +12,8 @@ from datasets import get_concept_loss_fn, get_dummy_batch, get_datamodule, DATAS
 from lightning_ray import LightningTuner, parse_args_dynamic
 from models import *
 from utils import cross_correlation, RayConfig
+import torch
+from copy import deepcopy
 
 
 def make_concept_model(**config) -> ConceptLightningModel:
@@ -94,11 +96,31 @@ def make_concept_model(**config) -> ConceptLightningModel:
 
     elif model_type == "ccm_eye":
         # add in the wierd loss function here
+        config = {
+            **config,
+            "ccm_mode": "ccm_eye",
+        }
         model = experiment_module.make_concept_model(config)
         model = CCWConceptLightningModel(model, **config)
     elif model_type == "ccm_r":
-        model = experiment_module.make_concept_model(config)
+        config_new = deepcopy(
+            {
+                **config,
+                "ccm_mode": "ccm_r",
+            }
+        )
+
+        config_new["residual_dim"] = 0
+        config_new["real_residual_dim"] = config["residual_dim"]
+
+        model = experiment_module.make_concept_model(config_new)
+        conceptmodel_pretrained_weights = torch.load(
+            config["pretrained_checkpoint"], map_location="cpu"
+        )["state_dict"]
+
+        print(f"loaded pretrained weights {conceptmodel_pretrained_weights.keys()}")
         model = CCWConceptLightningModel(model, **config)
+        model.load_state_dict(conceptmodel_pretrained_weights, strict=False)
 
     else:
         raise ValueError("Unknown model type:", model_type)

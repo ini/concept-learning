@@ -24,8 +24,8 @@ from train import make_concept_model, make_datamodule
 from utils import cross_correlation, set_cuda_visible_devices
 
 
-
 ### Interventions
+
 
 class Randomize(nn.Module):
     """
@@ -59,13 +59,13 @@ class Intervention(nn.Module):
             concepts = 1 - concepts  # flip binary concepts to opposite values
 
         concept_dim = concepts.shape[-1]
-        idx = torch.randperm(concept_dim)[:self.num_interventions]
+        idx = torch.randperm(concept_dim)[: self.num_interventions]
         x[..., idx] = concepts[..., idx]
         return x
 
 
-
 ### Evaluations
+
 
 def test(model: pl.LightningModule, loader: DataLoader):
     """
@@ -79,10 +79,11 @@ def test(model: pl.LightningModule, loader: DataLoader):
         Test data loader
     """
     trainer = pl.Trainer(
-        accelerator='cpu' if MPSAccelerator.is_available() else 'auto',
+        accelerator="cpu" if MPSAccelerator.is_available() else "auto",
         enable_progress_bar=False,
     )
     return trainer.test(model, loader)[0]
+
 
 def test_interventions(
     model: ConceptLightningModel,
@@ -107,7 +108,9 @@ def test_interventions(
     max_samples : int
         Maximum number of interventions to test (varying the # of concepts intervened on)
     """
-    x = np.linspace(0, concept_dim + 1, num=min(concept_dim + 2, max_samples), dtype=int)
+    x = np.linspace(
+        0, concept_dim + 1, num=min(concept_dim + 2, max_samples), dtype=int
+    )
     y = np.zeros(len(x))
     for i, num_interventions in enumerate(x):
         intervention = Intervention(num_interventions, negative=negative)
@@ -117,9 +120,10 @@ def test_interventions(
             new_model.concept_model.target_network,
         )
         results = test(new_model, test_loader)
-        y[i] = results['test_acc']
+        y[i] = results["test_acc"]
 
-    return {'x': x, 'y': y}
+    return {"x": x, "y": y}
+
 
 def test_random_concepts(
     model: ConceptLightningModel, test_loader: DataLoader
@@ -145,9 +149,11 @@ def test_random_concepts(
 
     new_model = deepcopy(model)
     new_model.concept_model.concept_network = Chain(
-        new_model.concept_model.concept_network, Randomize())
+        new_model.concept_model.concept_network, Randomize()
+    )
     results = test(new_model, test_loader)
-    return results['test_acc']
+    return results["test_acc"]
+
 
 def test_random_residual(
     model: ConceptLightningModel, test_loader: DataLoader
@@ -173,9 +179,11 @@ def test_random_residual(
 
     new_model = deepcopy(model)
     new_model.concept_model.residual_network = Chain(
-        new_model.concept_model.residual_network, Randomize())
+        new_model.concept_model.residual_network, Randomize()
+    )
     results = test(new_model, test_loader)
-    return results['test_acc']
+    return results["test_acc"]
+
 
 def test_correlation(model: ConceptLightningModel, test_loader: DataLoader) -> float:
     """
@@ -195,6 +203,7 @@ def test_correlation(model: ConceptLightningModel, test_loader: DataLoader) -> f
         correlations.append(cross_correlation(concepts, residual).abs().mean().item())
 
     return np.mean(correlations)
+
 
 def test_mutual_info(
     model: ConceptLightningModel,
@@ -236,8 +245,8 @@ def test_mutual_info(
     return np.mean(mutual_infos)
 
 
-
 ### Loading & Execution
+
 
 def filter_eval_configs(configs: list[dict]) -> list[dict]:
     """
@@ -250,19 +259,20 @@ def filter_eval_configs(configs: list[dict]) -> list[dict]:
     """
     configs_to_keep = []
     for config in configs:
-        if config['model_type'] == 'concept_whitening':
-            if config['eval_mode'].endswith('intervention'):
+        if config["model_type"] == "concept_whitening":
+            if config["eval_mode"].endswith("intervention"):
                 print("Interventions not supported for concept whitening models")
                 continue
 
-        if config['model_type'] == 'no_residual' or config['residual_dim'] == 0:
-            if config['eval_mode'] in ('correlation', 'mutual_info'):
+        if config["model_type"] == "no_residual" or config["residual_dim"] == 0:
+            if config["eval_mode"] in ("correlation", "mutual_info"):
                 print("Correlation / MI metrics not available for no-residual models")
                 continue
 
         configs_to_keep.append(config)
 
     return configs_to_keep
+
 
 def evaluate(config: dict):
     """
@@ -279,37 +289,39 @@ def evaluate(config: dict):
     test_loader = make_datamodule(**config).test_dataloader()
 
     # Load model
-    tuner = LightningTuner('val_acc', 'max')
-    model = tuner.load_model(make_concept_model, config['train_result'])
+    tuner = LightningTuner("val_acc", "max")
+    model = tuner.load_model(make_concept_model, config["train_result"])
 
     # Evaluate model
-    if config['eval_mode'] == 'accuracy':
+    if config["eval_mode"] == "accuracy":
         results = test(model, test_loader)
-        for key in ('test_acc', 'test_concept_acc'):
+        for key in ("test_acc", "test_concept_acc"):
             if key in results:
                 metrics[key] = results[key]
 
-    if config['eval_mode'] == 'neg_intervention':
-        concept_dim = DATASET_INFO[config['dataset']]['concept_dim']
-        metrics['neg_intervention_accs'] = test_interventions(
-            model, test_loader, concept_dim, negative=True)
+    if config["eval_mode"] == "neg_intervention":
+        concept_dim = DATASET_INFO[config["dataset"]]["concept_dim"]
+        metrics["neg_intervention_accs"] = test_interventions(
+            model, test_loader, concept_dim, negative=True
+        )
 
-    elif config['eval_mode'] == 'pos_intervention':
-        concept_dim = DATASET_INFO[config['dataset']]['concept_dim']
-        metrics['pos_intervention_accs'] = test_interventions(
-            model, test_loader, concept_dim, negative=False)
+    elif config["eval_mode"] == "pos_intervention":
+        concept_dim = DATASET_INFO[config["dataset"]]["concept_dim"]
+        metrics["pos_intervention_accs"] = test_interventions(
+            model, test_loader, concept_dim, negative=False
+        )
 
-    elif config['eval_mode'] == 'random_concepts':
-        metrics['random_concept_acc'] = test_random_concepts(model, test_loader)
+    elif config["eval_mode"] == "random_concepts":
+        metrics["random_concept_acc"] = test_random_concepts(model, test_loader)
 
-    elif config['eval_mode'] == 'random_residual':
-        metrics['random_residual_acc'] = test_random_residual(model, test_loader)
+    elif config["eval_mode"] == "random_residual":
+        metrics["random_residual_acc"] = test_random_residual(model, test_loader)
 
-    elif config['eval_mode'] == 'correlation':
-        metrics['mean_abs_cross_correlation'] = test_correlation(model, test_loader)
+    elif config["eval_mode"] == "correlation":
+        metrics["mean_abs_cross_correlation"] = test_correlation(model, test_loader)
 
-    elif config['eval_mode'] == 'mutual_info':
-        metrics['mutual_info'] = test_mutual_info(model, test_loader)
+    elif config["eval_mode"] == "mutual_info":
+        metrics["mutual_info"] = test_mutual_info(model, test_loader)
 
     # Report evaluation metrics
     ray.train.report(metrics)
@@ -317,13 +329,13 @@ def evaluate(config: dict):
 
 if __name__ == "__main__":
     MODES = [
-        'accuracy',
-        'neg_intervention',
-        'pos_intervention',
-        'random_concepts',
-        'random_residual',
-        'correlation',
-        'mutual_info',
+        "accuracy",
+        "neg_intervention",
+        "pos_intervention",
+        "random_concepts",
+        "random_residual",
+        "correlation",
+        #'mutual_info',
     ]
 
     parser = argparse.ArgumentParser()
@@ -360,8 +372,8 @@ if __name__ == "__main__":
     experiment_path = sorted(experiment_paths, key=os.path.getmtime)[-1].parent.parent
 
     # Load train results
-    print('Loading training results from', experiment_path / 'train')
-    tuner = LightningTuner.restore(experiment_path / 'train')
+    print("Loading training results from", experiment_path / "train")
+    tuner = LightningTuner.restore(experiment_path / "train")
     if args.all:
         results = tuner.get_results()
     else:
