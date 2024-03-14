@@ -196,7 +196,7 @@ def get_datasets(
     elif dataset_name == "celeba":
         dataset_config = {
             "dataset": "celeba",
-            "root_dir": "data/Datasets/",
+            "root_dir": data_dir,
             "image_size": 64,
             "num_classes": 1000,
             "use_imbalance": True,
