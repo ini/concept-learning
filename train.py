@@ -152,6 +152,7 @@ if __name__ == "__main__":
     # Download datasets (if necessary) before launching Ray Tune
     # Avoids each initial worker trying to download the dataset simultaneously
     dataset_names = config.get("dataset")
+
     if isinstance(dataset_names, dict) and "grid_search" in dataset_names:
         dataset_names = list(dataset_names.values())
     dataset_names = [dataset_names] if isinstance(dataset_names, str) else dataset_names

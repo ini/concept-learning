@@ -31,7 +31,7 @@ def get_config(**kwargs) -> dict:
         #     ('mi_residual', 1.0),
         # ]),
         "residual_dim": ray.tune.grid_search([0, 1, 2, 4, 8, 16, 32, 64]),
-        "dataset": "cub",
+        "dataset": "celeba",
         "data_dir": os.environ.get("CONCEPT_DATA_DIR", "./data"),
         "save_dir": os.environ.get("CONCEPT_SAVE_DIR", "./saved"),
         "training_mode": "independent",

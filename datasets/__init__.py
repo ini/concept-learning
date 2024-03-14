@@ -16,7 +16,7 @@ from .other import MNISTModulo
 from .pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 from .imagenet import ImageNet
 from .celeba import generate_data as celeba_generate_data
-
+from .aa2 import AA2
 
 DATASET_INFO = {
     "mnist_modulo": {"concept_type": "binary", "concept_dim": 5, "num_classes": 10},
@@ -44,7 +44,8 @@ DATASET_INFO = {
     "cub": {"concept_type": "binary", "concept_dim": 112, "num_classes": 200},
     "oai": {"concept_type": "continuous", "concept_dim": 10, "num_classes": 4},
     "imagenet": {"concept_type": "binary", "concept_dim": 65, "num_classes": 1000},
-    "celeba": {"concept_type": "continuous", "concept_dim": 6, "num_classes": 256},
+    "celeba": {"concept_type": "binary", "concept_dim": 6, "num_classes": 256},
+    "aa2": {"concept_type": "binary", "concept_dim": 85, "num_classes": 50},
 }
 
 
@@ -211,6 +212,38 @@ def get_datasets(
         }
         train_dataset, test_dataset, val_dataset = celeba_generate_data(
             dataset_config, dataset_config["root_dir"], split="all"
+        )
+
+    elif dataset_name == "aa2":
+        normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+        )
+
+        transform_train = transforms.Compose(
+            [
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+            ]
+        )
+        transform_test = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                normalize,
+            ]
+        )
+        train_dataset = AA2(
+            root=data_dir,
+            split="train",
+            transform=transform_train,
+            download=True,
+        )
+        test_dataset = AA2(
+            root=data_dir,
+            split="val",
+            transform=transform_test,
+            download=True,
         )
 
     else:
