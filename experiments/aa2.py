@@ -13,7 +13,7 @@ def make_concept_model(config: dict) -> ConceptModel:
     residual_dim = config["residual_dim"]
     bottleneck_dim = concept_dim + residual_dim
     return ConceptModel(
-        base_network=make_cnn(bottleneck_dim, cnn_type="inception_v3"),
+        base_network=make_cnn(bottleneck_dim, cnn_type="resnet18"),
         concept_network=Apply(lambda x: x[..., :concept_dim]),
         residual_network=Apply(lambda x: x[..., concept_dim:]),
         target_network=nn.Linear(bottleneck_dim, num_classes),
