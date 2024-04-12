@@ -171,7 +171,7 @@ def get_datasets(
         )
 
         train_dataset = ImageNet(
-            data_dir,
+            data_dir + "train/",
             transforms.Compose(
                 [
                     transforms.RandomResizedCrop(224),
@@ -182,7 +182,7 @@ def get_datasets(
             ),
         )
         test_dataset = ImageNet(
-            "/data/Datasets/imagenet/val",
+            data_dir + "val/",
             transforms.Compose(
                 [
                     transforms.Resize(256),
