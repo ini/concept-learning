@@ -7,11 +7,17 @@ from experiments.imagenet import (
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": "latent_residual",
+        "model_type": tune.grid_search(
+            [
+                "latent_residual",
+                "decorrelated_residual",
+                "mi_residual",
+            ]
+        ),
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/imagenet/",
         "ray_storage_dir": "/data/renos/ray_results/",
-        "residual_dim": 2,
+        "residual_dim": tune.grid_search([0, 8, 32, 64, 128, 256, 512, 1024]),
         "lr": 1e-4,
         "num_epochs": 100,
         "alpha": 1.0,
@@ -22,9 +28,9 @@ def get_config(**kwargs) -> dict:
         "num_cpus": 8,
         "num_gpus": 1.0,
         "num_samples": 1,
-        "batch_size": 8,
+        "batch_size": 64,
         "checkpoint_frequency": 5,
-        "norm_type": "layer_norm",
+        "norm_type": None,
         "T_whitening": 3,
     }
     experiment_config.update(kwargs)
