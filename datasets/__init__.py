@@ -8,6 +8,7 @@ from torch import Tensor
 from torch.utils.data import Dataset, random_split
 from torchvision import transforms
 from typing import Any
+import os
 
 from .cifar import CIFAR100
 from .cub import CUB
@@ -17,6 +18,7 @@ from .pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 from .imagenet import ImageNet
 from .celeba import generate_data as celeba_generate_data
 from .aa2 import AA2
+from tqdm import tqdm
 
 DATASET_INFO = {
     "mnist_modulo": {"concept_type": "binary", "concept_dim": 5, "num_classes": 10},
@@ -285,6 +287,8 @@ def get_datamodule(
     train_dataset, val_dataset, test_dataset = get_datasets(
         dataset_name, data_dir, resize_oai
     )
+    print("HE HONG")
+    print(num_workers)
     return pl.LightningDataModule.from_datasets(
         train_dataset=train_dataset,
         val_dataset=val_dataset,
@@ -333,16 +337,26 @@ def get_concept_loss_fn(dataset_name: str, data_dir: str) -> nn.BCEWithLogitsLos
         return weighted_mse
 
     else:
-        # Get weighted binary cross entropy loss
-        train_loader = get_datamodule(dataset_name, data_dir).train_dataloader()
-        concept_dim = DATASET_INFO[dataset_name]["concept_dim"]
-        concepts_pos_count = torch.zeros(concept_dim)
-        concepts_neg_count = torch.zeros(concept_dim)
-        for (data, concepts), targets in train_loader:
-            concepts_pos_count += concepts.sum(dim=0)
-            concepts_neg_count += (1 - concepts).sum(dim=0)
+        weights_path = os.path.join(data_dir, "pos_weights.pt")
 
-        pos_weight = concepts_neg_count / (concepts_pos_count + 1e-6)
+        if os.path.exists(weights_path):
+            # Load the pos_weight tensor if it already exists
+            pos_weight = torch.load(weights_path)
+            print("Loaded weights from file.")
+        else:
+            # Get weighted binary cross entropy loss
+            train_loader = get_datamodule(
+                dataset_name, data_dir, num_workers=8
+            ).train_dataloader()
+            concept_dim = DATASET_INFO[dataset_name]["concept_dim"]
+            concepts_pos_count = torch.zeros(concept_dim)
+            concepts_neg_count = torch.zeros(concept_dim)
+            for (data, concepts), targets in tqdm(train_loader):
+                concepts_pos_count += concepts.sum(dim=0)
+                concepts_neg_count += (1 - concepts).sum(dim=0)
+
+            pos_weight = concepts_neg_count / (concepts_pos_count + 1e-6)
+            torch.save(pos_weight, weights_path)
         return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
 

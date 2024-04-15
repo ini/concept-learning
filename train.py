@@ -161,7 +161,10 @@ if __name__ == "__main__":
         dataset_names = list(dataset_names.values())
     dataset_names = [dataset_names] if isinstance(dataset_names, str) else dataset_names
     for dataset_name in dataset_names:
-        get_datamodule(dataset_name, data_dir=config.get("data_dir"))
+        get_datamodule(
+            dataset_name,
+            data_dir=config.get("data_dir"),
+        )
 
     # Create trial scheduler
     scheduler = None
