@@ -73,7 +73,7 @@ class Intervention(nn.Module):
 
 
 ### Evaluations
-from lightning.pytorch.plugins import LightningEnvironment
+from lightning.pytorch.plugins.environments import LightningEnvironment
 
 
 def test(model: pl.LightningModule, loader: DataLoader):
