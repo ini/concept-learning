@@ -1,4 +1,7 @@
 from __future__ import annotations
+from lightning.pytorch.plugins.environments import SLURMEnvironment
+
+SLURMEnvironment.detect = lambda: False
 
 import argparse
 import numpy as np
