@@ -1,5 +1,5 @@
 from __future__ import annotations
-from lightning.pytorch.plugins.environments import SLURMEnvironment
+from lightning.fabric.plugins.environments import SLURMEnvironment
 
 SLURMEnvironment.detect = lambda: False
 
