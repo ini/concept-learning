@@ -9,8 +9,8 @@ from torch.nn import functional as F
 from typing import Any, Callable, Iterable, Literal
 
 from nn_extensions import VariableKwargs
-from utils import accuracy, unwrap, zero_loss_fn
-
+from utils import accuracy, unwrap, zero_loss_fn, remove_prefix, remove_keys_with_prefix
+from .concept_mixture import ConceptMixture
 
 ### Typing
 
@@ -53,6 +53,7 @@ class ConceptModel(nn.Module):
         bottleneck_layer: nn.Module = nn.Identity(),
         concept_type: Literal["binary", "continuous"] = "binary",
         training_mode: Literal["independent", "sequential", "joint"] = "independent",
+        mixer=None,
         **kwargs,
     ):
         """
@@ -74,11 +75,39 @@ class ConceptModel(nn.Module):
             Training mode (see https://arxiv.org/abs/2007.04612)
         """
         super().__init__()
+
+        def freeze_layers_except_final(model, final_layer_name="fc"):
+            """
+            Freezes all layers except the specified final layer.
+
+            Parameters
+            ----------
+            model : nn.Module
+                The network containing layers to freeze.
+            final_layer_name : str
+                The name of the final layer to keep unfrozen.
+            """
+            # Iterate through named parameters in the base network
+            for name, param in model.named_parameters():
+                if (
+                    final_layer_name not in name
+                ):  # Freeze all layers not containing `final_layer_name`
+                    param.requires_grad = False  # Freeze
+                else:
+                    param.requires_grad = True  # Keep final layer unfrozen
+            return model
+
+        if "freeze_backbone" in kwargs and kwargs["freeze_backbone"]:
+            base_network = freeze_layers_except_final(base_network)
+
         self.base_network = VariableKwargs(base_network)
+
         self.concept_network = VariableKwargs(concept_network)
         self.residual_network = VariableKwargs(residual_network)
         self.target_network = VariableKwargs(target_network)
         self.bottleneck_layer = VariableKwargs(bottleneck_layer)
+        self.mixer_model = VariableKwargs(mixer)
+
         self.concept_type = concept_type
         self.training_mode = training_mode
         self.ccm_mode = "" if "ccm_mode" not in kwargs else kwargs["ccm_mode"]
@@ -87,6 +116,36 @@ class ConceptModel(nn.Module):
             if "ccm_network" not in kwargs
             else VariableKwargs(kwargs["ccm_network"])
         )
+        if "base_model_ckpt" in kwargs:
+            checkpoint_path = kwargs["base_model_ckpt"]
+            state_dict = torch.load(checkpoint_path)["state_dict"]
+            prefix_to_remove = "concept_model."
+            modified_state_dict = remove_prefix(state_dict, prefix_to_remove)
+            modified_state_dict = remove_keys_with_prefix(
+                modified_state_dict, "concept_loss_fn"
+            )
+            modified_state_dict = remove_keys_with_prefix(
+                modified_state_dict, "residual_loss_fn"
+            )
+            super().load_state_dict(modified_state_dict, strict=False)
+        if self.training_mode == "semi_independent":
+            concept_dim = kwargs["concept_dim"]
+            residual_dim = kwargs["residual_dim"]
+            self.mixer = ConceptMixture(
+                concept_dim,
+                residual_dim,
+                self.target_network.module,
+                self.mixer_model.module,
+            )
+            # freeze all parameters except self.mixer.mixer_model
+            for name, param in self.named_parameters():
+                if "mixer_model.module" not in name:
+                    param.requires_grad = False
+                else:
+                    param.requires_grad = True
+
+        else:
+            self.mixer = None
 
     def forward(
         self,
@@ -113,6 +172,7 @@ class ConceptModel(nn.Module):
         # Get concept logits & residual
         x = self.base_network(x, concepts=concepts)
         concept_logits = self.concept_network(x, concepts=concepts)
+
         if self.ccm_mode == "ccm_r" or self.ccm_mode == "ccm_eye":
             residual = self.residual_network(x.detach(), concepts=concepts)
         else:
@@ -130,13 +190,41 @@ class ConceptModel(nn.Module):
             concept_preds = self.get_concept_predictions(concept_logits)
             if self.training and self.training_mode == "independent":
                 x = torch.cat([concepts, residual], dim=-1)
+                which = None
             elif self.training and self.training_mode == "sequential":
                 x = torch.cat([concept_preds.detach(), residual], dim=-1)
+                which = None
+            elif self.training and self.training_mode == "semi_independent":
+                # do selective interventions
+                # start by choosing one or the other
+                batch_size = x.shape[0]
+                which = torch.rand(batch_size) > 0.5
+                which = which.to(x.device)
+                which = which.unsqueeze(1).expand(-1, concept_preds.shape[1])
+                hard_maxed_concept_preds = concept_preds  # concept_preds > 0.5
+                concept_joined = hard_maxed_concept_preds * which + concepts * (~which)
+                x = torch.cat([concept_joined.detach(), residual], dim=-1)
             else:
-                x = torch.cat([concept_preds, residual], dim=-1)
+                indices = torch.argmax(concept_preds, dim=-1)
+
+                # Convert these indices to one-hot encoded form
+                # hard_maxed_concept_preds = F.one_hot(
+                #     indices, num_classes=concept_preds.shape[-1]
+                # )
+                hard_maxed_concept_preds = concept_preds  # concept_preds > 0.5
+                x = torch.cat([hard_maxed_concept_preds, residual], dim=-1)
+                if self.training_mode == "semi_independent":
+                    which = (
+                        torch.ones_like(hard_maxed_concept_preds).to(x.device).bool()
+                    )
+                else:
+                    which = None
 
             # Get target logits
-            target_logits = self.target_network(x, concepts=concepts)
+            if self.mixer is not None:
+                target_logits = self.mixer(x, concepts=concepts, which=which)
+            else:
+                target_logits = self.target_network(x, concepts=concepts, which=which)
             return concept_logits, residual, target_logits
         else:
             if self.ccm_mode == "ccm_r":
@@ -174,6 +262,11 @@ class ConceptLightningModel(pl.LightningModule):
         lr: float = 1e-3,
         alpha: float = 1.0,
         beta: float = 1.0,
+        weight_decay=0,
+        lr_step_size=None,
+        lr_gamma=None,
+        lr_scheduler="cosine",
+        chosen_optim="adam",
         **kwargs,
     ):
         """
@@ -205,6 +298,12 @@ class ConceptLightningModel(pl.LightningModule):
         self.alpha = alpha
         self.beta = beta
         self.log_kwargs = {"on_step": False, "on_epoch": True, "sync_dist": True}
+
+        self.weight_decay = weight_decay
+        self.lr_step_size = lr_step_size
+        self.lr_gamma = lr_gamma
+        self.lr_scheduler = lr_scheduler
+        self.chosen_optim = chosen_optim
 
     def dummy_pass(self, loader: Iterable[ConceptBatch]):
         """
@@ -264,11 +363,44 @@ class ConceptLightningModel(pl.LightningModule):
         """
         Configure optimizer and learning rate scheduler.
         """
-        optimizer = torch.optim.Adam(self.concept_model.parameters(), lr=self.lr)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=self.trainer.max_epochs if self.trainer.max_epochs else 100,
-        )
+
+        if self.chosen_optim == "adam":
+            print("here")
+            optimizer = torch.optim.Adam(
+                self.concept_model.parameters(),
+                lr=self.lr,
+                weight_decay=self.weight_decay,
+            )
+        elif self.chosen_optim == "sgd":
+            optimizer = torch.optim.SGD(
+                self.concept_model.parameters(),
+                lr=self.lr,
+                momentum=0.9,
+                weight_decay=self.weight_decay,
+            )
+        else:
+            assert 0, f"{self.chosen_optim} not implemented yet"
+
+        if self.lr_scheduler == "step":
+            scheduler = torch.optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=self.lr_step_size,
+                gamma=self.lr_gamma,
+            )
+        elif self.lr_scheduler == "reduce_on_plateau":
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+            )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": scheduler,
+                "monitor": "val_loss",
+            }
+        else:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=self.trainer.max_epochs if self.trainer.max_epochs else 100,
+            )
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
     def step(
@@ -324,7 +456,7 @@ class ConceptLightningModel(pl.LightningModule):
 
     def validation_step(self, batch: ConceptBatch, batch_idx: int) -> Tensor:
         """
-        Validation step.
+        ValConceptModelidation step.
 
         Parameters
         ----------

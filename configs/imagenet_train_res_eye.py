@@ -7,17 +7,10 @@ from experiments.imagenet import (
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": tune.grid_search(
-            [
-                "latent_residual",
-                "decorrelated_residual",
-                "mi_residual",
-            ]
-        ),
+        "model_type": "ccm_eye",
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/imagenet/",
         "ray_storage_dir": "/data/renos/ray_results/",
-        "training_mode": "semi_independent",
         "residual_dim": 1024,
         "lr": 3e-4,
         # new params
@@ -30,7 +23,7 @@ def get_config(**kwargs) -> dict:
         "num_epochs": 100,
         "freeze_backbone": True,
         "alpha": 1.0,
-        "beta": 1.0,
+        "beta": tune.grid_search([0.001, 0.01, 0.1, 0.5, 1.0]),
         "mi_estimator_hidden_dim": 1024,
         "mi_optimizer_lr": 0.001,
         "cw_alignment_frequency": 20,

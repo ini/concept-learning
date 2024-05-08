@@ -12,8 +12,8 @@ from torchmetrics import Accuracy
 from typing import Any
 
 
-
 ### Torch
+
 
 def zero_loss_fn(*tensors: Tensor):
     """
@@ -21,7 +21,8 @@ def zero_loss_fn(*tensors: Tensor):
     """
     return torch.tensor(0.0, device=tensors[0].device)
 
-def accuracy(logits: Tensor, targets: Tensor, task: str = 'multiclass') -> Tensor:
+
+def accuracy(logits: Tensor, targets: Tensor, task: str = "multiclass") -> Tensor:
     """
     Compute accuracy from logits and targets.
 
@@ -32,19 +33,21 @@ def accuracy(logits: Tensor, targets: Tensor, task: str = 'multiclass') -> Tenso
     targets : Tensor
         Targets
     """
-    if task == 'binary':
+    if task == "binary":
         preds = logits.sigmoid()
-        accuracy_fn = Accuracy(task='binary').to(logits.device)
+        accuracy_fn = Accuracy(task="binary").to(logits.device)
     else:
         preds = logits.argmax(dim=-1)
-        accuracy_fn = Accuracy(
-            task='multiclass', num_classes=logits.shape[-1]).to(logits.device)
+        accuracy_fn = Accuracy(task="multiclass", num_classes=logits.shape[-1]).to(
+            logits.device
+        )
 
     return accuracy_fn(preds, targets)
 
+
 def to_device(
-    data: Tensor | tuple[Tensor] | list[Tensor],
-    device: torch.device | str) -> Tensor | tuple[Tensor] | list[Tensor]:
+    data: Tensor | tuple[Tensor] | list[Tensor], device: torch.device | str
+) -> Tensor | tuple[Tensor] | list[Tensor]:
     """
     Move a tensor or collection of tensors to the given device.
 
@@ -62,7 +65,8 @@ def to_device(
     elif isinstance(data, list):
         return [to_device(x, device) for x in data]
 
-    raise ValueError(f'Unsupported data type: {type(data)}')
+    raise ValueError(f"Unsupported data type: {type(data)}")
+
 
 def unwrap(model: nn.Module) -> nn.Module:
     """
@@ -73,13 +77,16 @@ def unwrap(model: nn.Module) -> nn.Module:
     model : nn.Module
         Model to unwrap
     """
-    return getattr(model, 'module', model)
+    return getattr(model, "module", model)
+
 
 def make_mlp(
     output_dim: int,
     hidden_dim: int = 256,
     num_hidden_layers: int = 2,
-    flatten_input: bool = False) -> nn.Module:
+    flatten_input: bool = False,
+    add_layer_norm: bool = False,
+) -> nn.Module:
     """
     Create a multi-layer perceptron.
 
@@ -98,11 +105,16 @@ def make_mlp(
     for _ in range(num_hidden_layers):
         hidden_layers.append(nn.LazyLinear(hidden_dim))
         hidden_layers.append(nn.ReLU())
+        if add_layer_norm:
+            hidden_layers.append(nn.LayerNorm(hidden_dim))
 
     pre_input_layer = nn.Flatten() if flatten_input else nn.Identity()
     return nn.Sequential(pre_input_layer, *hidden_layers, nn.LazyLinear(output_dim))
 
-def make_cnn(output_dim: int, cnn_type: str = 'resnet18') -> nn.Module:
+
+def make_cnn(
+    output_dim: int, cnn_type: str = "resnet18", load_weights=True
+) -> nn.Module:
     """
     Create a convolutional neural network.
 
@@ -113,20 +125,35 @@ def make_cnn(output_dim: int, cnn_type: str = 'resnet18') -> nn.Module:
     cnn_type : str
         CNN architecture
     """
-    if cnn_type == 'resnet18':
+    if cnn_type == "resnet18":
         from torchvision.models.resnet import resnet18, ResNet18_Weights
-        model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+
+        model = resnet18(
+            weights=ResNet18_Weights.IMAGENET1K_V1 if load_weights else None
+        )
+        model.fc = nn.Linear(model.fc.in_features, output_dim)
+        return model
+    elif cnn_type == "resnet34":
+        from torchvision.models.resnet import resnet34, ResNet34_Weights
+
+        model = resnet34(
+            weights=ResNet34_Weights.IMAGENET1K_V1 if load_weights else None
+        )
         model.fc = nn.Linear(model.fc.in_features, output_dim)
         return model
 
-    elif cnn_type == 'inception_v3':
+    elif cnn_type == "inception_v3":
         from torchvision.models.inception import inception_v3, Inception_V3_Weights
-        model = inception_v3(weights=Inception_V3_Weights.IMAGENET1K_V1)
+
+        model = inception_v3(
+            weights=Inception_V3_Weights.IMAGENET1K_V1 if load_weights else None
+        )
         model.fc = nn.Linear(model.fc.in_features, output_dim)
         model.aux_logits = False
         return model
 
     raise ValueError(f"Unknown CNN type: {cnn_type}")
+
 
 def cross_correlation(X: Tensor, Y: Tensor):
     """
@@ -150,8 +177,8 @@ def cross_correlation(X: Tensor, Y: Tensor):
     return torch.bmm(X.unsqueeze(-1), Y.unsqueeze(1)).mean(dim=0)
 
 
-
 ### CUDA
+
 
 def set_cuda_visible_devices(available_memory_threshold: float):
     """
@@ -178,11 +205,11 @@ def set_cuda_visible_devices(available_memory_threshold: float):
         if memory_info.free / memory_info.total >= available_memory_threshold:
             available_devices.append(i)
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(map(str, available_devices))
-
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, available_devices))
 
 
 ### Ray
+
 
 def process_grid_search_tuples(config: dict):
     """
@@ -221,12 +248,33 @@ def process_grid_search_tuples(config: dict):
 
     # Convert into a grid search over individual config dictionaries
     merge_dicts = lambda dicts: dict(ChainMap(*dicts))
-    config = grid_search([
-        merge_dicts(dict(zip(k, v)) for k, v in reversed(spec.items()))
-        for _, spec in generate_variants(config)
-    ])
+    config = grid_search(
+        [
+            merge_dicts(dict(zip(k, v)) for k, v in reversed(spec.items()))
+            for _, spec in generate_variants(config)
+        ]
+    )
 
     return config
+
+
+def remove_prefix(state_dict, prefix):
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        if key.startswith(prefix):
+            new_key = key[len(prefix) :]
+            new_state_dict[new_key] = value
+        else:
+            new_state_dict[key] = value
+    return new_state_dict
+
+
+def remove_keys_with_prefix(state_dict, prefix):
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        if not key.startswith(prefix):
+            new_state_dict[key] = value
+    return new_state_dict
 
 
 class RayConfig(dict):
@@ -248,17 +296,21 @@ class RayConfig(dict):
         try:
             if key in self:
                 value = self[key]
-                if isinstance(value, dict) and len(value) == 1 and 'grid_search' in value:
-                    return value['grid_search']
+                if (
+                    isinstance(value, dict)
+                    and len(value) == 1
+                    and "grid_search" in value
+                ):
+                    return value["grid_search"]
                 else:
                     return value
 
-            elif 'train_loop_config' in self:
-                return self.get(self['train_loop_config'], key, default=default)
+            elif "train_loop_config" in self:
+                return self.get(self["train_loop_config"], key, default=default)
 
-            elif 'grid_search' in self:
-                values = {item[key] for item in self['grid_search']}
-                assert len(values) == 1, f'Inconsistent values for {key}: {values}'
+            elif "grid_search" in self:
+                values = {item[key] for item in self["grid_search"]}
+                assert len(values) == 1, f"Inconsistent values for {key}: {values}"
                 return next(iter(values))
 
             raise KeyError
@@ -268,7 +320,7 @@ class RayConfig(dict):
             if default is not ...:
                 return default
 
-        raise KeyError(f'Key not found: {key}')
+        raise KeyError(f"Key not found: {key}")
 
     def set(self, key: str, value: Any):
         """
@@ -281,8 +333,8 @@ class RayConfig(dict):
         value : Any
             Config value
         """
-        if 'grid_search' in self:
-            for item in self['grid_search']:
+        if "grid_search" in self:
+            for item in self["grid_search"]:
                 item[key] = value
         else:
             self[key] = value

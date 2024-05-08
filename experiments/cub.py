@@ -5,6 +5,7 @@ import torch.nn as nn
 from models import ConceptModel, make_bottleneck_layer
 from nn_extensions import Apply
 from utils import make_cnn, process_grid_search_tuples
+from models import ConceptMixture
 
 
 def make_concept_model(config: dict) -> ConceptModel:
@@ -12,12 +13,18 @@ def make_concept_model(config: dict) -> ConceptModel:
     concept_dim = config["concept_dim"]
     residual_dim = config["residual_dim"]
     bottleneck_dim = concept_dim + residual_dim
+    training_mode = config.get("training_mode", "independent")
+    if training_mode == "semi_independent":
+        mixer = nn.Linear(concept_dim, num_classes)
+    else:
+        mixer = None
     return ConceptModel(
         base_network=make_cnn(bottleneck_dim, cnn_type="inception_v3"),
         concept_network=Apply(lambda x: x[..., :concept_dim]),
         residual_network=Apply(lambda x: x[..., concept_dim:]),
         target_network=nn.Linear(bottleneck_dim, num_classes),
         bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
+        mixer=mixer,
         **config,
     )
 

@@ -4,6 +4,9 @@ import ray
 from models import ConceptModel, make_bottleneck_layer
 from nn_extensions import Apply
 from utils import make_cnn, make_mlp, process_grid_search_tuples
+from torch import nn
+
+from models import ConceptMixture
 
 
 def make_concept_model(config: dict) -> ConceptModel:
@@ -11,23 +14,33 @@ def make_concept_model(config: dict) -> ConceptModel:
     concept_dim = config["concept_dim"]
     residual_dim = config["residual_dim"]
     cnn_type = config.get("cnn_type", "resnet18")
+    training_mode = config.get("training_mode", "independent")
     bottleneck_dim = concept_dim + residual_dim
 
     if config.get("separate_branches", False):
+        config["freeze_backbone"] = True
         return ConceptModel(
             concept_network=make_cnn(concept_dim, cnn_type=cnn_type),
             residual_network=make_cnn(residual_dim, cnn_type=cnn_type),
-            target_network=make_mlp(num_classes, num_hidden_layers=2, hidden_dim=50),
+            target_network=nn.Linear(bottleneck_dim, num_classes),
             bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
             **config,
         )
 
     else:
+        # config["freeze_backbone"] = True
+        if training_mode == "semi_independent":
+            target_network = ConceptMixture(concept_dim, residual_dim, num_classes)
+        else:
+            target_network = nn.Linear(bottleneck_dim, num_classes)
         return ConceptModel(
-            base_network=make_cnn(bottleneck_dim, cnn_type=cnn_type),
+            base_network=make_cnn(bottleneck_dim, cnn_type=cnn_type, load_weights=True),
             concept_network=Apply(lambda x: x[..., :concept_dim]),
             residual_network=Apply(lambda x: x[..., concept_dim:]),
-            target_network=make_mlp(num_classes, num_hidden_layers=2, hidden_dim=50),
+            target_network=target_network,
+            # make_mlp(
+            #     output_dim=num_classes, hidden_dim=1024, num_hidden_layers=2
+            # ),  # nn.Linear(bottleneck_dim, num_classes),
             bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
             **config,
         )

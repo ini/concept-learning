@@ -30,7 +30,7 @@ def get_config(**kwargs) -> dict:
         "num_samples": 1,
         "batch_size": 8,
         "checkpoint_frequency": 5,
-        "norm_type": tune.grid_search([None, "layer_norm", "iter_norm"]),
+        "norm_type": None,
         "T_whitening": 3,
     }
     experiment_config.update(kwargs)

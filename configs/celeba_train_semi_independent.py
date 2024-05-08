@@ -17,8 +17,9 @@ def get_config(**kwargs) -> dict:
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/celeba/",
         "ray_storage_dir": "/data/renos/ray_results/",
-        "residual_dim": tune.grid_search([2, 4, 8, 32, 64]),
-        "lr": 0.009,
+        "residual_dim": tune.grid_search([32, 64]),
+        "training_mode": "semi_independent",
+        "lr": 0.005,
         "num_epochs": 200,
         "lr_scheduler": "cosine annealing",
         "chosen_optim": "adam",
@@ -29,14 +30,11 @@ def get_config(**kwargs) -> dict:
         "cw_alignment_frequency": 20,
         "num_cpus": 8,
         "num_gpus": 1.0,
-        "num_samples": 5,
-        "batch_size": 512,
+        "num_samples": 1,
+        "batch_size": 256,
         "checkpoint_frequency": 5,
         "norm_type": None,
         "T_whitening": 3,
-        "weight_decay": 4e-6,
-        # "training_mode": "semi_independent",
-        "num_hidden": 0,
     }
     experiment_config.update(kwargs)
     experiment_config = get_celeba_config(**experiment_config)
