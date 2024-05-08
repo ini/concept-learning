@@ -73,7 +73,7 @@ class Intervention(nn.Module):
 
 
 ### Evaluations
-from lightning.pytorch.plugins.environments import SLURMEnvironment
+from lightning.pytorch.plugins import LightningEnvironment
 
 
 def test(model: pl.LightningModule, loader: DataLoader):
@@ -90,7 +90,7 @@ def test(model: pl.LightningModule, loader: DataLoader):
     trainer = pl.Trainer(
         accelerator="cpu" if MPSAccelerator.is_available() else "auto",
         enable_progress_bar=False,
-        plugins=[SLURMEnvironment(auto_requeue=False)],
+        plugins=[LightningEnvironment()],
     )
     return trainer.test(model, loader)[0]
 
