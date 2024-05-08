@@ -89,6 +89,7 @@ def test(model: pl.LightningModule, loader: DataLoader):
     trainer = pl.Trainer(
         accelerator="cpu" if MPSAccelerator.is_available() else "auto",
         enable_progress_bar=False,
+        strategy=RayDDPStrategy(),
         plugins=[RayLightningEnvironment()],
     )
     return trainer.test(model, loader)[0]
