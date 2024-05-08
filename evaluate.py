@@ -1,8 +1,5 @@
 from __future__ import annotations
-from lightning.fabric.plugins.environments import SLURMEnvironment
-
-SLURMEnvironment.detect = lambda: False
-
+from ray.train.lightning import RayDDPStrategy, RayLightningEnvironment
 import argparse
 import numpy as np
 import os
@@ -92,6 +89,7 @@ def test(model: pl.LightningModule, loader: DataLoader):
     trainer = pl.Trainer(
         accelerator="cpu" if MPSAccelerator.is_available() else "auto",
         enable_progress_bar=False,
+        plugins=[RayLightningEnvironment()],
     )
     return trainer.test(model, loader)[0]
 
