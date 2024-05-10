@@ -16,7 +16,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 
 from datasets import DATASET_INFO
-from lightning_ray import LightningTuner
+from lightning_ray import LightningTuner, make_lighting_trainer
 from nn_extensions import Chain
 from models import ConceptLightningModel
 from models.mutual_info import MutualInformationLoss
@@ -73,7 +73,6 @@ class Intervention(nn.Module):
 
 
 ### Evaluations
-from lightning.pytorch.plugins.environments import LightningEnvironment
 
 
 def test(model: pl.LightningModule, loader: DataLoader):
@@ -87,11 +86,12 @@ def test(model: pl.LightningModule, loader: DataLoader):
     loader : DataLoader
         Test data loader
     """
-    trainer = pl.Trainer(
-        accelerator="cpu" if MPSAccelerator.is_available() else "auto",
-        enable_progress_bar=False,
-        plugins=[LightningEnvironment()],
-    )
+    # trainer = pl.Trainer(
+    #     accelerator="cpu" if MPSAccelerator.is_available() else "auto",
+    #     enable_progress_bar=False,
+    # )
+    trainer = make_lighting_trainer()
+
     return trainer.test(model, loader)[0]
 
 

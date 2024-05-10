@@ -830,3 +830,20 @@ class LightningTuner:
         lightning_tuner.tune_config = get_internal_tuner(lightning_tuner)._tune_config
 
         return lightning_tuner
+
+
+def make_lighting_trainer(config: dict[str, Any] = {}):
+    trainer_kwargs = {
+        "accelerator": "cpu" if MPSAccelerator.is_available() else "auto",
+        "strategy": RayDDPStrategy(),
+        "devices": "auto",
+        "num_nodes": 1,
+        "logger": False,  # logging metrics is handled by RayCallback
+        "callbacks": [RayCallback()],
+        "enable_checkpointing": False,  # checkpointing is handled by RayCallback
+        "enable_progress_bar": False,
+        "plugins": [RayLightningEnvironment()],
+        **config,
+    }
+    trainer = variable_kwargs_fn_wrapper(pl.Trainer)(**trainer_kwargs)
+    return trainer
