@@ -12,6 +12,7 @@ from typing import Any, Callable, Iterable, Literal
 from nn_extensions import VariableKwargs
 from utils import accuracy, unwrap, zero_loss_fn
 from .base import ConceptModel
+from nn_extensions import Chain
 
 ### Typing
 
@@ -109,7 +110,11 @@ class CCWConceptLightningModel(pl.LightningModule):
                 self.log("concept_loss", concept_loss, **self.log_kwargs)
 
             # Residual loss
-            net_y = self.concept_model.target_network.module
+            if type(self.concept_model.target_network) == Chain:
+                # If the target network is a Chain, the target network is the first module in the chain
+                net_y = self.concept_model.target_network[1].module
+            else:
+                net_y = self.concept_model.target_network.module
             if not isinstance(net_y, nn.Linear):
                 net_y = net_y[1]
 

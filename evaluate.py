@@ -1,4 +1,8 @@
 from __future__ import annotations
+import os
+
+del os.environ["SLURM_NTASKS"]
+del os.environ["SLURM_JOB_NAME"]
 from ray.train.lightning import RayDDPStrategy, RayLightningEnvironment
 import argparse
 import numpy as np
@@ -16,7 +20,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 
 from datasets import DATASET_INFO
-from lightning_ray import LightningTuner, make_lighting_trainer
+from lightning_ray import LightningTuner
 from nn_extensions import Chain
 from models import ConceptLightningModel
 from models.mutual_info import MutualInformationLoss
@@ -86,12 +90,10 @@ def test(model: pl.LightningModule, loader: DataLoader):
     loader : DataLoader
         Test data loader
     """
-    # trainer = pl.Trainer(
-    #     accelerator="cpu" if MPSAccelerator.is_available() else "auto",
-    #     enable_progress_bar=False,
-    # )
-    trainer = make_lighting_trainer()
-
+    trainer = pl.Trainer(
+        accelerator="cpu" if MPSAccelerator.is_available() else "auto",
+        enable_progress_bar=False,
+    )
     return trainer.test(model, loader)[0]
 
 
