@@ -47,7 +47,7 @@ def make_concept_model(**config) -> ConceptLightningModel:
     model_type = config.get("model_type", "latent_residual")
 
     # Update config with any missing dataset information (e.g. concept_dim, num_classes)
-    if config.get("num_concepts") != -1:
+    if config.get("num_concepts", -1) != -1:
         # edit the numbber of concepts
         DATASET_INFO[config["dataset"]]["concept_dim"] = config["num_concepts"]
         config["concept_dim"] = config["num_concepts"]
