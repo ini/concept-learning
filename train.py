@@ -57,7 +57,9 @@ def make_concept_model(**config) -> ConceptLightningModel:
 
     # Get concept loss function
     config["concept_loss_fn"] = get_concept_loss_fn(
-        config["dataset"], config["data_dir"], num_concepts=config["num_concepts"]
+        config["dataset"],
+        config["data_dir"],
+        num_concepts=config.get("num_concepts", -1),
     )
 
     # No residual
