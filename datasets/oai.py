@@ -15,7 +15,6 @@ from torch.utils.data import Dataset
 from typing import Callable, Literal
 
 
-
 class OAI(Dataset):
     """
     Osteoarthritis Initiative dataset.
@@ -28,26 +27,27 @@ class OAI(Dataset):
     """
 
     C_cols = [
-        'xrosfm',
-        'xrscfm',
-        'xrjsm',
-        'xrostm',
-        'xrsctm',
-        'xrosfl',
-        'xrscfl',
-        'xrjsl',
-        'xrostl',
-        'xrsctl',
+        "xrosfm",
+        "xrscfm",
+        "xrjsm",
+        "xrostm",
+        "xrsctm",
+        "xrosfl",
+        "xrscfl",
+        "xrjsl",
+        "xrostl",
+        "xrsctl",
     ]
 
-    y_cols = ['xrkl']
+    y_cols = ["xrkl"]
 
     def __init__(
         self,
         root: Path | str,
-        split: Literal['train', 'val', 'test'] = 'train',
+        split: Literal["train", "val", "test"] = "train",
         transform: Callable | None = None,
-        processed_data_dir: Path | str = '/data/Datasets/oia_processed/',
+        processed_data_dir: Path | str = "/data/Datasets/oia_processed/",
+        num_concepts: int = -1,
     ):
         """
         Parameters
@@ -74,14 +74,14 @@ class OAI(Dataset):
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         # Reprocess data if necessary
-        self.image_data_path = self.data_dir / f'{split}.h5'
+        self.image_data_path = self.data_dir / f"{split}.h5"
         if not self.image_data_path.exists():
             self.reprocess_dataset(self.data_dir, processed_data_dir, split)
 
         # Get concepts
         _, non_image_data, _ = self.load_non_image_data(split, self.data_dir)
         concepts = non_image_data[self.C_cols].values
-        weight_cols = [f'{col}_loss_class_wt' for col in self.C_cols]
+        weight_cols = [f"{col}_loss_class_wt" for col in self.C_cols]
         self.concepts = OAIConceptTensor(
             torch.as_tensor(concepts),
             not_nan=torch.as_tensor(~np.isnan(concepts)),
@@ -89,19 +89,21 @@ class OAI(Dataset):
         ).float()
 
         # Get data & targets
-        self.data = h5py.File(self.image_data_path, 'r')[split]
+        self.data = h5py.File(self.image_data_path, "r")[split]
         self.targets = non_image_data[self.y_cols].values
         self.targets = torch.as_tensor(self.targets).long().squeeze(1)
+        self.num_concepts = num_concepts
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         img = self.data[idx]
-        img = torch.from_numpy(img).float().unsqueeze(0) # add channel dimension
+        img = torch.from_numpy(img).float().unsqueeze(0)  # add channel dimension
         if self.transform is not None:
             img = self.transform(img)
-
+        if self.num_concepts > 0:
+            return (img, self.concepts[idx][: self.num_concepts]), self.targets[idx]
         return (img, self.concepts[idx]), self.targets[idx]
 
     @staticmethod
@@ -124,7 +126,7 @@ class OAI(Dataset):
         img *= std
         img += mu
         img /= unit
-        img -= 2**15 # uint16 -> int16
+        img -= 2**15  # uint16 -> int16
         img = img.round().astype(np.int16)
 
         # Verify that image is grayscale
@@ -137,7 +139,7 @@ class OAI(Dataset):
     def reprocess_dataset(
         save_dir: Path | str,
         processed_data_dir: Path | str,
-        split: Literal['train', 'val', 'test'],
+        split: Literal["train", "val", "test"],
     ):
         """
         Reprocesses the OAI dataset into a HDF5 file.
@@ -153,27 +155,31 @@ class OAI(Dataset):
             Dataset split to use
         """
         save_dir = Path(save_dir).expanduser().resolve()
-        data_dir = Path(
-            processed_data_dir,
-            split,
-            (
-                'show_both_knees_True_'
-                'downsample_factor_None_'
-                'normalization_method_our_statistics'
-            ),
-        ).expanduser().resolve()
+        data_dir = (
+            Path(
+                processed_data_dir,
+                split,
+                (
+                    "show_both_knees_True_"
+                    "downsample_factor_None_"
+                    "normalization_method_our_statistics"
+                ),
+            )
+            .expanduser()
+            .resolve()
+        )
 
         # Copy non-image data to save directory
-        for filename in ('image_codes.pkl', 'non_image_data.csv'):
+        for filename in ("image_codes.pkl", "non_image_data.csv"):
             shutil.copyfile(data_dir / filename, save_dir / filename)
             shutil.copyfile(data_dir / filename, save_dir / filename)
 
         # Load image paths
-        img_paths = data_dir.glob('*.npy')
-        img_paths = sorted(img_paths, key=lambda p: int(p.stem.strip('image_')))
+        img_paths = data_dir.glob("*.npy")
+        img_paths = sorted(img_paths, key=lambda p: int(p.stem.strip("image_")))
 
         # Process image data
-        with h5py.File(save_dir / f'{split}.h5', 'w') as file:
+        with h5py.File(save_dir / f"{split}.h5", "w") as file:
             # Create dataset
             print(f"Initializing HDF5 {split} dataset ...")
             file.create_dataset(
@@ -194,7 +200,7 @@ class OAI(Dataset):
     @cache
     def load_non_image_data(
         cls,
-        split: Literal['train', 'val', 'test'],
+        split: Literal["train", "val", "test"],
         data_dir: Path | str,
         C_cols: tuple[str] | None = None,
         y_cols: tuple[str] | None = None,
@@ -247,9 +253,9 @@ class OAI(Dataset):
         y_cols = list(cls.y_cols if y_cols is None else y_cols)
 
         # Use the train dataset to compute the transform statistics
-        if transform_statistics is None and split != 'train':
+        if transform_statistics is None and split != "train":
             _, _, transform_statistics = OAI.load_non_image_data(
-                split='train',
+                split="train",
                 data_dir=data_dir,
                 C_cols=tuple(C_cols),
                 y_cols=tuple(y_cols),
@@ -265,22 +271,22 @@ class OAI(Dataset):
             )
 
         non_image_data = pd.read_csv(
-            data_dir / 'non_image_data.csv',
+            data_dir / "non_image_data.csv",
             index_col=0,
             low_memory=False,
         )
 
-        with open(data_dir / 'image_codes.pkl', 'rb') as file:
+        with open(data_dir / "image_codes.pkl", "rb") as file:
             image_codes = pickle.load(file)
 
         if check:
             assert len(non_image_data) == len(image_codes)
             for idx in range(len(non_image_data)):
-                barcode = str(non_image_data.iloc[idx]['barcdbu'])
+                barcode = str(non_image_data.iloc[idx]["barcdbu"])
                 if len(barcode) == 11:
-                    barcode = '0' + barcode
-                side = str(non_image_data.iloc[idx]['side'])
-                code_in_df = barcode + '*' + side
+                    barcode = "0" + barcode
+                side = str(non_image_data.iloc[idx]["side"])
+                code_in_df = barcode + "*" + side
 
                 if image_codes[idx] != code_in_df:
                     raise Exception(
@@ -294,14 +300,14 @@ class OAI(Dataset):
         # with Class = 3 which do not appear in train dataset
         if verbose:
             print("Truncating xrattl")
-        non_image_data['xrattl'] = np.minimum(2, non_image_data['xrattl'])
+        non_image_data["xrattl"] = np.minimum(2, non_image_data["xrattl"])
 
         # Data processing for non-image data
         if merge_klg_01:
             if verbose:
                 print("Merging KLG")
             # Merge KLG 0,1 + Convert KLG scale to [0,3]
-            non_image_data['xrkl'] = np.maximum(0, non_image_data['xrkl'] - 1)
+            non_image_data["xrkl"] = np.maximum(0, non_image_data["xrkl"] - 1)
 
         # Truncate odd decimals
         if truncate_C_floats:
@@ -325,7 +331,7 @@ class OAI(Dataset):
         # Give weights for each class within each attribute,
         # so that it can be used to reweigh the loss
         for variable in C_cols:
-            new_variable = variable + '_loss_class_wt'
+            new_variable = variable + "_loss_class_wt"
             attribute = non_image_data[variable].values
             unique_classes = np.unique(attribute)
             N_total = len(attribute)
@@ -350,16 +356,16 @@ class OAI(Dataset):
                 if transform_statistics is None:
                     std = np.std(y_feats[not_nan, i], ddof=1)
                     mu = np.mean(y_feats[not_nan, i])
-                    new_transform_statistics[y_cols[i]] = {'mu': mu, 'std': std}
+                    new_transform_statistics[y_cols[i]] = {"mu": mu, "std": std}
                 else:
-                    std = transform_statistics[y_cols[i]]['std']
-                    mu = transform_statistics[y_cols[i]]['mu']
+                    std = transform_statistics[y_cols[i]]["std"]
+                    mu = transform_statistics[y_cols[i]]["mu"]
                 if verbose:
                     print(
                         f"Z-scoring additional feature {y_cols[i]}",
                         f"with mean {mu} and std {std}",
                     )
-                non_image_data[f'{y_cols[i]}_original'] = y_feats[:, i]
+                non_image_data[f"{y_cols[i]}_original"] = y_feats[:, i]
                 non_image_data[y_cols[i]] = (y_feats[:, i] - mu) / std
                 y_feats[:, i] = non_image_data[y_cols[i]]
 
@@ -372,16 +378,16 @@ class OAI(Dataset):
                 if transform_statistics is None:
                     std = np.std(C_feats[not_nan, i], ddof=1)
                     mu = np.mean(C_feats[not_nan, i])
-                    new_transform_statistics[C_cols[i]] = {'mu': mu, 'std': std}
+                    new_transform_statistics[C_cols[i]] = {"mu": mu, "std": std}
                 else:
-                    std = transform_statistics[C_cols[i]]['std']
-                    mu = transform_statistics[C_cols[i]]['mu']
+                    std = transform_statistics[C_cols[i]]["std"]
+                    mu = transform_statistics[C_cols[i]]["mu"]
                 if verbose:
                     print(
                         f"Z-scoring additional feature {C_cols[i]}",
                         f"with mean {mu} and std {std}",
                     )
-                non_image_data[f'{C_cols[i]}_original'] = C_feats[:, i]
+                non_image_data[f"{C_cols[i]}_original"] = C_feats[:, i]
                 non_image_data[C_cols[i]] = (C_feats[:, i] - mu) / std
                 C_feats[:, i] = non_image_data[C_cols[i]]
 
@@ -395,19 +401,15 @@ class OAI(Dataset):
         return data_dir, non_image_data, new_transform_statistics
 
 
-
 class OAIConceptTensor(torch.Tensor):
     """
     Tensor subclass with extra attributes.
     """
 
-    EXTRA_ATTRIBUTES = ['not_nan', 'loss_class_wts']
+    EXTRA_ATTRIBUTES = ["not_nan", "loss_class_wts"]
 
     def __new__(cls, *args, **kwargs):
-        obj_kwargs = {
-            k: v for k, v in kwargs.items()
-            if k not in cls.EXTRA_ATTRIBUTES
-        }
+        obj_kwargs = {k: v for k, v in kwargs.items() if k not in cls.EXTRA_ATTRIBUTES}
         obj = super().__new__(cls, *args, **obj_kwargs)
         for attr_name in cls.EXTRA_ATTRIBUTES:
             attr_value = kwargs.get(attr_name, None)
@@ -430,7 +432,7 @@ class OAIConceptTensor(torch.Tensor):
 
         out = super().__torch_function__(func, types, args=args, kwargs=kwargs)
         if isinstance(out, cls):
-            kwargs = {k: v for k, v in kwargs.items() if k != 'out'}
+            kwargs = {k: v for k, v in kwargs.items() if k != "out"}
             for attr_name in cls.EXTRA_ATTRIBUTES:
                 attr_value = super().__torch_function__(
                     func,

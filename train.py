@@ -47,12 +47,17 @@ def make_concept_model(**config) -> ConceptLightningModel:
     model_type = config.get("model_type", "latent_residual")
 
     # Update config with any missing dataset information (e.g. concept_dim, num_classes)
+    if config.get("num_concepts") != -1:
+        # edit the numbber of concepts
+        DATASET_INFO[config["dataset"]]["concept_dim"] = config["num_concepts"]
+        config["concept_dim"] = config["num_concepts"]
+
     dataset_info = DATASET_INFO[config["dataset"]]
     config = {**dataset_info, **config}
 
     # Get concept loss function
     config["concept_loss_fn"] = get_concept_loss_fn(
-        config["dataset"], config["data_dir"]
+        config["dataset"], config["data_dir"], num_concepts=config["num_concepts"]
     )
 
     # No residual
@@ -108,7 +113,9 @@ def make_concept_model(**config) -> ConceptLightningModel:
         raise ValueError("Unknown model type:", model_type)
 
     # Dummy pass to handle any un-initialized parameters
-    batch = get_dummy_batch(config["dataset"], config["data_dir"])
+    batch = get_dummy_batch(
+        config["dataset"], config["data_dir"], config["num_concepts"]
+    )
     model.dummy_pass([batch])
 
     return model
@@ -121,6 +128,7 @@ def make_datamodule(**config) -> pl.LightningDataModule:
         batch_size=config["batch_size"],
         num_workers=int(config.get("num_cpus", 1)) - 1,
         resize_oai=config.get("resize_oai", True),
+        num_concepts=config.get("num_concepts", -1),
     )
 
 

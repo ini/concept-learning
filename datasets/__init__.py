@@ -56,6 +56,7 @@ def get_datasets(
     dataset_name: str,
     data_dir: str,
     resize_oai: bool = True,
+    num_concepts: int = -1,
 ) -> tuple[Dataset, Dataset, Dataset]:
     """
     Get train, validation, and test splits for the given dataset.
@@ -77,6 +78,7 @@ def get_datasets(
         Test dataset
     """
     train_dataset, val_dataset, test_dataset = None, None, None
+    # assert 0, data_dir
 
     if dataset_name == "mnist_modulo":
         train_dataset = MNISTModulo(root=data_dir, train=True)
@@ -164,9 +166,24 @@ def get_datasets(
                 lambda x: x.expand(3, -1, -1),  # expand to 3 channels
             ]
         )
-        train_dataset = OAI(root=data_dir, split="train", transform=transform_train)
-        val_dataset = OAI(root=data_dir, split="val", transform=transform_test)
-        test_dataset = OAI(root=data_dir, split="test", transform=transform_test)
+        train_dataset = OAI(
+            root=data_dir,
+            split="train",
+            transform=transform_train,
+            num_concepts=num_concepts,
+        )
+        val_dataset = OAI(
+            root=data_dir,
+            split="val",
+            transform=transform_test,
+            num_concepts=num_concepts,
+        )
+        test_dataset = OAI(
+            root=data_dir,
+            split="test",
+            transform=transform_test,
+            num_concepts=num_concepts,
+        )
     elif dataset_name == "imagenet":
         normalize = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -269,6 +286,7 @@ def get_datamodule(
     batch_size: int = 64,
     num_workers: int = 0,
     resize_oai: bool = True,
+    num_concepts: int = -1,
 ) -> pl.LightningDataModule:
     """
     Get a LightningDataModule for the specified dataset.
@@ -285,10 +303,8 @@ def get_datamodule(
         Number of workers for the data loaders
     """
     train_dataset, val_dataset, test_dataset = get_datasets(
-        dataset_name, data_dir, resize_oai
+        dataset_name, data_dir, resize_oai, num_concepts
     )
-    print("HE HONG")
-    print(num_workers)
     return pl.LightningDataModule.from_datasets(
         train_dataset=train_dataset,
         val_dataset=val_dataset,
@@ -299,7 +315,9 @@ def get_datamodule(
 
 
 @functools.cache
-def get_dummy_batch(dataset_name: str, data_dir: str) -> tuple[Any, Any]:
+def get_dummy_batch(
+    dataset_name: str, data_dir: str, num_concepts: int
+) -> tuple[Any, Any]:
     """
     Get dummy batch for the specified dataset.
 
@@ -310,12 +328,16 @@ def get_dummy_batch(dataset_name: str, data_dir: str) -> tuple[Any, Any]:
     data_dir : str
         Directory where data is stored (or will be downloaded to)
     """
-    loader = get_datamodule(dataset_name, data_dir).train_dataloader()
+    loader = get_datamodule(
+        dataset_name, data_dir, num_concepts=num_concepts
+    ).train_dataloader()
     return next(iter(loader))
 
 
 @functools.cache
-def get_concept_loss_fn(dataset_name: str, data_dir: str) -> nn.BCEWithLogitsLoss:
+def get_concept_loss_fn(
+    dataset_name: str, data_dir: str, num_concepts: int
+) -> nn.BCEWithLogitsLoss:
     """
     Get BCE concept loss function for the specified dataset.
 
@@ -346,7 +368,7 @@ def get_concept_loss_fn(dataset_name: str, data_dir: str) -> nn.BCEWithLogitsLos
         else:
             # Get weighted binary cross entropy loss
             train_loader = get_datamodule(
-                dataset_name, data_dir, num_workers=8
+                dataset_name, data_dir, num_workers=8, num_concepts=num_concepts
             ).train_dataloader()
             concept_dim = DATASET_INFO[dataset_name]["concept_dim"]
             concepts_pos_count = torch.zeros(concept_dim)
