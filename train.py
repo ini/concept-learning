@@ -116,7 +116,7 @@ def make_concept_model(**config) -> ConceptLightningModel:
 
     # Dummy pass to handle any un-initialized parameters
     batch = get_dummy_batch(
-        config["dataset"], config["data_dir"], config["num_concepts"]
+        config["dataset"], config["data_dir"], config.get("num_concepts", -1)
     )
     model.dummy_pass([batch])
 
