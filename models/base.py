@@ -11,6 +11,7 @@ from typing import Any, Callable, Iterable, Literal
 from nn_extensions import VariableKwargs
 from utils import accuracy, unwrap, zero_loss_fn, remove_prefix, remove_keys_with_prefix
 from .concept_mixture import ConceptMixture
+from nn_extensions import Chain
 
 ### Typing
 
@@ -265,6 +266,8 @@ class ConceptLightningModel(pl.LightningModule):
         weight_decay=0,
         lr_step_size=None,
         lr_gamma=None,
+        reg_type=None,
+        reg_gamma: float = 1.0,
         lr_scheduler="cosine",
         chosen_optim="adam",
         **kwargs,
@@ -302,6 +305,8 @@ class ConceptLightningModel(pl.LightningModule):
         self.weight_decay = weight_decay
         self.lr_step_size = lr_step_size
         self.lr_gamma = lr_gamma
+        self.reg_type = reg_type
+        self.reg_gamma = reg_gamma
         self.lr_scheduler = lr_scheduler
         self.chosen_optim = chosen_optim
 
@@ -352,12 +357,35 @@ class ConceptLightningModel(pl.LightningModule):
         if residual_loss.requires_grad:
             self.log("residual_loss", residual_loss, **self.log_kwargs)
 
+        # Regularization loss
+        if self.reg_type == "l1":
+            if type(self.concept_model.target_network) == Chain:
+                # If the target network is a Chain, the target network is the first module in the chain
+                net_y = self.concept_model.target_network[1].module
+            else:
+                net_y = self.concept_model.target_network.module
+            if not isinstance(net_y, nn.Linear):
+                net_y = net_y[1]
+            A = net_y.weight.abs().sum(0)
+
+            def compute_l1_loss(w):
+                return torch.abs(w).sum()
+
+            reg_loss = compute_l1_loss(A)
+        else:
+            reg_loss = 0.0
+
         # Target loss
         target_loss = F.cross_entropy(target_logits, targets)
         if target_loss.requires_grad:
             self.log("target_loss", target_loss, **self.log_kwargs)
 
-        return target_loss + (self.alpha * concept_loss) + (self.beta * residual_loss)
+        return (
+            target_loss
+            + (self.alpha * concept_loss)
+            + (self.beta * residual_loss)
+            + (self.reg_gamma * reg_loss)
+        )
 
     def configure_optimizers(self) -> dict[str, Any]:
         """
