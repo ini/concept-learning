@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from lib.ccw import EYE
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -372,6 +373,20 @@ class ConceptLightningModel(pl.LightningModule):
                 return torch.abs(w).sum()
 
             reg_loss = compute_l1_loss(A)
+
+        elif self.reg_type == "eye":
+            if type(self.concept_model.target_network) == Chain:
+                # If the target network is a Chain, the target network is the first module in the chain
+                net_y = self.concept_model.target_network[1].module
+            else:
+                net_y = self.concept_model.target_network.module
+            if not isinstance(net_y, nn.Linear):
+                net_y = net_y[1]
+            device = residual.device
+            r = torch.cat(
+                [torch.ones(concept_logits.shape[1]), torch.zeros(residual.shape[1])]
+            ).to(device)
+            reg_loss = EYE(r, net_y.weight.abs().mean(0))
         else:
             reg_loss = 0.0
 
@@ -393,7 +408,6 @@ class ConceptLightningModel(pl.LightningModule):
         """
 
         if self.chosen_optim == "adam":
-            print("here")
             optimizer = torch.optim.Adam(
                 self.concept_model.parameters(),
                 lr=self.lr,

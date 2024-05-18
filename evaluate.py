@@ -1,8 +1,12 @@
 from __future__ import annotations
 import os
 
-del os.environ["SLURM_NTASKS"]
-del os.environ["SLURM_JOB_NAME"]
+# make sure slurm isn't exposed
+if "SLURM_NTASKS" in os.environ:
+    del os.environ["SLURM_NTASKS"]
+
+if "SLURM_JOB_NAME" in os.environ:
+    del os.environ["SLURM_JOB_NAME"]
 from ray.train.lightning import RayDDPStrategy, RayLightningEnvironment
 import argparse
 import numpy as np

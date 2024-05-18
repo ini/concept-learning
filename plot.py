@@ -56,7 +56,7 @@ def get_save_path(
     """
     Get the save path for the given plot.
     """
-    items = [str(key) for key in plot_key]
+    items = [str(key).replace(".", "_") for key in plot_key]
     if prefix:
         items.insert(0, prefix)
     if suffix:
@@ -510,8 +510,8 @@ if __name__ == "__main__":
         "neg_intervention": plot_negative_interventions,
         "pos_intervention": plot_positive_interventions,
         "random": plot_random_concepts_residual,
-        "disentanglement": plot_disentanglement,
-        "intervention_vs_disentanglement": plot_intervention_vs_disentanglement,
+        # "disentanglement": plot_disentanglement,
+        # "intervention_vs_disentanglement": plot_intervention_vs_disentanglement,
     }
 
     parser = argparse.ArgumentParser()
