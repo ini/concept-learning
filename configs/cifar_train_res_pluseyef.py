@@ -26,7 +26,7 @@ def get_config(**kwargs) -> dict:
         "mi_optimizer_lr": 0.001,
         "cw_alignment_frequency": 20,
         "num_gpus": 0.15,
-        "num_samples": 1,
+        "num_samples": 5,
         "batch_size": 64,
         "checkpoint_frequency": 5,
         "reg_type": "eye",
