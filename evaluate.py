@@ -62,22 +62,14 @@ class Intervention(nn.Module):
         self.num_interventions = num_interventions
         self.negative = negative
 
-    def forward(self, x: Tensor, concepts: Tensor, which=None):
+    def forward(self, x: Tensor, concepts: Tensor):
         if self.negative:
             concepts = 1 - concepts  # flip binary concepts to opposite values
 
         concept_dim = concepts.shape[-1]
         idx = torch.randperm(concept_dim)[: self.num_interventions]
         x[..., idx] = concepts[..., idx]
-        if which is None:
-            return x
-        else:
-            new_which = torch.ones_like(which, device=x.device)
-            new_which[..., idx] = 0
-
-            # avg = 1 - new_which.float().mean(-1).mean()
-            # assert 0, f"Average number of concepts intervened on: {avg}"
-            return x, concepts, new_which
+        return x
 
 
 ### Evaluations
@@ -130,19 +122,15 @@ def test_interventions(
     # x = x[::-1]
     y = np.zeros(len(x))
     for i, num_interventions in enumerate(x):
-        intervention = Intervention(num_interventions, negative=negative)
+        # intervention = Intervention(num_interventions, negative=negative)
         new_model = deepcopy(model)
+        new_model.num_test_interventions = num_interventions
+        new_model.concept_model.negative_intervention = negative
 
-        if new_model.concept_model.mixer is not None:
-            new_model.concept_model.mixer = Chain(
-                intervention,
-                new_model.concept_model.mixer,
-            )
-        else:
-            new_model.concept_model.target_network = Chain(
-                intervention,
-                new_model.concept_model.target_network,
-            )
+        # new_model.concept_model.target_network = Chain(
+        #     intervention,
+        #     new_model.concept_model.target_network,
+        # )
         results = test(new_model, test_loader)
         y[i] = results["test_acc"]
 
@@ -358,7 +346,7 @@ if __name__ == "__main__":
         "pos_intervention",
         "random_concepts",
         "random_residual",
-        "correlation",
+        # "correlation",
         # "mutual_info",
     ]
 
@@ -387,10 +375,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num-gpus", type=float, default=1, help="Number of GPUs to use (per model)"
     )
-    parser.add_argument(
-        "--evaluate-mixer", action="store_true", help="Evaluate mixer models"
-    )
-
     args = parser.parse_args()
 
     # Recursively search for 'tuner.pkl' file within the provided directory
@@ -399,7 +383,7 @@ if __name__ == "__main__":
     experiment_path = sorted(experiment_paths, key=os.path.getmtime)[-1].parent.parent
 
     # Load train results
-    train_folder = "train" if not args.evaluate_mixer else "train_mixer"
+    train_folder = "train"
     print("Loading training results from", experiment_path / train_folder)
     tuner = LightningTuner.restore(experiment_path / train_folder)
     if args.all:
@@ -429,7 +413,7 @@ if __name__ == "__main__":
         set_cuda_visible_devices(available_memory_threshold=args.num_gpus)
 
     # Run evaluations
-    eval_folder = "eval" if not args.evaluate_mixer else "eval_mixer"
+    eval_folder = "eval"
     tuner = tune.Tuner(
         tune.with_resources(
             evaluate,
