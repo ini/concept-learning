@@ -12,6 +12,7 @@ import numpy as np
 import os
 import torch
 import torchvision
+from open_clip import create_model_and_transforms
 
 from pathlib import Path
 from pytorch_lightning import seed_everything
@@ -190,11 +191,20 @@ def generate_data(
             hidden_concepts = []
         logging.debug(f"Selecting concepts: {concept_idxs}")
         logging.debug(f"\tAnd hidden concepts: {hidden_concepts}")
-        celeba_train_data = torchvision.datasets.CelebA(
-            root=root_dir,
-            split="all",
-            download=True,
-            transform=transforms.Compose(
+
+        if config.get("backbone") == "dfn2b_clip_vit_b_16":
+            _, _, preprocess = create_model_and_transforms(
+                "hf-hub:apple/DFN2B-CLIP-ViT-B-16"
+            )
+            transform = transforms.Compose(
+                [
+                    transforms.Resize(config["image_size"]),
+                    transforms.CenterCrop(config["image_size"]),
+                    preprocess,
+                ]
+            )
+        else:
+            transform = transforms.Compose(
                 [
                     transforms.Resize(config["image_size"]),
                     transforms.CenterCrop(config["image_size"]),
@@ -202,7 +212,12 @@ def generate_data(
                     transforms.ConvertImageDtype(torch.float32),
                     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                 ]
-            ),
+            )
+        celeba_train_data = torchvision.datasets.CelebA(
+            root=root_dir,
+            split="all",
+            download=True,
+            transform=transform,
             target_transform=lambda x: [
                 torch.tensor(
                     _binarize(
@@ -237,15 +252,7 @@ def generate_data(
             root=root_dir,
             split="all",
             download=True,
-            transform=transforms.Compose(
-                [
-                    transforms.Resize(config["image_size"]),
-                    transforms.CenterCrop(config["image_size"]),
-                    transforms.ToTensor(),
-                    transforms.ConvertImageDtype(torch.float32),
-                    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                ]
-            ),
+            transform=transform,
             target_transform=lambda x: [
                 torch.tensor(
                     label_remap[
@@ -314,11 +321,20 @@ def generate_data(
             label_remap[label] = i
 
         # Now reload by transform the labels accordingly
-        celeba_train_data = torchvision.datasets.CelebA(
-            root=root_dir,
-            split="all",
-            download=True,
-            transform=transforms.Compose(
+        if config.get("backbone") == "dfn2b_clip_vit_b_16":
+            _, _, preprocess = create_model_and_transforms(
+                "hf-hub:apple/DFN2B-CLIP-ViT-B-16"
+            )
+            transform = transforms.Compose(
+                [
+                    transforms.Resize(config["image_size"]),
+                    transforms.CenterCrop(config["image_size"]),
+                    preprocess,
+                ]
+            )
+            assert 0, "here"
+        else:
+            transform = transforms.Compose(
                 [
                     transforms.Resize(config["image_size"]),
                     transforms.CenterCrop(config["image_size"]),
@@ -326,7 +342,13 @@ def generate_data(
                     transforms.ConvertImageDtype(torch.float32),
                     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                 ]
-            ),
+            )
+
+        celeba_train_data = torchvision.datasets.CelebA(
+            root=root_dir,
+            split="all",
+            download=True,
+            transform=transform,
             target_transform=lambda x: [
                 torch.tensor(
                     # If it is not in our map, then we make it be the token

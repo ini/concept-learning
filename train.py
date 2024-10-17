@@ -58,6 +58,7 @@ def make_concept_model(**config) -> ConceptLightningModel:
         config["dataset"],
         config["data_dir"],
         num_concepts=config.get("num_concepts", -1),
+        backbone=config.get("backbone", "resnet34"),
     )
 
     # No residual
@@ -83,6 +84,11 @@ def make_concept_model(**config) -> ConceptLightningModel:
     elif model_type == "mi_residual":
         model = experiment_module.make_concept_model(config)
         model = MutualInfoConceptLightningModel(model, **config)
+
+    # With latent residual
+    elif model_type == "cem":
+        model = experiment_module.make_concept_model(config)
+        model = ConceptLightningModel(model, **config)
 
     # With iterative / layer normalization
     elif model_type in ("iter_norm", "layer_norm"):
@@ -114,7 +120,10 @@ def make_concept_model(**config) -> ConceptLightningModel:
 
     # Dummy pass to handle any un-initialized parameters
     batch = get_dummy_batch(
-        config["dataset"], config["data_dir"], config.get("num_concepts", -1)
+        config["dataset"],
+        config["data_dir"],
+        config.get("num_concepts", -1),
+        config.get("backbone", "resnet34"),
     )
     model.dummy_pass([batch])
 
@@ -129,6 +138,7 @@ def make_datamodule(**config) -> pl.LightningDataModule:
         num_workers=int(config.get("num_cpus", 1)) - 1,
         resize_oai=config.get("resize_oai", True),
         num_concepts=config.get("num_concepts", -1),
+        backbone=config.get("backbone", "resnet34"),
     )
 
 
@@ -172,6 +182,7 @@ if __name__ == "__main__":
         get_datamodule(
             dataset_name,
             data_dir=config.get("data_dir"),
+            backbone=config.get("backbone", "resnet34"),
         )
 
     # Create trial scheduler
@@ -192,7 +203,7 @@ if __name__ == "__main__":
         tuner = LightningTuner.restore(args.restore_path, resume_errored=True)
     else:
         tuner = LightningTuner(
-            metric="val_acc",
+            metric="val_intervention_acc",
             mode="max",
             scheduler=scheduler,
             num_samples=config.get("num_samples", 1),

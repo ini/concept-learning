@@ -787,6 +787,7 @@ class LightningTuner:
             Ray Tune result
         """
         metric, mode = self.tune_config.metric, self.tune_config.mode
+
         checkpoint = result.get_best_checkpoint(metric, mode) or result.checkpoint
         checkpoint_path = Path(checkpoint.path, "checkpoint.pt")
         if return_path:

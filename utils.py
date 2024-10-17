@@ -10,6 +10,7 @@ from ray.tune.search.variant_generator import generate_variants, grid_search
 from torch import Tensor
 from torchmetrics import Accuracy
 from typing import Any
+from open_clip import create_model_from_pretrained, get_tokenizer
 
 
 ### Torch
@@ -152,7 +153,94 @@ def make_cnn(
         model.aux_logits = False
         return model
 
+    elif cnn_type == "dfn2b_clip_vit_b_16":
+        model, _ = create_model_from_pretrained("hf-hub:apple/DFN2B-CLIP-ViT-B-16")
+        if not load_weights:
+            model.init_parameters()
+
+        # Modify the model to output the desired dimension
+        class Detach(nn.Module):
+            def forward(self, x):
+                return x.detach()
+
+        new_model = nn.Sequential(
+            model.visual,  # The original visual transformer model
+            Detach(),
+            nn.Linear(512, output_dim),
+        )
+        return new_model
+
     raise ValueError(f"Unknown CNN type: {cnn_type}")
+
+
+def make_concept_embedding_model(
+    in_dim, emb_size, n_concepts, embedding_activation="leakyrelu"
+):
+    concept_prob_generators = torch.nn.ModuleList()
+    concept_context_generators = torch.nn.ModuleList()
+    for i in range(n_concepts):
+        if embedding_activation is None:
+            concept_context_generators.append(
+                torch.nn.Sequential(
+                    *[
+                        torch.nn.Linear(
+                            in_dim,
+                            # Two as each concept will have a positive and a
+                            # negative embedding portion which are later mixed
+                            2 * emb_size,
+                        ),
+                    ]
+                )
+            )
+        elif embedding_activation == "sigmoid":
+            concept_context_generators.append(
+                torch.nn.Sequential(
+                    *[
+                        torch.nn.Linear(
+                            in_dim,
+                            # Two as each concept will have a positive and a
+                            # negative embedding portion which are later mixed
+                            2 * emb_size,
+                        ),
+                        torch.nn.Sigmoid(),
+                    ]
+                )
+            )
+        elif embedding_activation == "leakyrelu":
+            concept_context_generators.append(
+                torch.nn.Sequential(
+                    *[
+                        torch.nn.Linear(
+                            in_dim,
+                            # Two as each concept will have a positive and a
+                            # negative embedding portion which are later mixed
+                            2 * emb_size,
+                        ),
+                        torch.nn.LeakyReLU(),
+                    ]
+                )
+            )
+        elif embedding_activation == "relu":
+            concept_context_generators.append(
+                torch.nn.Sequential(
+                    *[
+                        torch.nn.Linear(
+                            in_dim,
+                            # Two as each concept will have a positive and a
+                            # negative embedding portion which are later mixed
+                            2 * emb_size,
+                        ),
+                        torch.nn.ReLU(),
+                    ]
+                )
+            )
+        concept_prob_generators.append(
+            torch.nn.Linear(
+                2 * emb_size,
+                1,
+            )
+        )
+    return concept_prob_generators, concept_context_generators
 
 
 def cross_correlation(X: Tensor, Y: Tensor):

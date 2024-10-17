@@ -548,15 +548,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Whether to show the plot(s)",
     )
-    parser.add_argument(
-        "--evaluate-mixer", action="store_true", help="Evaluate mixer models"
-    )
 
     args = parser.parse_args()
 
     # Recursively search for 'tuner.pkl' file within the provided directory
     # If multiple are found, use the most recently modified one
-    folder = "eval" if not args.evaluate_mixer else "eval_mixer"
+    folder = "eval"
     experiment_paths = Path(args.exp_dir).resolve().glob(f"**/{folder}/tuner.pkl")
     experiment_path = sorted(experiment_paths, key=os.path.getmtime)[-1].parent.parent
 
@@ -566,7 +563,7 @@ if __name__ == "__main__":
     results = group_results(tuner.get_results(), groupby=args.plotby)
 
     # Plot results
-    plot_folder = "plots" if not args.evaluate_mixer else "plots_mixer"
+    plot_folder = "plots"
     for plot_key, plot_results in tqdm(results.items()):
         for mode in tqdm(args.mode):
             PLOT_FUNCTIONS[mode](

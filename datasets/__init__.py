@@ -57,6 +57,7 @@ def get_datasets(
     data_dir: str,
     resize_oai: bool = True,
     num_concepts: int = -1,
+    backbone: str = "resnet34",
 ) -> tuple[Dataset, Dataset, Dataset]:
     """
     Get train, validation, and test splits for the given dataset.
@@ -228,6 +229,7 @@ def get_datasets(
             "num_workers": 8,
             "sampling_percent": 1,
             "test_subsampling": 1,
+            "backbone": backbone,
         }
         train_dataset, test_dataset, val_dataset = celeba_generate_data(
             dataset_config, dataset_config["root_dir"], split="all"
@@ -287,6 +289,7 @@ def get_datamodule(
     num_workers: int = 0,
     resize_oai: bool = True,
     num_concepts: int = -1,
+    backbone: str = "resnet34",
 ) -> pl.LightningDataModule:
     """
     Get a LightningDataModule for the specified dataset.
@@ -303,7 +306,7 @@ def get_datamodule(
         Number of workers for the data loaders
     """
     train_dataset, val_dataset, test_dataset = get_datasets(
-        dataset_name, data_dir, resize_oai, num_concepts
+        dataset_name, data_dir, resize_oai, num_concepts, backbone=backbone
     )
     return pl.LightningDataModule.from_datasets(
         train_dataset=train_dataset,
@@ -316,7 +319,7 @@ def get_datamodule(
 
 @functools.cache
 def get_dummy_batch(
-    dataset_name: str, data_dir: str, num_concepts: int
+    dataset_name: str, data_dir: str, num_concepts: int, backbone: str
 ) -> tuple[Any, Any]:
     """
     Get dummy batch for the specified dataset.
@@ -329,14 +332,14 @@ def get_dummy_batch(
         Directory where data is stored (or will be downloaded to)
     """
     loader = get_datamodule(
-        dataset_name, data_dir, num_concepts=num_concepts
+        dataset_name, data_dir, num_concepts=num_concepts, backbone=backbone
     ).train_dataloader()
     return next(iter(loader))
 
 
 @functools.cache
 def get_concept_loss_fn(
-    dataset_name: str, data_dir: str, num_concepts: int
+    dataset_name: str, data_dir: str, num_concepts: int, backbone: str
 ) -> nn.BCEWithLogitsLoss:
     """
     Get BCE concept loss function for the specified dataset.
@@ -368,7 +371,11 @@ def get_concept_loss_fn(
         else:
             # Get weighted binary cross entropy loss
             train_loader = get_datamodule(
-                dataset_name, data_dir, num_workers=8, num_concepts=num_concepts
+                dataset_name,
+                data_dir,
+                num_workers=8,
+                num_concepts=num_concepts,
+                backbone=backbone,
             ).train_dataloader()
             concept_dim = DATASET_INFO[dataset_name]["concept_dim"]
             concepts_pos_count = torch.zeros(concept_dim)

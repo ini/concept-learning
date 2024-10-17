@@ -11,8 +11,8 @@ from typing import Any, Callable, Iterable, Literal
 
 from nn_extensions import VariableKwargs
 from utils import accuracy, unwrap, zero_loss_fn, remove_prefix, remove_keys_with_prefix
-from .concept_mixture import ConceptMixture
 from nn_extensions import Chain
+import numpy as np
 
 ### Typing
 
@@ -53,9 +53,12 @@ class ConceptModel(nn.Module):
         target_network: nn.Module,
         base_network: nn.Module = nn.Identity(),
         bottleneck_layer: nn.Module = nn.Identity(),
+        concept_rank_model: nn.Module = nn.Identity(),
+        cross_attention: nn.Module = nn.Identity(),
         concept_type: Literal["binary", "continuous"] = "binary",
-        training_mode: Literal["independent", "sequential", "joint"] = "independent",
-        mixer=None,
+        training_mode: Literal[
+            "independent", "sequential", "joint", "intervention_aware"
+        ] = "independent",
         **kwargs,
     ):
         """
@@ -108,16 +111,12 @@ class ConceptModel(nn.Module):
         self.residual_network = VariableKwargs(residual_network)
         self.target_network = VariableKwargs(target_network)
         self.bottleneck_layer = VariableKwargs(bottleneck_layer)
-        self.mixer_model = VariableKwargs(mixer)
+        self.concept_rank_model = VariableKwargs(concept_rank_model)
+        self.cross_attention = VariableKwargs(cross_attention)
 
         self.concept_type = concept_type
         self.training_mode = training_mode
         self.ccm_mode = "" if "ccm_mode" not in kwargs else kwargs["ccm_mode"]
-        self.ccm_network = (
-            None
-            if "ccm_network" not in kwargs
-            else VariableKwargs(kwargs["ccm_network"])
-        )
         if "base_model_ckpt" in kwargs:
             checkpoint_path = kwargs["base_model_ckpt"]
             state_dict = torch.load(checkpoint_path)["state_dict"]
@@ -130,29 +129,13 @@ class ConceptModel(nn.Module):
                 modified_state_dict, "residual_loss_fn"
             )
             super().load_state_dict(modified_state_dict, strict=False)
-        if self.training_mode == "semi_independent":
-            concept_dim = kwargs["concept_dim"]
-            residual_dim = kwargs["residual_dim"]
-            self.mixer = ConceptMixture(
-                concept_dim,
-                residual_dim,
-                self.target_network.module,
-                self.mixer_model.module,
-            )
-            # freeze all parameters except self.mixer.mixer_model
-            for name, param in self.named_parameters():
-                if "mixer_model.module" not in name:
-                    param.requires_grad = False
-                else:
-                    param.requires_grad = True
-
-        else:
-            self.mixer = None
+        self.negative_intervention = False
 
     def forward(
         self,
         x: Tensor,
         concepts: Tensor | None = None,
+        intervention_idxs: Tensor | None = None,
     ) -> tuple[Tensor, Tensor, Tensor]:
         """
         Parameters
@@ -161,6 +144,8 @@ class ConceptModel(nn.Module):
             Input tensor
         concepts : Tensor or None
             Ground truth concept values
+        intervention_idxs : Tensor or None
+            Indices of interventions
 
         Returns
         -------
@@ -171,14 +156,14 @@ class ConceptModel(nn.Module):
         target_logits : Tensor
             Target logits
         """
+        # if negative intervention, invert accurate concepts
+        if self.negative_intervention:
+            concepts = 1 - concepts
+
         # Get concept logits & residual
         x = self.base_network(x, concepts=concepts)
         concept_logits = self.concept_network(x, concepts=concepts)
-
-        if self.ccm_mode == "ccm_r" or self.ccm_mode == "ccm_eye":
-            residual = self.residual_network(x.detach(), concepts=concepts)
-        else:
-            residual = self.residual_network(x, concepts=concepts)
+        residual = self.residual_network(x, concepts=concepts)
 
         # Process concept logits & residual via bottleneck layer
         if not isinstance(unwrap(self.bottleneck_layer), nn.Identity):
@@ -187,56 +172,31 @@ class ConceptModel(nn.Module):
             concept_dim, residual_dim = concept_logits.shape[-1], residual.shape[-1]
             concept_logits, residual = x.split([concept_dim, residual_dim], dim=-1)
 
-        if self.ccm_mode == "" or self.ccm_mode == "ccm_eye":
-            # Determine target network input based on training mode
-            concept_preds = self.get_concept_predictions(concept_logits)
-            if self.training and self.training_mode == "independent":
-                x = torch.cat([concepts, residual], dim=-1)
-                which = None
-            elif self.training and self.training_mode == "sequential":
-                x = torch.cat([concept_preds.detach(), residual], dim=-1)
-                which = None
-            elif self.training and self.training_mode == "semi_independent":
-                # do selective interventions
-                # start by choosing one or the other
-                batch_size = x.shape[0]
-                which = torch.rand(batch_size) > 0.5
-                which = which.to(x.device)
-                which = which.unsqueeze(1).expand(-1, concept_preds.shape[1])
-                hard_maxed_concept_preds = concept_preds  # concept_preds > 0.5
-                concept_joined = hard_maxed_concept_preds * which + concepts * (~which)
-                x = torch.cat([concept_joined.detach(), residual], dim=-1)
-            else:
-                indices = torch.argmax(concept_preds, dim=-1)
+        concept_preds = self.get_concept_predictions(concept_logits)
 
-                # Convert these indices to one-hot encoded form
-                # hard_maxed_concept_preds = F.one_hot(
-                #     indices, num_classes=concept_preds.shape[-1]
-                # )
-                hard_maxed_concept_preds = concept_preds  # concept_preds > 0.5
-                x = torch.cat([hard_maxed_concept_preds, residual], dim=-1)
-                if self.training_mode == "semi_independent":
-                    which = (
-                        torch.ones_like(hard_maxed_concept_preds).to(x.device).bool()
-                    )
-                else:
-                    which = None
+        # interventions on concepts for intervention_aware training
+        if intervention_idxs is None:
+            intervention_idxs = torch.zeros_like(concepts)
+        # intervene on concepts
+        concept_preds = (
+            concept_preds.detach() * (1 - intervention_idxs)
+            + concepts * intervention_idxs
+        )
 
-            # Get target logits
-            if self.mixer is not None:
-                target_logits = self.mixer(x, concepts=concepts, which=which)
-            else:
-                target_logits = self.target_network(x, concepts=concepts, which=which)
-            return concept_logits, residual, target_logits
+        if self.training and self.training_mode == "independent":
+            x_concepts = concepts
+        elif self.training and self.training_mode == "sequential":
+            x_concepts = concept_preds.detach()
         else:
-            if self.ccm_mode == "ccm_r":
-                concept_preds = self.get_concept_predictions(concept_logits)
-                target_one = self.target_network(concept_preds, concepts=concepts)
-                target_two = self.ccm_network(residual, concepts=concepts)
-                target_logits = target_one.detach() + target_two
-                return concept_logits, residual, target_logits
-            else:
-                assert 0, f"{self.ccm_mode} not implemented yet"
+            # fully joint training
+            x_concepts = concept_preds
+        attended_residual = self.cross_attention(x_concepts, residual)
+        x = torch.cat([x_concepts, attended_residual], dim=-1)
+
+        # Get target logits
+        target_logits = self.target_network(x, concepts=concepts)
+
+        return concept_logits, residual, target_logits
 
     def get_concept_predictions(self, concept_logits: Tensor) -> Tensor:
         """
@@ -246,6 +206,69 @@ class ConceptModel(nn.Module):
             return concept_logits.sigmoid()
 
         return concept_logits
+
+    def calc_concept_group(
+        self,
+        concept_logits: Tensor,
+        residual: Tensor,
+        concepts: Tensor,
+        intervention_idxs: Tensor,
+        train: bool = False,
+    ) -> Tensor:
+        """
+        Compute concept group scores.
+        """
+
+        concept_preds = (
+            concept_logits.detach() * (1 - intervention_idxs)
+            + concepts * intervention_idxs
+        )
+        attended_residual = self.cross_attention(concept_preds, residual)
+        x = torch.cat([concept_preds, attended_residual], dim=-1)
+
+        rank_input = torch.concat(
+            [x, intervention_idxs],
+            dim=-1,
+        )
+
+        next_concept_group_scores = self.concept_rank_model(rank_input)
+
+        if train:
+            return next_concept_group_scores
+
+        # zero out the scores of the concepts that have already been intervened on
+        next_concept_group_scores = torch.where(
+            intervention_idxs == 1,
+            torch.ones(intervention_idxs.shape).to(intervention_idxs.device) * (-1000),
+            next_concept_group_scores,
+        )
+        # return the softmax of the scores
+        return torch.nn.functional.softmax(
+            next_concept_group_scores,
+            dim=-1,
+        )
+
+    def calc_target_preds(
+        self,
+        concept_logits: Tensor,
+        residual: Tensor,
+        concepts: Tensor,
+        intervention_idxs: Tensor,
+        train: bool = False,
+    ) -> Tensor:
+        """
+        Compute concept group scores.
+        """
+
+        concept_preds = (
+            concept_logits.detach() * (1 - intervention_idxs)
+            + concepts * intervention_idxs
+        )
+        attended_residual = self.cross_attention(concept_preds, residual)
+        x = torch.cat([concept_preds, attended_residual], dim=-1)
+
+        target_logits = self.target_network(x)
+        return target_logits
 
 
 ### Concept Models with PyTorch Lightning
@@ -264,6 +287,16 @@ class ConceptLightningModel(pl.LightningModule):
         lr: float = 1e-3,
         alpha: float = 1.0,
         beta: float = 1.0,
+        training_intervention_prob=0.25,
+        max_horizon=6,
+        horizon_rate=1.005,
+        initial_horizon=2,
+        intervention_discount=1,
+        intervention_task_discount=1.1,
+        num_rollouts=1,
+        include_only_last_trajectory_loss=True,
+        intervention_weight=5,
+        intervention_task_loss_weight=1,
         weight_decay=0,
         lr_step_size=None,
         lr_gamma=None,
@@ -271,6 +304,7 @@ class ConceptLightningModel(pl.LightningModule):
         reg_gamma: float = 1.0,
         lr_scheduler="cosine",
         chosen_optim="adam",
+        complete_intervention_weight=0,
         **kwargs,
     ):
         """
@@ -301,6 +335,19 @@ class ConceptLightningModel(pl.LightningModule):
         self.lr = lr
         self.alpha = alpha
         self.beta = beta
+        self.training_intervention_prob = training_intervention_prob
+        self.max_horizon = max_horizon
+        self.horizon_rate = horizon_rate
+        self.horizon_limit = torch.nn.Parameter(
+            torch.FloatTensor([initial_horizon]),
+            requires_grad=False,
+        )
+        self.intervention_discount = intervention_discount
+        self.intervention_task_discount = intervention_task_discount
+        self.include_only_last_trajectory_loss = include_only_last_trajectory_loss
+        self.num_rollouts = num_rollouts
+        self.intervention_weight = intervention_weight
+        self.intervention_task_loss_weight = intervention_task_loss_weight
         self.log_kwargs = {"on_step": False, "on_epoch": True, "sync_dist": True}
 
         self.weight_decay = weight_decay
@@ -310,6 +357,8 @@ class ConceptLightningModel(pl.LightningModule):
         self.reg_gamma = reg_gamma
         self.lr_scheduler = lr_scheduler
         self.chosen_optim = chosen_optim
+        self.num_test_interventions = None
+        self.complete_intervention_weight = complete_intervention_weight
 
     def dummy_pass(self, loader: Iterable[ConceptBatch]):
         """
@@ -330,7 +379,249 @@ class ConceptLightningModel(pl.LightningModule):
         """
         return self.concept_model.forward(*args, **kwargs)
 
-    def loss_fn(
+    def _setup_intervention_trajectory(
+        self, prev_num_of_interventions, intervention_idxs, free_groups
+    ):
+        # The limit of how many concepts we can intervene at most
+        int_basis_lim = len(intervention_idxs[0])
+        # And the limit of how many concepts we will intervene at most during
+        # this training round
+        horizon_lim = int(self.horizon_limit.detach().cpu().numpy()[0])
+        new_intervention_idxs = intervention_idxs.clone()
+
+        if prev_num_of_interventions != int_basis_lim:
+            bottom = min(
+                horizon_lim,
+                int_basis_lim - prev_num_of_interventions - 1,
+            )  # -1 so that we at least intervene on one concept
+            if bottom > 0:
+                initially_selected = np.random.randint(0, bottom)
+            else:
+                initially_selected = 0
+
+            # Get the maximum size of any current trajectories:
+            end_horizon = min(
+                int(horizon_lim),
+                self.max_horizon,
+                int_basis_lim - prev_num_of_interventions - initially_selected,
+            )
+
+            # And select the number of steps T we will run the current
+            # trajectory for
+            current_horizon = np.random.randint(
+                1 if end_horizon > 1 else 0,
+                end_horizon,
+            )
+
+            # At the begining of the trajectory, we start with a total of
+            # `initially_selected`` concepts already intervened on. So to
+            # indicate that, we will update the intervention_idxs matrix
+            # accordingly
+            for sample_idx in range(intervention_idxs.shape[0]):
+                probs = free_groups[sample_idx, :].detach().cpu().numpy()
+                probs = probs / np.sum(probs)
+                new_intervention_idxs[
+                    sample_idx,
+                    np.random.choice(
+                        int_basis_lim,
+                        size=initially_selected,
+                        replace=False,
+                        p=probs,
+                    ),
+                ] = 1
+
+            discount = 1
+            trajectory_weight = 0
+            for i in range(current_horizon):
+                trajectory_weight += discount
+                discount *= self.intervention_discount
+            task_discount = 1
+            task_trajectory_weight = 1
+            for i in range(current_horizon):
+                task_discount *= self.intervention_task_discount
+                if (not self.include_only_last_trajectory_loss) or (
+                    i == current_horizon - 1
+                ):
+                    task_trajectory_weight += task_discount
+            task_discount = 1
+        else:
+            # Else we will peform no intervention in this training step!
+            current_horizon = 0
+            task_discount = 1
+            task_trajectory_weight = 1
+            trajectory_weight = 1
+
+        return (
+            current_horizon,
+            task_discount,
+            task_trajectory_weight,
+            trajectory_weight,
+            new_intervention_idxs,
+        )
+
+    def get_concept_mask(
+        self,
+        concept_logits,
+        concepts,
+        residual,
+        prev_intervention_idxs,
+        concept_group_scores,
+        targets,
+    ):
+        target_int_losses = torch.ones(
+            concept_group_scores.shape,
+        ).to(
+            concepts.device
+        ) * (-np.Inf)
+
+        for target_concept in range(target_int_losses.shape[-1]):
+            new_int = torch.zeros(prev_intervention_idxs.shape).to(
+                prev_intervention_idxs.device
+            )
+            new_int[:, target_concept] = 1
+            updated_int = torch.clamp(
+                prev_intervention_idxs.detach() + new_int,
+                0,
+                1,
+            )
+
+            target_logits = self.concept_model.calc_target_preds(
+                concept_logits=concept_logits.detach(),
+                residual=residual.detach(),
+                concepts=concepts,
+                intervention_idxs=updated_int,
+            )
+            current_loss = F.cross_entropy(target_logits, targets, reduction="none")
+            target_int_losses[:, target_concept] = current_loss
+        # find the lable with the lowest loss (skyline oracle for the intervention)
+        # this becomes the target for behavioral cloning
+        target_int_labels = torch.argmin(target_int_losses, -1)
+        # find the label the model predicts (greedy policy prediction)
+        pred_int_labels = concept_group_scores.argmax(-1)
+        curr_acc = (pred_int_labels == target_int_labels).float().mean()
+        return target_int_labels, curr_acc
+
+    def rollout_loss_fn(
+        self,
+        batch: ConceptBatch,
+        outputs: tuple[Tensor, Tensor, Tensor],
+        prev_intervention_idxs: Tensor,
+    ) -> Tensor:
+        (data, concepts), targets = batch
+        concept_logits, residual, target_logits = outputs
+
+        free_groups = 1 - prev_intervention_idxs
+        prev_num_of_interventions = int(
+            np.max(
+                np.sum(
+                    prev_intervention_idxs.detach().cpu().numpy(),
+                    axis=-1,
+                ),
+                axis=-1,
+            )
+        )
+        (
+            current_horizon,
+            task_discount,
+            task_trajectory_weight,
+            trajectory_weight,
+            prev_intervention_idxs,
+        ) = self._setup_intervention_trajectory(
+            prev_num_of_interventions,
+            prev_intervention_idxs,
+            free_groups,
+        )
+        discount = 1
+
+        intervention_task_loss = F.cross_entropy(target_logits, targets)
+        intervention_task_loss = intervention_task_loss / task_trajectory_weight
+
+        intervention_loss = torch.tensor(0.0, device=concept_logits.device)
+
+        int_mask_accuracy = 0.0 if current_horizon else -1
+
+        for _ in range(self.num_rollouts):
+            # And as many steps in the trajectory as suggested
+            for i in range(current_horizon):
+                # And generate a probability distribution over previously
+                # unseen concepts to indicate which one we should intervene
+                # on next!
+                concept_group_scores = self.concept_model.calc_concept_group(
+                    concept_logits=concept_logits,
+                    residual=residual,
+                    concepts=concepts,
+                    intervention_idxs=prev_intervention_idxs,
+                    train=True,
+                )
+
+                target_int_labels, curr_acc = self.get_concept_mask(
+                    concept_logits=concept_logits,
+                    residual=residual,
+                    concepts=concepts,
+                    prev_intervention_idxs=prev_intervention_idxs,
+                    concept_group_scores=concept_group_scores,
+                    targets=targets,
+                )
+                int_mask_accuracy += curr_acc / current_horizon
+                new_loss = torch.nn.CrossEntropyLoss()(
+                    concept_group_scores, target_int_labels.detach()
+                )
+                intervention_loss += discount * new_loss / trajectory_weight
+
+                discount *= self.intervention_discount
+                task_discount *= self.intervention_task_discount
+                if self.intervention_weight == 0:
+                    selected_groups = torch.FloatTensor(
+                        np.eye(concept_group_scores.shape[-1])[
+                            np.random.choice(
+                                concept_group_scores.shape[-1],
+                                size=concept_group_scores.shape[0],
+                            )
+                        ]
+                    ).to(concept_group_scores.device)
+                else:
+                    selected_groups = torch.nn.functional.gumbel_softmax(
+                        concept_group_scores,
+                        dim=-1,
+                        hard=True,
+                        tau=1,
+                    )
+                prev_intervention_idxs += selected_groups
+
+                if (not self.include_only_last_trajectory_loss) or (
+                    i == (current_horizon - 1)
+                ):
+                    rollout_y_logits = self.concept_model.calc_target_preds(
+                        concept_logits=concept_logits,
+                        residual=residual,
+                        concepts=concepts,
+                        intervention_idxs=prev_intervention_idxs,
+                    )
+                    rollout_y_loss = F.cross_entropy(rollout_y_logits, targets)
+
+                    intervention_task_loss += (
+                        task_discount * rollout_y_loss / task_trajectory_weight
+                    )
+
+            if self.horizon_limit.detach().cpu().numpy()[0] < (
+                (concepts.shape[-1] + 1)
+            ):
+                self.horizon_limit *= self.horizon_rate
+
+        intervention_loss = intervention_loss / self.num_rollouts
+        if intervention_loss.requires_grad:
+            self.log("intervention_loss", intervention_loss, **self.log_kwargs)
+
+        intervention_task_loss = intervention_task_loss / self.num_rollouts
+        if intervention_task_loss.requires_grad:
+            self.log("task_loss", intervention_task_loss, **self.log_kwargs)
+
+        int_mask_accuracy = int_mask_accuracy / self.num_rollouts
+        self.log("int_mask_accuracy", int_mask_accuracy, **self.log_kwargs)
+
+        return intervention_loss, intervention_task_loss, int_mask_accuracy
+
+    def concept_residual_loss_fn(
         self,
         batch: ConceptBatch,
         outputs: tuple[Tensor, Tensor, Tensor],
@@ -388,19 +679,21 @@ class ConceptLightningModel(pl.LightningModule):
             ).to(device)
             reg_loss = EYE(r, net_y.weight.abs().mean(0))
         else:
-            reg_loss = 0.0
+            reg_loss = torch.tensor(0.0)
+        if reg_loss.requires_grad:
+            self.log("reg_loss", reg_loss, **self.log_kwargs)
 
-        # Target loss
-        target_loss = F.cross_entropy(target_logits, targets)
-        if target_loss.requires_grad:
-            self.log("target_loss", target_loss, **self.log_kwargs)
+        # # Target loss
+        # target_loss = F.cross_entropy(target_logits, targets)
+        # if target_loss.requires_grad:
+        #     self.log("target_loss", target_loss, **self.log_kwargs)
+        return concept_loss, residual_loss, reg_loss
 
-        return (
-            target_loss
-            + (self.alpha * concept_loss)
-            + (self.beta * residual_loss)
-            + (self.reg_gamma * reg_loss)
-        )
+        # return (
+        #     + (self.alpha * concept_loss)
+        #     + (self.beta * residual_loss)
+        #     + (self.reg_gamma * reg_loss)
+        # )
 
     def configure_optimizers(self) -> dict[str, Any]:
         """
@@ -449,6 +742,7 @@ class ConceptLightningModel(pl.LightningModule):
         self,
         batch: ConceptBatch,
         split: Literal["train", "val", "test"],
+        intervention_idxs: Tensor | None = None,
     ) -> Tensor:
         """
         Training / validation / test step.
@@ -462,16 +756,61 @@ class ConceptLightningModel(pl.LightningModule):
         """
         (data, concepts), targets = batch
 
-        outputs = self.concept_model(data, concepts=concepts)
+        if self.training:
+            mask = torch.bernoulli(
+                torch.ones_like(concepts[0]) * self.training_intervention_prob,
+            )
+            intervention_idxs = torch.tile(
+                mask,
+                (concepts.shape[0], 1),
+            )
+        elif intervention_idxs is not None:
+            intervention_idxs = intervention_idxs
+        else:
+            intervention_idxs = torch.zeros_like(concepts)
+
+        outputs = self.concept_model(
+            data, concepts=concepts, intervention_idxs=intervention_idxs
+        )
         concept_logits, residual, target_logits = outputs
 
-        # Track loss
-        loss = self.loss_fn(batch, outputs)
+        # Rollout loss
+        intervention_loss, intervention_task_loss, int_mask_accuracy = (
+            self.rollout_loss_fn(batch, outputs, intervention_idxs)
+        )
+
+        # Concept / Residual Loss
+
+        concept_loss, residual_loss, reg_loss = self.concept_residual_loss_fn(
+            batch, outputs
+        )
+
+        _, _, intervention_target_logits = self.concept_model(
+            data,
+            concepts=concepts,
+            intervention_idxs=torch.ones_like(intervention_idxs),
+        )
+        complete_intervention_loss = F.cross_entropy(
+            intervention_target_logits, targets
+        )
+
+        loss = (
+            self.alpha * concept_loss
+            + self.beta * residual_loss
+            + self.reg_gamma * reg_loss
+            + self.intervention_weight * intervention_loss
+            + self.intervention_task_loss_weight * intervention_task_loss
+            + self.complete_intervention_weight * complete_intervention_loss
+        )
+
         self.log(f"{split}_loss", loss, **self.log_kwargs)
 
         # Track accuracy
         acc = accuracy(target_logits, targets)
         self.log(f"{split}_acc", acc, **self.log_kwargs)
+
+        intervention_acc = accuracy(intervention_target_logits, targets)
+        self.log(f"{split}_intervention_acc", intervention_acc, **self.log_kwargs)
 
         # Track concept accuracy
         if self.concept_model.concept_type == "binary":
@@ -509,6 +848,65 @@ class ConceptLightningModel(pl.LightningModule):
         """
         return self.step(batch, split="val")
 
+    def perform_k_interventions(
+        self,
+        batch: ConceptBatch,
+        split: Literal["train", "val", "test"],
+        k: int,
+    ) -> Tensor:
+        """
+        Training / validation / test step.
+
+        Parameters
+        ----------
+        batch : ConceptBatch
+            Batch of ((data, concepts), targets)
+        split : one of {'train', 'val', 'test'}
+            Dataset split
+        """
+        (data, concepts), targets = batch
+
+        # start with no interventions
+        intervention_idxs = torch.zeros_like(concepts)
+
+        outputs = self.concept_model(
+            data, concepts=concepts, intervention_idxs=intervention_idxs
+        )
+        concept_logits, residual, target_logits = outputs
+
+        for i in range(k):
+            # And generate a probability distribution over previously
+            # unseen concepts to indicate which one we should intervene
+            # on next!
+            concept_group_scores = self.concept_model.calc_concept_group(
+                concept_logits=concept_logits,
+                residual=residual,
+                concepts=concepts,
+                intervention_idxs=intervention_idxs,
+                train=True,
+            )
+            concept_group_scores = torch.where(
+                intervention_idxs == 1,
+                torch.ones(intervention_idxs.shape).to(intervention_idxs.device)
+                * (-1000),
+                concept_group_scores,
+            )
+            selected_groups = torch.nn.functional.gumbel_softmax(
+                concept_group_scores,
+                dim=-1,
+                hard=True,
+                tau=1,
+            )
+
+            intervention_idxs += selected_groups
+            intervention_idxs = torch.clamp(
+                intervention_idxs,
+                0,
+                1,
+            )
+
+        return intervention_idxs
+
     def test_step(self, batch: ConceptBatch, batch_idx: int) -> Tensor:
         """
         Test step.
@@ -520,4 +918,12 @@ class ConceptLightningModel(pl.LightningModule):
         batch_idx : int
             Batch index
         """
-        return self.step(batch, split="test")
+        if self.num_test_interventions is not None:
+            intervention_idxs = self.perform_k_interventions(
+                batch, split="test", k=self.num_test_interventions
+            )
+        else:
+            intervention_idxs = None
+        print(self.num_test_interventions)
+
+        return self.step(batch, split="test", intervention_idxs=intervention_idxs)
