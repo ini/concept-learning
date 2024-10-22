@@ -29,7 +29,7 @@ def get_config(**kwargs) -> dict:
         "num_cpus": 8,
         "num_gpus": 1.0,
         "num_samples": 5,
-        "batch_size": 64,
+        "batch_size": 256,
         "checkpoint_frequency": 5,
         "norm_type": None,
         "T_whitening": 3,
