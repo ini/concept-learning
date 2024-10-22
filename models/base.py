@@ -190,7 +190,9 @@ class ConceptModel(nn.Module):
         else:
             # fully joint training
             x_concepts = concept_preds
-        attended_residual = self.cross_attention(x_concepts, residual)
+        attended_residual = self.cross_attention(
+            x_concepts, residual, intervention_idxs.detach()
+        )
         x = torch.cat([x_concepts, attended_residual], dim=-1)
 
         # Get target logits
@@ -223,13 +225,15 @@ class ConceptModel(nn.Module):
             concept_logits.detach() * (1 - intervention_idxs)
             + concepts * intervention_idxs
         )
-        attended_residual = self.cross_attention(concept_preds, residual)
+        attended_residual = self.cross_attention(
+            concept_preds, residual, intervention_idxs.detach()
+        )
         x = torch.cat([concept_preds, attended_residual], dim=-1)
 
         rank_input = torch.concat(
             [x, intervention_idxs],
             dim=-1,
-        )
+        ).detach()
 
         next_concept_group_scores = self.concept_rank_model(rank_input)
 
@@ -264,7 +268,9 @@ class ConceptModel(nn.Module):
             concept_logits.detach() * (1 - intervention_idxs)
             + concepts * intervention_idxs
         )
-        attended_residual = self.cross_attention(concept_preds, residual)
+        attended_residual = self.cross_attention(
+            concept_preds, residual, intervention_idxs.detach()
+        )
         x = torch.cat([concept_preds, attended_residual], dim=-1)
 
         target_logits = self.target_network(x)
@@ -775,12 +781,19 @@ class ConceptLightningModel(pl.LightningModule):
         concept_logits, residual, target_logits = outputs
 
         # Rollout loss
-        intervention_loss, intervention_task_loss, int_mask_accuracy = (
-            self.rollout_loss_fn(batch, outputs, intervention_idxs)
-        )
+        if self.training_intervention_prob > 0.0:
+            intervention_loss, intervention_task_loss, int_mask_accuracy = (
+                self.rollout_loss_fn(batch, outputs, intervention_idxs)
+            )
+        else:
+            intervention_loss, intervention_task_loss, int_mask_accuracy = (
+                self.rollout_loss_fn(batch, outputs, intervention_idxs)
+            )
+            intervention_loss = torch.tensor(0.0, device=concept_logits.device)
+            # intervention_task_loss = torch.tensor(0.0, device=concept_logits.device)
+            # int_mask_accuracy = -1
 
         # Concept / Residual Loss
-
         concept_loss, residual_loss, reg_loss = self.concept_residual_loss_fn(
             batch, outputs
         )

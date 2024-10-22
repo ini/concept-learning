@@ -1,25 +1,87 @@
 import os
 import ray
 import torch.nn as nn
+import torch
 
-from models import ConceptModel, make_bottleneck_layer
+from models import ConceptModel, ConceptEmbeddingModel, make_bottleneck_layer
 from nn_extensions import Apply
-from utils import make_cnn, process_grid_search_tuples
+from utils import make_cnn, process_grid_search_tuples, make_concept_embedding_model
+from .celeba import CrossAttentionModel
 
 
 def make_concept_model(config: dict) -> ConceptModel:
     num_classes = config["num_classes"]
     concept_dim = config["concept_dim"]
     residual_dim = config["residual_dim"]
-    bottleneck_dim = concept_dim + residual_dim
-    return ConceptModel(
-        base_network=make_cnn(bottleneck_dim, cnn_type="resnet18"),
-        concept_network=Apply(lambda x: x[..., :concept_dim]),
-        residual_network=Apply(lambda x: x[..., concept_dim:]),
-        target_network=nn.Linear(bottleneck_dim, num_classes),
-        bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
-        **config,
-    )
+    int_model_use_bn = config.get("int_model_use_bn", True)
+    int_model_layers = config.get("int_model_layers", None)
+    backbone = config.get("backbone", "resnet34")
+
+    if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
+        bottleneck_dim = (
+            concept_dim * residual_dim
+        )  # residual dim is the size of the concept embedding for cem
+    else:
+        bottleneck_dim = concept_dim + residual_dim
+
+    if config.get("model_type") == "cem":
+        units = (
+            [
+                concept_dim * residual_dim + concept_dim
+            ]  # for cem, input is concept_dim * residual_dim (# of concepts * concept embedding dim)
+            + (int_model_layers or [256, 128])  # + previous interventions
+            + [concept_dim]
+        )
+    else:
+        units = (
+            [
+                concept_dim + residual_dim + concept_dim
+            ]  # Bottleneck  # Prev interventions
+            + (int_model_layers or [256, 128])
+            + [concept_dim]
+        )
+    layers = []
+    for i in range(1, len(units)):
+        if int_model_use_bn:
+            layers.append(
+                torch.nn.BatchNorm1d(num_features=units[i - 1]),
+            )
+        layers.append(torch.nn.Linear(units[i - 1], units[i]))
+        if i != len(units) - 1:
+            layers.append(torch.nn.LeakyReLU())
+
+    concept_rank_model = torch.nn.Sequential(*layers)
+
+    target_network = nn.Linear(bottleneck_dim, num_classes)
+    if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
+        concept_prob_generators, concept_context_generators = (
+            make_concept_embedding_model(
+                1000, residual_dim, concept_dim, embedding_activation="leakyrelu"
+            )
+        )
+        return ConceptEmbeddingModel(
+            base_network=make_cnn(1000, cnn_type=backbone),
+            concept_network=concept_prob_generators,
+            residual_network=concept_context_generators,
+            target_network=target_network,
+            bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
+            concept_rank_model=concept_rank_model,
+            **config,
+        )
+    else:
+        cross_attention = CrossAttentionModel(
+            concept_dim, residual_dim, residual_dim, 8
+        )
+        return ConceptModel(
+            base_network=make_cnn(bottleneck_dim, cnn_type="resnet18"),
+            concept_network=Apply(lambda x: x[..., :concept_dim]),
+            residual_network=Apply(lambda x: x[..., concept_dim:]),
+            target_network=target_network,
+            bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
+            cross_attention=cross_attention,
+            concept_rank_model=concept_rank_model,
+            **config,
+        )
 
 
 def get_config(**kwargs) -> dict:

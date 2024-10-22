@@ -163,6 +163,12 @@ def test_random_concepts(
     new_model.concept_model.concept_network = Chain(
         new_model.concept_model.concept_network, Randomize()
     )
+    if hasattr(new_model.concept_model, "concept_prob_generators"):
+        new_generators = nn.ModuleList()
+        for generator in new_model.concept_model.concept_prob_generators:
+            new_chain = Chain(generator, Randomize())
+            new_generators.append(new_chain)
+        new_model.concept_model.concept_prob_generators = new_generators
     results = test(new_model, test_loader)
     return results["test_acc"]
 
@@ -193,6 +199,14 @@ def test_random_residual(
     new_model.concept_model.residual_network = Chain(
         new_model.concept_model.residual_network, Randomize()
     )
+    # self.concept_prob_generators = concept_network
+    # self.concept_context_generators = residual_network
+    if hasattr(new_model.concept_model, "concept_context_generators"):
+        new_generators = nn.ModuleList()
+        for generator in new_model.concept_model.concept_context_generators:
+            new_chain = Chain(generator, Randomize())
+            new_generators.append(new_chain)
+        new_model.concept_model.concept_context_generators = new_generators
     results = test(new_model, test_loader)
     return results["test_acc"]
 

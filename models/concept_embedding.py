@@ -165,7 +165,7 @@ class ConceptEmbeddingModel(ConceptModel):
         rank_input = torch.concat(
             [x, intervention_idxs],
             dim=-1,
-        )
+        ).detach()
 
         next_concept_group_scores = self.concept_rank_model(rank_input)
 

@@ -85,10 +85,14 @@ def make_concept_model(**config) -> ConceptLightningModel:
         model = experiment_module.make_concept_model(config)
         model = MutualInfoConceptLightningModel(model, **config)
 
-    # With latent residual
+    # With concept embedding
     elif model_type == "cem":
         model = experiment_module.make_concept_model(config)
         model = ConceptLightningModel(model, **config)
+
+    elif model_type == "cem_mi":
+        model = experiment_module.make_concept_model(config)
+        model = MutualInfoConceptLightningModel(model, **config)
 
     # With iterative / layer normalization
     elif model_type in ("iter_norm", "layer_norm"):

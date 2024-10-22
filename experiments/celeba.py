@@ -21,6 +21,7 @@ class CrossAttentionModel(nn.Module):
 
         # Embedding layers
         self.concept_embedding = nn.Linear(input_dim_c, embed_dim)
+        self.concept_embedding_intervention = nn.Linear(input_dim_c, embed_dim)
         self.residual_embedding = nn.Linear(input_dim_r, embed_dim)
 
         # Cross-Attention layer
@@ -32,14 +33,18 @@ class CrossAttentionModel(nn.Module):
         # Scaling factor for attended residuals
         self.scale = nn.Parameter(torch.tensor(0.5))
 
-    def forward(self, concepts, residuals, attention_mask=None):
+    def forward(self, concepts, residuals, intervention_idxs, attention_mask=None):
         """
         concepts: Tensor of shape (batch_size, input_dim_c)
         residuals: Tensor of shape (batch_size, input_dim_r)
         attention_mask: Optional tensor for masking attention (batch_size, input_dim_c)
         """
         # Embed concepts and residuals
-        concepts_embedded = self.concept_embedding(concepts)  # (batch_size, embed_dim)
+        non_intervene = concepts.detach() * (~(intervention_idxs.bool()))
+        intervene = concepts.detach() * intervention_idxs
+        concepts_embedded1 = self.concept_embedding(non_intervene)
+        concepts_embedded_intervention = self.concept_embedding_intervention(intervene)
+        concepts_embedded = concepts_embedded1 + concepts_embedded_intervention
         residuals_embedded = self.residual_embedding(
             residuals
         )  # (batch_size, embed_dim)
@@ -128,7 +133,7 @@ def make_concept_model(config: dict) -> ConceptModel:
 
     concept_rank_model = torch.nn.Sequential(*layers)
 
-    if config.get("model_type") == "cem":
+    if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
         concept_prob_generators, concept_context_generators = (
             make_concept_embedding_model(
                 1000, residual_dim, concept_dim, embedding_activation="leakyrelu"
