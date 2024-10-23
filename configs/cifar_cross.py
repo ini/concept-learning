@@ -12,13 +12,13 @@ def get_config(**kwargs) -> dict:
         "data_dir": "/data/Datasets/cifar/",
         "ray_storage_dir": "/data/renos/ray_results/",
         "residual_dim": tune.grid_search([8, 16, 32, 64]),
-        "lr": 1e-2,
+        "lr": 1e-4,
         "num_epochs": 500,
         "momentum": 0.9,
-        "lr_scheduler": "reduce_on_plateau",
-        "chosen_optim": "sgd",
-        # "lr_scheduler": "cosine annealing",
-        # "chosen_optim": "adam",
+        # "lr_scheduler": "reduce_on_plateau",
+        # "chosen_optim": "sgd",
+        "lr_scheduler": "cosine annealing",
+        "chosen_optim": "adam",
         "alpha": 1.0,
         "beta": 1.0,
         # "initial_horizon": 10,
@@ -39,6 +39,7 @@ def get_config(**kwargs) -> dict:
         "complete_intervention_weight": 0.0,
         "training_intervention_prob": 0.25,
         "gpu_memory_per_worker": "5500 MiB",
+        "cross": True,
     }
     experiment_config.update(kwargs)
     experiment_config = get_cifar_config(**experiment_config)
