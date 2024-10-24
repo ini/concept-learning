@@ -11,7 +11,6 @@ from utils import (
     make_concept_embedding_model,
 )
 import torch
-import torch
 import torch.nn as nn
 
 
@@ -76,6 +75,14 @@ class CrossAttentionModel(nn.Module):
         return combined_residuals
 
 
+class PassThrough(nn.Module):
+    def __init__(self, input_dim_c, input_dim_r, embed_dim, num_heads):
+        super(PassThrough, self).__init__()
+
+    def forward(self, concepts, residuals, intervention_idxs, attention_mask=None):
+        return residuals
+
+
 def make_concept_model(config: dict) -> ConceptModel:
     num_classes = config["num_classes"]
     concept_dim = config["concept_dim"]
@@ -130,8 +137,10 @@ def make_concept_model(config: dict) -> ConceptModel:
         layers.append(torch.nn.Linear(units[i - 1], units[i]))
         if i != len(units) - 1:
             layers.append(torch.nn.LeakyReLU())
-
-    concept_rank_model = torch.nn.Sequential(*layers)
+    if config.get("intervention_weight", 0.0) > 0:
+        concept_rank_model = torch.nn.Sequential(*layers)
+    else:
+        concept_rank_model = nn.Identity()
 
     if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
         concept_prob_generators, concept_context_generators = (

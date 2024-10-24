@@ -55,7 +55,7 @@ class ConceptModel(nn.Module):
         bottleneck_layer: nn.Module = nn.Identity(),
         concept_rank_model: nn.Module = nn.Identity(),
         cross_attention: nn.Module = nn.Identity(),
-        concept_type: Literal["binary", "continuous"] = "binary",
+        concept_type: Literal["binary", "one_hot", "continuous"] = "binary",
         training_mode: Literal[
             "independent", "sequential", "joint", "intervention_aware"
         ] = "independent",
@@ -193,7 +193,7 @@ class ConceptModel(nn.Module):
         attended_residual = self.cross_attention(
             x_concepts, residual, intervention_idxs.detach()
         )
-        x = torch.cat([x_concepts, attended_residual], dim=-1)
+        x = torch.cat([x_concepts.detach(), attended_residual], dim=-1)
 
         # Get target logits
         target_logits = self.target_network(x, concepts=concepts)
@@ -206,6 +206,13 @@ class ConceptModel(nn.Module):
         """
         if self.concept_type == "binary":
             return concept_logits.sigmoid()
+        elif self.concept_type == "one_hot":
+            return torch.nn.functional.gumbel_softmax(
+                concept_logits,
+                dim=-1,
+                hard=True,  # True for discrete one-hot vectors
+                tau=1.0,  # Temperature parameter
+            )
 
         return concept_logits
 
@@ -220,15 +227,16 @@ class ConceptModel(nn.Module):
         """
         Compute concept group scores.
         """
+        concept_preds = self.get_concept_predictions(concept_logits)
 
         concept_preds = (
             concept_logits.detach() * (1 - intervention_idxs)
             + concepts * intervention_idxs
         )
         attended_residual = self.cross_attention(
-            concept_preds, residual, intervention_idxs.detach()
+            concept_preds.detach(), residual, intervention_idxs.detach()
         )
-        x = torch.cat([concept_preds, attended_residual], dim=-1)
+        x = torch.cat([concept_preds.detach(), attended_residual], dim=-1)
 
         rank_input = torch.concat(
             [x, intervention_idxs],
@@ -263,7 +271,7 @@ class ConceptModel(nn.Module):
         """
         Compute concept group scores.
         """
-
+        concept_preds = self.get_concept_predictions(concept_logits)
         concept_preds = (
             concept_logits.detach() * (1 - intervention_idxs)
             + concepts * intervention_idxs
@@ -271,7 +279,7 @@ class ConceptModel(nn.Module):
         attended_residual = self.cross_attention(
             concept_preds, residual, intervention_idxs.detach()
         )
-        x = torch.cat([concept_preds, attended_residual], dim=-1)
+        x = torch.cat([concept_preds.detach(), attended_residual], dim=-1)
 
         target_logits = self.target_network(x)
         return target_logits
@@ -781,17 +789,14 @@ class ConceptLightningModel(pl.LightningModule):
         concept_logits, residual, target_logits = outputs
 
         # Rollout loss
-        if self.training_intervention_prob > 0.0:
+        if self.intervention_weight > 0 or self.intervention_task_loss_weight > 0:
             intervention_loss, intervention_task_loss, int_mask_accuracy = (
                 self.rollout_loss_fn(batch, outputs, intervention_idxs)
             )
         else:
-            intervention_loss, intervention_task_loss, int_mask_accuracy = (
-                self.rollout_loss_fn(batch, outputs, intervention_idxs)
-            )
             intervention_loss = torch.tensor(0.0, device=concept_logits.device)
-            # intervention_task_loss = torch.tensor(0.0, device=concept_logits.device)
-            # int_mask_accuracy = -1
+            intervention_task_loss = torch.tensor(0.0, device=concept_logits.device)
+            nt_mask_accuracy = -1
 
         # Concept / Residual Loss
         concept_loss, residual_loss, reg_loss = self.concept_residual_loss_fn(
@@ -826,7 +831,10 @@ class ConceptLightningModel(pl.LightningModule):
         self.log(f"{split}_intervention_acc", intervention_acc, **self.log_kwargs)
 
         # Track concept accuracy
-        if self.concept_model.concept_type == "binary":
+        if (
+            self.concept_model.concept_type == "binary"
+            or self.concept_model.concept_type == "one_hot"
+        ):
             concept_acc = accuracy(concept_logits, concepts, task="binary")
             self.log(f"{split}_concept_acc", concept_acc, **self.log_kwargs)
         else:

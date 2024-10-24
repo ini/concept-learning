@@ -6,7 +6,7 @@ import torch
 from models import ConceptModel, ConceptEmbeddingModel, make_bottleneck_layer
 from nn_extensions import Apply
 from utils import make_cnn, process_grid_search_tuples, make_concept_embedding_model
-from .celeba import CrossAttentionModel
+from .celeba import CrossAttentionModel, PassThrough
 
 
 def make_concept_model(config: dict) -> ConceptModel:
@@ -50,7 +50,10 @@ def make_concept_model(config: dict) -> ConceptModel:
         if i != len(units) - 1:
             layers.append(torch.nn.LeakyReLU())
 
-    concept_rank_model = torch.nn.Sequential(*layers)
+    if config.get("intervention_weight", 0.0) > 0:
+        concept_rank_model = torch.nn.Sequential(*layers)
+    else:
+        concept_rank_model = nn.Identity()
 
     target_network = nn.Linear(bottleneck_dim, num_classes)
     if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
@@ -69,11 +72,15 @@ def make_concept_model(config: dict) -> ConceptModel:
             **config,
         )
     else:
-        cross_attention = CrossAttentionModel(
-            concept_dim, residual_dim, residual_dim, 8
-        )
+        if config.get("cross", False):
+            cross_attention = CrossAttentionModel(
+                concept_dim, residual_dim, residual_dim, 8
+            )
+        else:
+            cross_attention = PassThrough(concept_dim, residual_dim, residual_dim, 8)
+
         return ConceptModel(
-            base_network=make_cnn(bottleneck_dim, cnn_type="resnet18"),
+            base_network=make_cnn(bottleneck_dim, cnn_type=backbone),
             concept_network=Apply(lambda x: x[..., :concept_dim]),
             residual_network=Apply(lambda x: x[..., concept_dim:]),
             target_network=target_network,
