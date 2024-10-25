@@ -595,7 +595,7 @@ class LightningTuner:
         # Create PyTorch Lightning trainer
         trainer_kwargs = {
             "accelerator": "cpu" if MPSAccelerator.is_available() else "auto",
-            "strategy": RayDDPStrategy(),
+            "strategy": RayDDPStrategy(find_unused_parameters=True),
             "devices": "auto",
             "num_nodes": num_workers,
             "logger": False,  # logging metrics is handled by RayCallback
@@ -836,7 +836,7 @@ class LightningTuner:
 def make_lighting_trainer(config: dict[str, Any] = {}):
     trainer_kwargs = {
         "accelerator": "cpu" if MPSAccelerator.is_available() else "auto",
-        "strategy": RayDDPStrategy(),
+        "strategy": RayDDPStrategy(find_unused_parameters=True),
         "devices": "auto",
         "num_nodes": 1,
         "logger": False,  # logging metrics is handled by RayCallback
