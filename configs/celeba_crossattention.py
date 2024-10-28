@@ -12,7 +12,7 @@ def get_config(**kwargs) -> dict:
         "data_dir": "/data/Datasets/celeba/",
         "ray_storage_dir": "/data/renos/ray_results/",
         "residual_dim": 96,
-        "lr": 0.005,
+        "lr": tune.grid_search([1, 2, 4, 8, 16, 32, 64, 96, 128]),
         "num_epochs": 50,
         "momentum": 0.9,
         "lr_scheduler": "reduce_on_plateau",
@@ -34,10 +34,11 @@ def get_config(**kwargs) -> dict:
         "weight_decay": 4e-6,
         "training_mode": "sequential",
         "num_hidden": 0,
-        "complete_intervention_weight": tune.grid_search([0.01, 0.1, 0.25, 0.5, 1.0]),
+        "complete_intervention_weight": 1.0,
         "training_intervention_prob": 0.25,
         "intervention_task_loss_weight": 1.0,
         "intervention_weight": 5.0,
+        "patience": 3,
     }
     experiment_config.update(kwargs)
     experiment_config = get_celeba_config(**experiment_config)

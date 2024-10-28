@@ -319,6 +319,7 @@ class ConceptLightningModel(pl.LightningModule):
         lr_scheduler="cosine",
         chosen_optim="adam",
         complete_intervention_weight=0,
+        patience=15,
         **kwargs,
     ):
         """
@@ -373,6 +374,7 @@ class ConceptLightningModel(pl.LightningModule):
         self.chosen_optim = chosen_optim
         self.num_test_interventions = None
         self.complete_intervention_weight = complete_intervention_weight
+        self.patience = patience
 
     def dummy_pass(self, loader: Iterable[ConceptBatch]):
         """
@@ -739,6 +741,7 @@ class ConceptLightningModel(pl.LightningModule):
         elif self.lr_scheduler == "reduce_on_plateau":
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer,
+                patience=self.patience,
             )
             return {
                 "optimizer": optimizer,
