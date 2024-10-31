@@ -24,7 +24,7 @@ def get_config(**kwargs) -> dict:
         "cw_alignment_frequency": 20,
         "num_cpus": 8,
         "num_gpus": 1.0,
-        "num_samples": 1,
+        "num_samples": 5,
         "batch_size": 512,
         "checkpoint_frequency": 5,
         "norm_type": None,
@@ -33,6 +33,11 @@ def get_config(**kwargs) -> dict:
         "training_mode": "sequential",
         "num_hidden": 0,
         "complete_intervention_weight": 0.0,
+        "intervention_weight": 5.0,
+        "training_intervention_prob": 0.25,
+        "intervention_task_loss_weight": 1.0,
+        "weight_pred": False,
+        "cross": False,
     }
     experiment_config.update(kwargs)
     experiment_config = get_celeba_config(**experiment_config)

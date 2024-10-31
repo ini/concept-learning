@@ -18,7 +18,7 @@ def get_config(**kwargs) -> dict:
         "lr_scheduler": "reduce_on_plateau",
         "chosen_optim": "sgd",
         "alpha": 1.0,
-        "beta": 1.0,
+        "beta": tune.grid_search([1.0, 2.0, 5.0, 10.0]),
         "max_horizon": 6,
         "mi_estimator_hidden_dim": 256,
         "mi_optimizer_lr": 0.001,

@@ -332,7 +332,6 @@ def generate_data(
                     preprocess,
                 ]
             )
-            assert 0, "here"
         else:
             transform = transforms.Compose(
                 [

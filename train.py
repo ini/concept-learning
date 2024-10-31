@@ -92,7 +92,7 @@ def make_concept_model(**config) -> ConceptLightningModel:
 
     elif model_type == "cem_mi":
         model = experiment_module.make_concept_model(config)
-        model = MutualInfoConceptLightningModel(model, **config)
+        model = MutualInfoConceptLightningModel(model, concept_embedding=True, **config)
 
     # With iterative / layer normalization
     elif model_type in ("iter_norm", "layer_norm"):

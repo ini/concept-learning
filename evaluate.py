@@ -28,6 +28,10 @@ from lightning_ray import LightningTuner
 from nn_extensions import Chain
 from models import ConceptLightningModel
 from models.mutual_info import MutualInformationLoss
+from models.posthoc_concept_pred import (
+    ConceptResidualConceptPred,
+    ConceptEmbeddingConceptPred,
+)
 from train import make_concept_model, make_datamodule
 from utils import cross_correlation, set_cuda_visible_devices
 
@@ -271,6 +275,105 @@ def test_mutual_info(
     return np.mean(mutual_infos)
 
 
+def test_concept_pred(
+    model: ConceptLightningModel,
+    model_type: str,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    num_train_epochs: int = 1,
+) -> float:
+    """
+    Test mutual information between concepts and residuals.
+
+    Parameters
+    ----------
+    model : ConceptLightningModel
+        Model to evaluate
+    test_loader : DataLoader
+        Test data loader
+    num_train_epochs : int
+        Number of epochs to train mutual information estimator
+    """
+    # Get mutual information estimator
+    (data, concepts), targets = next(iter(test_loader))
+    _, residual, _ = model(data, concepts=concepts)
+    concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
+    if model_type == "cem":
+        concept_predictor = ConceptEmbeddingConceptPred(
+            residual_dim,
+            concept_dim,
+            binary=model.concept_model.concept_type == "binary",
+        )
+    else:
+        concept_predictor = ConceptResidualConceptPred(
+            residual_dim,
+            concept_dim,
+            binary=model.concept_model.concept_type == "binary",
+        )
+
+    best_val_loss = float("inf")
+    best_predictor_state = None
+
+    # Train the concept predictor
+    for epoch in range(num_train_epochs):
+        # Training phase
+        concept_predictor.train()
+        for (data, concepts), targets in train_loader:
+            with torch.no_grad():
+                _, residual, _ = model(data, concepts=concepts)
+            concept_predictor.step(residual.detach(), concepts.detach())
+
+        # Validation phase
+        val_losses = []
+        concept_predictor.eval()
+        for (data, concepts), targets in val_loader:
+            with torch.no_grad():
+                _, residual, _ = model(data, concepts=concepts)
+                y_pred = concept_predictor(residual)
+                if model.concept_model.concept_type == "binary":
+                    loss_fn = nn.BCEWithLogitsLoss()
+                else:
+                    loss_fn = nn.MSELoss()
+                val_loss = loss_fn(y_pred, concepts).item()
+                val_losses.append(val_loss)
+
+        mean_val_loss = np.mean(val_losses)
+        print(f"Epoch {epoch}: Validation loss = {mean_val_loss}")
+        if mean_val_loss < best_val_loss:
+            best_val_loss = mean_val_loss
+            best_predictor_state = concept_predictor.state_dict()
+
+    # Load the best predictor state
+    if best_predictor_state is not None:
+        concept_predictor.load_state_dict(best_predictor_state)
+
+    # Evaluate the concept predictor
+    metrics = []
+    for i in range(concept_dim):
+        metrics.append([])
+
+    for (data, concepts), target in test_loader:
+        with torch.no_grad():
+            _, residual, _ = model(data, concepts=concepts)
+            y_pred = concept_predictor(residual)
+            if model.concept_model.concept_type == "binary":
+                y_pred = torch.sigmoid(y_pred)
+                for i in range(concept_dim):
+                    pred = (y_pred[:, i] > 0.5).float()
+                    accuracy = (pred == concepts[:, i]).float().mean().item()
+                    metrics[i].append(accuracy)
+            else:
+                for i in range(concept_dim):
+                    mse = ((y_pred[:, i] - concepts[:, i]) ** 2).mean().item()
+                    metrics[i].append(mse)
+
+    # Calculate mean metric for each concept
+    mean_metrics = [np.mean(metric) for metric in metrics]
+
+    return np.array(mean_metrics)
+
+
 ### Loading & Execution
 
 
@@ -312,6 +415,8 @@ def evaluate(config: dict):
     metrics = {}
 
     # Get data loader
+    train_loader = make_datamodule(**config).train_dataloader()
+    val_loader = make_datamodule(**config).val_dataloader()
     test_loader = make_datamodule(**config).test_dataloader()
 
     # Load model
@@ -349,19 +454,25 @@ def evaluate(config: dict):
     elif config["eval_mode"] == "mutual_info":
         metrics["mutual_info"] = test_mutual_info(model, test_loader)
 
+    elif config["eval_mode"] == "concept_pred":
+        metrics["concept_pred"] = test_concept_pred(
+            model, config["model_type"], train_loader, val_loader, test_loader
+        )
+
     # Report evaluation metrics
     ray.train.report(metrics)
 
 
 if __name__ == "__main__":
     MODES = [
-        "accuracy",
-        "neg_intervention",
-        "pos_intervention",
-        "random_concepts",
-        "random_residual",
+        # "accuracy",
+        # "neg_intervention",
+        # "pos_intervention",
+        # "random_concepts",
+        # "random_residual",
         # "correlation",
         # "mutual_info",
+        "concept_pred",
     ]
 
     parser = argparse.ArgumentParser()

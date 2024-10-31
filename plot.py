@@ -505,11 +505,55 @@ def plot_intervention_vs_disentanglement(
             )
 
 
+def plot_concept_predictions(
+    plot_results: ResultGrid,
+    plot_key: tuple[str, ...],
+    groupby: list[str] = ["model_type"],
+    save_dir: Path | str = "./plots",
+    show: bool = True,
+    name: str = "",
+):
+    """
+    Plot positive intervention results.
+
+    Parameters
+    ----------
+    plot_results : ResultGrid
+        Results for the given plot
+    plot_key : tuple[str]
+        Identifier for this plot
+    groupby : list[str]
+        List of train config keys to group by
+    save_dir : Path or str
+        Directory to save plots to
+    show : bool
+        Whether to show the plot
+    """
+    plot_curves(
+        plot_results,
+        plot_key,
+        groupby=groupby,
+        title=f"Concept Predictions: {format_plot_title(plot_key)} {name}",
+        x_label="Concept #",
+        y_label="Concept Prediction Accuracy",
+        get_x=lambda results: np.linspace(
+            0, 1, len(results[0].metrics["concept_pred"])
+        ),
+        get_y=lambda result: result.metrics["concept_pred"],
+        eval_mode="concept_pred",
+        save_dir=save_dir,
+        save_name="concept_pred",
+        prefix=name,
+        show=show,
+    )
+
+
 if __name__ == "__main__":
     PLOT_FUNCTIONS = {
-        "neg_intervention": plot_negative_interventions,
-        "pos_intervention": plot_positive_interventions,
-        "random": plot_random_concepts_residual,
+        # "neg_intervention": plot_negative_interventions,
+        # "pos_intervention": plot_positive_interventions,
+        # "random": plot_random_concepts_residual,
+        "concept_pred": plot_concept_predictions,
         # "disentanglement": plot_disentanglement,
         # "intervention_vs_disentanglement": plot_intervention_vs_disentanglement,
     }
