@@ -34,7 +34,12 @@ def get_config(**kwargs) -> dict:
         "training_mode": "sequential",
         "num_hidden": 0,
         "complete_intervention_weight": 0.0,
+        "intervention_weight": 5.0,
         "training_intervention_prob": 0.25,
+        "intervention_task_loss_weight": 1.0,
+        "weight_pred": False,
+        "cross": False,
+        "gpu_memory_per_worker": "5500 MiB",
     }
     experiment_config.update(kwargs)
     experiment_config = get_cifar_config(**experiment_config)

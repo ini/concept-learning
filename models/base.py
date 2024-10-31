@@ -196,7 +196,9 @@ class ConceptModel(nn.Module):
         x = torch.cat([x_concepts.detach(), attended_residual], dim=-1)
 
         # Get target logits
-        target_logits = self.target_network(x, concepts=concepts)
+        target_logits = self.target_network(
+            x, concepts=concepts, intervention_idxs=intervention_idxs.detach()
+        )
 
         return concept_logits, residual, target_logits
 
@@ -281,7 +283,9 @@ class ConceptModel(nn.Module):
         )
         x = torch.cat([concept_preds.detach(), attended_residual], dim=-1)
 
-        target_logits = self.target_network(x)
+        target_logits = self.target_network(
+            x, concepts=concepts, intervention_idxs=intervention_idxs.detach()
+        )
         return target_logits
 
 
@@ -948,6 +952,5 @@ class ConceptLightningModel(pl.LightningModule):
             )
         else:
             intervention_idxs = None
-        print(self.num_test_interventions)
 
         return self.step(batch, split="test", intervention_idxs=intervention_idxs)

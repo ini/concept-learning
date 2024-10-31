@@ -24,7 +24,7 @@ def make_concept_model(config: dict) -> ConceptModel:
     else:
         bottleneck_dim = concept_dim + residual_dim
 
-    if config.get("model_type") == "cem":
+    if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
         units = (
             [
                 concept_dim * residual_dim + concept_dim

@@ -75,6 +75,48 @@ class CrossAttentionModel(nn.Module):
         return combined_residuals
 
 
+class InterventionWeightModel(nn.Module):
+    def __init__(self, input_dim_c, input_dim_r, embed_dim):
+        super(InterventionWeightModel, self).__init__()
+
+        self.input_dim = input_dim_c + input_dim_r
+        self.embed_dim = embed_dim
+
+        # Weight prediction network: from intervention indices to transformation matrix
+        self.weight_predictor = nn.Sequential(
+            nn.Linear(input_dim_c, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, self.input_dim * embed_dim),
+        )
+
+        # Layer Normalization for the concatenated input
+        self.layer_norm = nn.LayerNorm(self.input_dim)
+
+    def forward(self, x, concepts=None, intervention_idxs=None, attention_mask=None):
+        """
+        concepts: Tensor of shape (batch_size, input_dim_c)
+        residuals: Tensor of shape (batch_size, input_dim_r)
+        intervention_idxs: Binary tensor indicating intervention locations (batch_size, input_dim_c)
+        attention_mask: Not used in this implementation
+        """
+        # Concatenate concepts and residuals
+
+        # Normalize the combined input
+        combined_norm = self.layer_norm(x)
+
+        # Predict transformation weights based on intervention indices
+        batch_size = x.shape[0]
+        weights = self.weight_predictor(intervention_idxs.float())
+
+        # Reshape weights to (batch_size, embed_dim, input_dim)
+        weights = weights.view(batch_size, self.embed_dim, self.input_dim)
+
+        # Apply the predicted weights to transform the combined input
+        transformed_output = torch.bmm(weights, combined_norm.unsqueeze(-1)).squeeze(-1)
+
+        return transformed_output
+
+
 class PassThrough(nn.Module):
     def __init__(self, input_dim_c, input_dim_r, embed_dim, num_heads):
         super(PassThrough, self).__init__()
@@ -94,7 +136,7 @@ def make_concept_model(config: dict) -> ConceptModel:
 
     num_hidden = config.get("num_hidden", 0)
 
-    if config.get("model_type") == "cem":
+    if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
         bottleneck_dim = (
             concept_dim * residual_dim
         )  # residual dim is the size of the concept embedding for cem
@@ -108,11 +150,13 @@ def make_concept_model(config: dict) -> ConceptModel:
             hidden_dim=16,
             add_layer_norm=True,
         )
+    elif config.get("weight_pred", False):
+        target_network = InterventionWeightModel(concept_dim, residual_dim, num_classes)
     else:
         target_network = nn.Linear(bottleneck_dim, num_classes)
         # nn.Linear(bottleneck_dim, num_classes)
 
-    if config.get("model_type") == "cem":
+    if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
         units = (
             [
                 concept_dim * residual_dim + concept_dim
@@ -175,9 +219,13 @@ def make_concept_model(config: dict) -> ConceptModel:
         #     concept_rank_model=concept_rank_model,
         #     **config,
         # )
-        cross_attention = CrossAttentionModel(
-            concept_dim, residual_dim, residual_dim, 8
-        )
+        if config.get("cross", False):
+            cross_attention = CrossAttentionModel(
+                concept_dim, residual_dim, residual_dim, min(residual_dim, 8)
+            )
+        else:
+            cross_attention = PassThrough(concept_dim, residual_dim, residual_dim, 8)
+
         return ConceptModel(
             base_network=make_cnn(bottleneck_dim, cnn_type=backbone),
             concept_network=Apply(lambda x: x[..., :concept_dim]),
