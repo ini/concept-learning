@@ -48,6 +48,7 @@ class OAI(Dataset):
         transform: Callable | None = None,
         processed_data_dir: Path | str = "/data/Datasets/oia_processed/",
         num_concepts: int = -1,
+        use_binary_concepts: bool = False,
     ):
         """
         Parameters
@@ -65,6 +66,8 @@ class OAI(Dataset):
             If the data is not found in the root directory,
             data from this directory will be re-processed and saved to the root
             directory.
+        use_binary_concepts : bool
+            Whether to binarize the concept values
         """
         super().__init__()
         self.root = Path(root).expanduser().resolve()
@@ -81,11 +84,25 @@ class OAI(Dataset):
         # Get concepts
         _, non_image_data, _ = self.load_non_image_data(split, self.data_dir)
         concepts = non_image_data[self.C_cols].values
-        weight_cols = [f"{col}_loss_class_wt" for col in self.C_cols]
+        not_nan = ~np.isnan(concepts)
+        weight_cols = [f'{col}_loss_class_wt' for col in self.C_cols]
+        loss_class_wts = non_image_data[weight_cols].values
+
+        # Bin each concept values into one of 4 classes for each concept
+        if use_binary_concepts:
+            concepts = np.concatenate([
+                concepts < -1,
+                (-1 <= concepts) & (concepts < 0),
+                (0 <= concepts) & (concepts < 1),
+                1 <= concepts,
+            ], axis=-1)
+            not_nan = not_nan.repeat(4, axis=-1)
+            loss_class_wts = loss_class_wts.repeat(4, axis=-1)
+
         self.concepts = OAIConceptTensor(
             torch.as_tensor(concepts),
-            not_nan=torch.as_tensor(~np.isnan(concepts)),
-            loss_class_wts=torch.as_tensor(non_image_data[weight_cols].values),
+            not_nan=torch.as_tensor(not_nan),
+            loss_class_wts=torch.as_tensor(loss_class_wts),
         ).float()
 
         # Get data & targets

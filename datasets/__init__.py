@@ -45,6 +45,7 @@ DATASET_INFO = {
     "cifar100": {"concept_type": "binary", "concept_dim": 20, "num_classes": 100},
     "cub": {"concept_type": "binary", "concept_dim": 112, "num_classes": 200},
     "oai": {"concept_type": "continuous", "concept_dim": 10, "num_classes": 4},
+    "oai_binary": {"concept_type": "binary", "concept_dim": 40, "num_classes": 4},
     "imagenet": {"concept_type": "binary", "concept_dim": 65, "num_classes": 1000},
     "celeba": {"concept_type": "binary", "concept_dim": 6, "num_classes": 256},
     "aa2": {"concept_type": "binary", "concept_dim": 85, "num_classes": 50},
@@ -151,40 +152,40 @@ def get_datasets(
             root=data_dir, split="test", transform=transform_test, download=True
         )
 
-    elif dataset_name == "oai":
-        transform_train = transforms.Compose(
-            [
-                transforms.Resize(224, antialias=False) if resize_oai else lambda x: x,
-                transforms.Normalize(mean=-31334.48612, std=1324.959356),
-                RandomTranslation(0.1, 0.1),
-                lambda x: x.expand(3, -1, -1),  # expand to 3 channels
-            ]
-        )
-        transform_test = transforms.Compose(
-            [
-                transforms.Resize(224, antialias=False) if resize_oai else lambda x: x,
-                transforms.Normalize(mean=-31334.48612, std=1324.959356),
-                lambda x: x.expand(3, -1, -1),  # expand to 3 channels
-            ]
-        )
+    elif dataset_name.startswith('oai'):
+        transform_train = transforms.Compose([
+            transforms.Resize(224, antialias=False) if resize_oai else lambda x: x,
+            transforms.Normalize(mean=-31334.48612, std=1324.959356),
+            RandomTranslation(0.1, 0.1),
+            lambda x: x.expand(3, -1, -1) # expand to 3 channels
+        ])
+        transform_test = transforms.Compose([
+            transforms.Resize(224, antialias=False) if resize_oai else lambda x: x,
+            transforms.Normalize(mean=-31334.48612, std=1324.959356),
+            lambda x: x.expand(3, -1, -1) # expand to 3 channels
+        ])
         train_dataset = OAI(
             root=data_dir,
             split="train",
             transform=transform_train,
             num_concepts=num_concepts,
+            use_binary_concepts=(dataset_name == "oai_binary"),
         )
         val_dataset = OAI(
             root=data_dir,
             split="val",
             transform=transform_test,
             num_concepts=num_concepts,
+            use_binary_concepts=(dataset_name == "oai_binary"),
         )
         test_dataset = OAI(
             root=data_dir,
             split="test",
             transform=transform_test,
             num_concepts=num_concepts,
+            use_binary_concepts=(dataset_name == "oai_binary"),
         )
+
     elif dataset_name == "imagenet":
         normalize = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
