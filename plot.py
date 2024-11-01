@@ -550,9 +550,9 @@ def plot_concept_predictions(
 
 if __name__ == "__main__":
     PLOT_FUNCTIONS = {
-        # "neg_intervention": plot_negative_interventions,
-        # "pos_intervention": plot_positive_interventions,
-        # "random": plot_random_concepts_residual,
+        "neg_intervention": plot_negative_interventions,
+        "pos_intervention": plot_positive_interventions,
+        "random": plot_random_concepts_residual,
         "concept_pred": plot_concept_predictions,
         # "disentanglement": plot_disentanglement,
         # "intervention_vs_disentanglement": plot_intervention_vs_disentanglement,

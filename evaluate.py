@@ -299,7 +299,7 @@ def test_concept_pred(
     (data, concepts), targets = next(iter(test_loader))
     _, residual, _ = model(data, concepts=concepts)
     concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
-    if model_type == "cem":
+    if model_type == "cem" or model_type == "cem_mi":
         concept_predictor = ConceptEmbeddingConceptPred(
             residual_dim,
             concept_dim,
@@ -465,11 +465,11 @@ def evaluate(config: dict):
 
 if __name__ == "__main__":
     MODES = [
-        # "accuracy",
-        # "neg_intervention",
-        # "pos_intervention",
-        # "random_concepts",
-        # "random_residual",
+        "accuracy",
+        "neg_intervention",
+        "pos_intervention",
+        "random_concepts",
+        "random_residual",
         # "correlation",
         # "mutual_info",
         "concept_pred",

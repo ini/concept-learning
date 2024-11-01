@@ -124,7 +124,8 @@ class MultiMutualInformationLoss(nn.Module):
             Batch of y samples
         """
         batch_size, num_concepts, embed_dim = x.shape
-        probs = []
+        probs = torch.tensor(0.0, device=x.device)
+
         for i in range(num_concepts):
             # Exclude the i-th concept
             x_except_i = torch.cat([x[:, :i, :], x[:, i + 1 :, :]], dim=1)
@@ -133,11 +134,9 @@ class MultiMutualInformationLoss(nn.Module):
             mi_estimate = F.softplus(
                 self.mi_estimators[i](x_except_i, y[:, i].unsqueeze(1))
             )
-            probs.append(mi_estimate)
+            probs += mi_estimate
 
-        y_pred = torch.stack(probs)
-
-        return torch.mean(y_pred, dim=0)
+        return probs
 
     def step(self, x: Tensor, y: Tensor) -> Tensor:
         """
@@ -158,7 +157,19 @@ class MultiMutualInformationLoss(nn.Module):
 
         # Train the MI estimator
         self.mi_optimizer.zero_grad()
-        estimation_loss = self.mi_estimator.learning_loss(x.detach(), y.detach())
+        batch_size, num_concepts, embed_dim = x.shape
+        estimation_loss = torch.tensor(0.0, device=x.device)
+
+        for i in range(num_concepts):
+            # Exclude the i-th concept
+            x_except_i = torch.cat([x[:, :i, :], x[:, i + 1 :, :]], dim=1)
+            # Reshape to (batch_size, -1)
+            x_except_i = x_except_i.view(batch_size, -1)
+            mi_loss_i = self.mi_estimators[i].learning_loss(
+                x_except_i.detach(), y[:, i].unsqueeze(1).detach()
+            )
+            estimation_loss += mi_loss_i
+
         estimation_loss.backward()
         self.mi_optimizer.step()
 
@@ -218,7 +229,9 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
         batch_idx : int
             Batch index
         """
-        if isinstance(self.residual_loss_fn, MutualInformationLoss):
+        if isinstance(self.residual_loss_fn, MutualInformationLoss) or isinstance(
+            self.residual_loss_fn, MultiMutualInformationLoss
+        ):
             # Get concepts and residual
             with torch.no_grad():
                 (data, concepts), targets = batch
