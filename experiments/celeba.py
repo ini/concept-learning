@@ -219,7 +219,7 @@ def make_concept_model(config: dict) -> ConceptModel:
         #     concept_rank_model=concept_rank_model,
         #     **config,
         # )
-        if config.get("cross", False):
+        if config.get("cross", False) and residual_dim >= 4:
             cross_attention = CrossAttentionModel(
                 concept_dim, residual_dim, residual_dim, min(residual_dim, 8)
             )

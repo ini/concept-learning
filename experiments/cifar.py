@@ -40,6 +40,7 @@ def make_concept_model(config: dict) -> ConceptModel:
             + (int_model_layers or [256, 128])
             + [concept_dim]
         )
+
     layers = []
     for i in range(1, len(units)):
         if int_model_use_bn:
@@ -72,7 +73,7 @@ def make_concept_model(config: dict) -> ConceptModel:
             **config,
         )
     else:
-        if config.get("cross", False):
+        if config.get("cross", False) and residual_dim >= 4:
             cross_attention = CrossAttentionModel(
                 concept_dim, residual_dim, residual_dim, 8
             )
