@@ -239,4 +239,6 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
 
             # Calculate mutual information estimator loss
             mi_estimator_loss = self.residual_loss_fn.step(residual, concepts)
+            mi_estimate = self.residual_loss_fn(residual, concepts)
             self.log("mi_estimator_loss", mi_estimator_loss, **self.log_kwargs)
+            self.log("mi_estimate", mi_estimate.mean(), **self.log_kwargs)

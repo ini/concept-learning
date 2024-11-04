@@ -7,11 +7,11 @@ from experiments.cifar import (
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": "mi_residual",
+        "model_type": "cem_mi",
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/cifar/",
         "ray_storage_dir": "/data/renos/ray_results/",
-        "residual_dim": 256,
+        "residual_dim": 16,
         "lr": 0.0009,
         "num_epochs": 500,
         "momentum": 0.9,
