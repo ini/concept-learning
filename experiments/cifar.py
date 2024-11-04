@@ -75,7 +75,7 @@ def make_concept_model(config: dict) -> ConceptModel:
     else:
         if config.get("cross", False) and residual_dim >= 4:
             cross_attention = CrossAttentionModel(
-                concept_dim, residual_dim, residual_dim, 8
+                concept_dim, residual_dim, residual_dim, min(residual_dim, 8)
             )
         else:
             cross_attention = PassThrough(concept_dim, residual_dim, residual_dim, 8)
