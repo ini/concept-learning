@@ -1,46 +1,20 @@
 import os
 import ray
 
-from models import ConceptModel, make_bottleneck_layer
-from nn_extensions import Apply
-from utils import make_cnn, make_mlp, process_grid_search_tuples
+from utils import process_grid_search_tuples
+
+from .cub import make_concept_model
 
 
-
-def make_concept_model(config: dict) -> ConceptModel:
-    num_classes = config['num_classes']
-    concept_dim = config['concept_dim']
-    residual_dim = config['residual_dim']
-    cnn_type = config.get('cnn_type', 'resnet18')
-    bottleneck_dim = concept_dim + residual_dim
-
-    if config.get('separate_branches', False):
-        return ConceptModel(
-            concept_network=make_cnn(concept_dim, cnn_type=cnn_type),
-            residual_network=make_cnn(residual_dim, cnn_type=cnn_type),
-            target_network=make_mlp(num_classes, num_hidden_layers=2, hidden_dim=50),
-            bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
-            **config,
-        )
-
-    else:
-        return ConceptModel(
-            base_network=make_cnn(bottleneck_dim, cnn_type=cnn_type),
-            concept_network=Apply(lambda x: x[..., :concept_dim]),
-            residual_network=Apply(lambda x: x[..., concept_dim:]),
-            target_network=make_mlp(num_classes, num_hidden_layers=2, hidden_dim=50),
-            bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
-            **config,
-        )
 
 def get_config(**kwargs) -> dict:
     config = {
-        'model_type': ray.tune.grid_search([
-            'latent_residual',
-            'decorrelated_residual',
-            'iter_norm',
-            'mi_residual',
-        ]),
+        # 'model_type': ray.tune.grid_search([
+        #     'latent_residual',
+        #     'decorrelated_residual',
+        #     'iter_norm',
+        #     'mi_residual',
+        # ]),
         'residual_dim': ray.tune.grid_search([0, 1, 2, 4, 8, 16, 32, 64]),
         'dataset': 'oai',
         'data_dir': os.environ.get('CONCEPT_DATA_DIR', './data'),
@@ -57,6 +31,8 @@ def get_config(**kwargs) -> dict:
         'mi_optimizer_lr': 1e-3,
         'cw_alignment_frequency': 20,
         'checkpoint_frequency': 5,
+        "backbone": "resnet18",
+        "num_target_network_layers": 2,
     }
     config.update(kwargs)
     config = process_grid_search_tuples(config)

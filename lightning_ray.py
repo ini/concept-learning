@@ -751,8 +751,15 @@ class LightningTuner:
         url = tb.launch()
         safe_print(f"TensorBoard started at {url}", "\n")
 
-        # Run the experiment
-        return self.tuner.fit()
+        # Run background thread to periodically print experiment info
+        message = f"\nExperiment located in {logdir}\nTensorBoard running at {url}\n"
+        background_thread = RepeatingTimer(30.0, lambda: safe_print(message))
+        background_thread.start()
+
+        # Run experiment
+        results = self.tuner.fit()
+        background_thread.stop()
+        return results
 
     def get_results(
         self,
@@ -848,3 +855,22 @@ def make_lighting_trainer(config: dict[str, Any] = {}):
     }
     trainer = variable_kwargs_fn_wrapper(pl.Trainer)(**trainer_kwargs)
     return trainer
+
+
+
+import threading
+
+class RepeatingTimer(threading.Thread):
+
+    def __init__(self, interval: int, callback: Callable):
+        super().__init__()
+        self.interval, self.callback = interval, callback
+        self.stop_event = threading.Event()
+
+    def run(self):
+        self.callback()
+        while not self.stop_event.wait(self.interval):
+            self.callback()
+
+    def stop(self):
+        self.stop_event.set()

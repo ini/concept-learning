@@ -9,7 +9,7 @@ from torch import Tensor
 from torch.nn import functional as F
 from typing import Any, Callable, Iterable, Literal
 
-from nn_extensions import VariableKwargs
+from nn_extensions import Apply, VariableKwargs
 from utils import accuracy, unwrap, zero_loss_fn, remove_prefix, remove_keys_with_prefix
 from nn_extensions import Chain
 import numpy as np
@@ -17,6 +17,7 @@ import numpy as np
 ### Typing
 
 ConceptBatch = tuple[tuple[Tensor, Tensor], Tensor]  # ((data, concepts), targets)
+
 
 
 ### Concept Models
@@ -54,7 +55,7 @@ class ConceptModel(nn.Module):
         base_network: nn.Module = nn.Identity(),
         bottleneck_layer: nn.Module = nn.Identity(),
         concept_rank_model: nn.Module = nn.Identity(),
-        cross_attention: nn.Module = nn.Identity(),
+        cross_attention: nn.Module = None,
         concept_type: Literal["binary", "one_hot", "continuous"] = "binary",
         training_mode: Literal[
             "independent", "sequential", "joint", "intervention_aware"
@@ -80,6 +81,7 @@ class ConceptModel(nn.Module):
             Training mode (see https://arxiv.org/abs/2007.04612)
         """
         super().__init__()
+        cross_attention = cross_attention or Apply(lambda *args: args[1])
 
         def freeze_layers_except_final(model, final_layer_name="fc"):
             """
