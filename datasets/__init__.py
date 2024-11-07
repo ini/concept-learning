@@ -1,5 +1,6 @@
 import functools
 import numpy as np
+import os
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -7,8 +8,8 @@ import torch.nn as nn
 from torch import Tensor
 from torch.utils.data import Dataset, random_split
 from torchvision import transforms
+from tqdm import tqdm
 from typing import Any
-import os
 
 from .cifar import CIFAR100
 from .cub import CUB
@@ -18,7 +19,7 @@ from .pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 from .imagenet import ImageNet
 from .celeba import generate_data as celeba_generate_data
 from .aa2 import AA2
-from tqdm import tqdm
+
 
 DATASET_INFO = {
     "mnist_modulo": {"concept_type": "binary", "concept_dim": 5, "num_classes": 10},
@@ -363,7 +364,7 @@ def get_concept_loss_fn(
         return weighted_mse
 
     else:
-        weights_path = os.path.join(data_dir, "pos_weights.pt")
+        weights_path = os.path.join(data_dir, f"{dataset_name}_pos_weights.pt")
 
         if os.path.exists(weights_path):
             # Load the pos_weight tensor if it already exists
@@ -387,6 +388,7 @@ def get_concept_loss_fn(
 
             pos_weight = concepts_neg_count / (concepts_pos_count + 1e-6)
             torch.save(pos_weight, weights_path)
+
         return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
 
