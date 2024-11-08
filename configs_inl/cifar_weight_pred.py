@@ -8,8 +8,8 @@ from experiments.cifar import (
 def get_config(**kwargs) -> dict:
     experiment_config = {
         "model_type": "mi_residual",
-        "save_dir": "/data/renos/supervised_concept_learning/",
-        "data_dir": "/data/Datasets/cifar/",
+        "save_dir": "/home/zaboreno/supervised_concept_learning/",
+        "data_dir": "/home/zaboreno/Datasets/cifar/",
         "ray_storage_dir": "/data/renos/ray_results/",
         "residual_dim": tune.grid_search([2, 4, 8, 16, 32, 64, 128, 256]),
         "lr": 1e-4,
@@ -26,9 +26,9 @@ def get_config(**kwargs) -> dict:
         "mi_estimator_hidden_dim": 512,
         "mi_optimizer_lr": 0.001,
         "cw_alignment_frequency": 20,
-        "num_cpus": 8,
+        "num_cpus": 1,
         "num_gpus": 1.0,
-        "num_samples": 5,
+        "num_samples": 3,
         "batch_size": 64,
         "checkpoint_frequency": 5,
         "norm_type": None,
