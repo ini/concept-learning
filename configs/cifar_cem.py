@@ -37,6 +37,7 @@ def get_config(**kwargs) -> dict:
         "training_intervention_prob": 0.25,
         "intervention_task_loss_weight": 1.0,
         "intervention_weight": 5.0,
+        "backbone": "resnet18",
     }
     experiment_config.update(kwargs)
     experiment_config = get_cifar_config(**experiment_config)
