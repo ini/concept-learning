@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from lib.ccw import EYE
+from models.focal_loss import CB_loss
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -17,7 +18,6 @@ import numpy as np
 ### Typing
 
 ConceptBatch = tuple[tuple[Tensor, Tensor], Tensor]  # ((data, concepts), targets)
-
 
 
 ### Concept Models
@@ -326,6 +326,7 @@ class ConceptLightningModel(pl.LightningModule):
         chosen_optim="adam",
         complete_intervention_weight=0,
         patience=15,
+        focal_loss=False,
         **kwargs,
     ):
         """
@@ -353,6 +354,7 @@ class ConceptLightningModel(pl.LightningModule):
         self.concept_model = concept_model
         self.concept_loss_fn = concept_loss_fn or zero_loss_fn
         self.residual_loss_fn = residual_loss_fn or zero_loss_fn
+        self.focal_loss = focal_loss
         self.lr = lr
         self.alpha = alpha
         self.beta = beta
@@ -662,7 +664,21 @@ class ConceptLightningModel(pl.LightningModule):
         concept_logits, residual, target_logits = outputs
 
         # Concept loss
-        concept_loss = self.concept_loss_fn(concept_logits, concepts)
+        if self.focal_loss:
+            no_of_classes = concept_logits.shape[-1]
+            # beta = 0.9999
+            # gamma = 2.0
+            # concept_loss = CB_loss(
+            #     concepts,
+            #     concept_logits,
+            #     samples_per_cls,
+            #     no_of_classes,
+            #     "focal",
+            #     beta,
+            #     gamma,
+            # )
+        else:
+            concept_loss = self.concept_loss_fn(concept_logits, concepts)
         if concept_loss.requires_grad:
             self.log("concept_loss", concept_loss, **self.log_kwargs)
 

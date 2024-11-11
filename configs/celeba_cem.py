@@ -7,13 +7,13 @@ from experiments.celeba import (
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": "cem_mi",
+        "model_type": tune.grid_search(["cem", "cem_mi"]),
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/celeba/",
         "ray_storage_dir": "/data/renos/ray_results/",
         "residual_dim": 16,
         "lr": 0.005,
-        "num_epochs": 300,
+        "num_epochs": 100,
         "momentum": 0.9,
         "lr_scheduler": "reduce_on_plateau",
         "chosen_optim": "sgd",
