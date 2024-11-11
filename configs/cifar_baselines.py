@@ -44,6 +44,7 @@ def get_config(**kwargs) -> dict:
         "intervention_weight": 2.0,
         "gpu_memory_per_worker": "5500 MiB",
         "cross": False,
+        "backbone": "resnet18",
     }
     experiment_config.update(kwargs)
     experiment_config = get_cifar_config(**experiment_config)
