@@ -13,7 +13,7 @@ def get_config(**kwargs) -> dict:
         "ray_storage_dir": "/data/renos/ray_results/",
         "residual_dim": tune.grid_search([1, 2, 4, 8, 16]),
         "lr": 0.001,
-        "num_epochs": 200,
+        "num_epochs": 50,
         "momentum": 0.9,
         "lr_scheduler": "reduce_on_plateau",
         "chosen_optim": "sgd",
