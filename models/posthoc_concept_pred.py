@@ -19,6 +19,8 @@ class ConceptResidualConceptPred(nn.Module):
         hidden_dim: int = 64,
         lr: float = 1e-3,
         binary: bool = True,
+        hidden_concept=True,
+        num_hidden_concept=0,
     ):
         """
         Parameters
@@ -36,6 +38,8 @@ class ConceptResidualConceptPred(nn.Module):
         self.fc = nn.Linear(x_dim, y_dim)
         self.mi_optimizer = torch.optim.RMSprop(self.fc.parameters(), lr=lr)
         self.binary = binary
+        self.hidden_concept = hidden_concept
+        self.num_hidden_concept = num_hidden_concept
 
         # Freeze all params for MI estimator inference
         self.eval()
@@ -84,6 +88,9 @@ class ConceptResidualConceptPred(nn.Module):
         else:
             loss_fn = nn.MSELoss()
         loss = loss_fn(y_pred, y)
+        l1_lambda = 1e-3  # Small L1 regularization term
+        l1_loss = sum(p.abs().sum() for p in self.parameters())
+        loss += l1_lambda * l1_loss
         loss.backward()
         self.mi_optimizer.step()
 
@@ -105,6 +112,8 @@ class ConceptEmbeddingConceptPred(nn.Module):
         hidden_dim: int = 64,
         lr: float = 1e-3,
         binary: bool = True,
+        hidden_concept=True,
+        num_hidden_concept=0,
     ):
         """
         Parameters
@@ -120,13 +129,25 @@ class ConceptEmbeddingConceptPred(nn.Module):
         """
         super().__init__()
         concept_prob_generators = torch.nn.ModuleList()
-        for i in range(y_dim):
-            concept_prob_generators.append(
-                torch.nn.Linear(
-                    (y_dim - 1) * x_dim,
-                    1,
+        self.num_concepts = y_dim
+        self.hidden_concept = hidden_concept
+        self.num_hidden_concept = num_hidden_concept
+        for i in range(y_dim + self.num_hidden_concept):
+            if i < y_dim:
+                concept_prob_generators.append(
+                    torch.nn.Linear(
+                        (self.num_concepts - 1) * x_dim,
+                        1,
+                    )
                 )
-            )
+            else:
+                concept_prob_generators.append(
+                    torch.nn.Linear(
+                        (self.num_concepts) * x_dim,
+                        1,
+                    )
+                )
+
         self.concept_prob_generators = concept_prob_generators
         self.mi_optimizer = torch.optim.RMSprop(
             self.concept_prob_generators.parameters(), lr=lr
@@ -149,13 +170,14 @@ class ConceptEmbeddingConceptPred(nn.Module):
         """
         batch_size, num_concepts, embed_dim = x.shape
         probs = []
-        for i in range(num_concepts):
+        for i in range(num_concepts + self.num_hidden_concept):
             # Exclude the i-th concept
-            x_except_i = torch.cat([x[:, :i, :], x[:, i + 1 :, :]], dim=1)
+            if i < num_concepts:
+                x_except_i = torch.cat([x[:, :i, :], x[:, i + 1 :, :]], dim=1)
+            else:
+                x_except_i = x
             # Reshape to (batch_size, -1)
-            print(x_except_i.shape)
             x_except_i = x_except_i.view(batch_size, -1)
-            print(x_except_i.shape)
             prob = self.concept_prob_generators[i](x_except_i)
             probs.append(prob)
         y_pred = torch.stack(probs, dim=1).squeeze()

@@ -4,8 +4,8 @@ from experiments.cub import get_config as get_cub_config, make_concept_model
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": "cem",
-        "residual_dim": 16,
+        "model_type": tune.grid_search(["cem", "cem_mi"]),
+        "residual_dim": tune.grid_search([2, 4, 8, 16]),
         "lr": 0.01,
         "num_epochs": 200,
         "momentum": 0.9,
@@ -22,7 +22,7 @@ def get_config(**kwargs) -> dict:
         "cw_alignment_frequency": 20,
         "num_cpus": 8,
         "num_gpus": 1.0,
-        "num_samples": 1,
+        "num_samples": 5,
         "batch_size": 256,
         "checkpoint_frequency": 5,
         "norm_type": None,
@@ -33,7 +33,7 @@ def get_config(**kwargs) -> dict:
         "complete_intervention_weight": 0.0,  # tune.grid_search([0.01, 0.1, 0.25, 0.5]),
         "training_intervention_prob": 0.25,
         "intervention_task_loss_weight": 1.0,
-        "intervention_weight": 2.0,
+        "intervention_weight": 5.0,
         "gpu_memory_per_worker": "35000 MiB",
         "cross": True,
     }

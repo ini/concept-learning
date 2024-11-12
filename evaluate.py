@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import copy
 
 # make sure slurm isn't exposed
 if "SLURM_NTASKS" in os.environ:
@@ -282,6 +283,7 @@ def test_concept_pred(
     val_loader: DataLoader,
     test_loader: DataLoader,
     num_train_epochs: int = 1,
+    dataset=None,
 ) -> float:
     """
     Test mutual information between concepts and residuals.
@@ -296,20 +298,32 @@ def test_concept_pred(
         Number of epochs to train mutual information estimator
     """
     # Get mutual information estimator
+    if dataset == "celeba":
+        hidden_concepts = 0
+    else:
+        hidden_concepts = 0
     (data, concepts), targets = next(iter(test_loader))
-    _, residual, _ = model(data, concepts=concepts)
-    concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
+    if hidden_concepts != 0:
+        _, residual, _ = model(data, concepts=concepts[:, :-hidden_concepts])
+    else:
+        _, residual, _ = model(data, concepts=concepts)
     if model_type == "cem" or model_type == "cem_mi":
+        concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1] // 2
         concept_predictor = ConceptEmbeddingConceptPred(
             residual_dim,
-            concept_dim,
+            concept_dim - hidden_concepts,
             binary=model.concept_model.concept_type == "binary",
+            hidden_concept=hidden_concepts > 0,
+            num_hidden_concept=hidden_concepts,
         )
     else:
+        concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
         concept_predictor = ConceptResidualConceptPred(
             residual_dim,
             concept_dim,
             binary=model.concept_model.concept_type == "binary",
+            hidden_concept=hidden_concepts > 0,
+            num_hidden_concept=hidden_concepts,
         )
 
     best_val_loss = float("inf")
@@ -320,17 +334,54 @@ def test_concept_pred(
         # Training phase
         concept_predictor.train()
         for (data, concepts), targets in train_loader:
-            with torch.no_grad():
-                _, residual, _ = model(data, concepts=concepts)
-            concept_predictor.step(residual.detach(), concepts.detach())
+            if model_type == "cem" or model_type == "cem_mi":
+                with torch.no_grad():
+                    if hidden_concepts != 0:
+                        pre_contexts, residual, _ = model(
+                            data, concepts=concepts[:, :-hidden_concepts]
+                        )
+                    else:
+                        pre_contexts, residual, _ = model(data, concepts=concepts)
+                contexts = pre_contexts.sigmoid()
+                r_dim = residual.shape[-1]
+                pos_embedding = residual[:, :, : r_dim // 2]
+                neg_embedding = residual[:, :, r_dim // 2 :]
+                x = pos_embedding * torch.unsqueeze(
+                    contexts, dim=-1
+                ) + neg_embedding * torch.unsqueeze(1 - contexts, dim=-1)
+                concept_predictor.step(x.detach(), concepts.detach())
+            else:
+                with torch.no_grad():
+                    if hidden_concepts != 0:
+                        pre_contexts, residual, _ = model(
+                            data, concepts=concepts[:, :-hidden_concepts]
+                        )
+                    else:
+                        _, residual, _ = model(data, concepts=concepts)
+                concept_predictor.step(residual.detach(), concepts.detach())
 
         # Validation phase
         val_losses = []
         concept_predictor.eval()
         for (data, concepts), targets in val_loader:
             with torch.no_grad():
-                _, residual, _ = model(data, concepts=concepts)
-                y_pred = concept_predictor(residual)
+                if hidden_concepts != 0:
+                    pre_contexts, residual, _ = model(
+                        data, concepts=concepts[:, :-hidden_concepts]
+                    )
+                else:
+                    pre_contexts, residual, _ = model(data, concepts=concepts)
+                if model_type == "cem" or model_type == "cem_mi":
+                    contexts = pre_contexts.sigmoid()
+                    r_dim = residual.shape[-1]
+                    pos_embedding = residual[:, :, : r_dim // 2]
+                    neg_embedding = residual[:, :, r_dim // 2 :]
+                    x = pos_embedding * torch.unsqueeze(
+                        contexts, dim=-1
+                    ) + neg_embedding * torch.unsqueeze(1 - contexts, dim=-1)
+                else:
+                    x = residual
+                y_pred = concept_predictor(x)
                 if model.concept_model.concept_type == "binary":
                     loss_fn = nn.BCEWithLogitsLoss()
                 else:
@@ -352,26 +403,85 @@ def test_concept_pred(
     metrics = []
     for i in range(concept_dim):
         metrics.append([])
+    intchange_metrics = []
+    for i in range(concept_dim):
+        intchange_metrics.append([])
 
     for (data, concepts), target in test_loader:
         with torch.no_grad():
-            _, residual, _ = model(data, concepts=concepts)
-            y_pred = concept_predictor(residual)
+            if hidden_concepts != 0:
+                pre_contexts, residual, _ = model(
+                    data, concepts=concepts[:, :-hidden_concepts]
+                )
+            else:
+                pre_contexts, residual, _ = model(data, concepts=concepts)
+            if model_type == "cem" or model_type == "cem_mi":
+                contexts = pre_contexts.sigmoid()
+                r_dim = residual.shape[-1]
+                pos_embedding = residual[:, :, : r_dim // 2]
+                neg_embedding = residual[:, :, r_dim // 2 :]
+                x_test = pos_embedding * torch.unsqueeze(
+                    contexts, dim=-1
+                ) + neg_embedding * torch.unsqueeze(1 - contexts, dim=-1)
+            else:
+                x_test = residual
+            y_pred_base = concept_predictor(x_test)
             if model.concept_model.concept_type == "binary":
-                y_pred = torch.sigmoid(y_pred)
+                y_pred_base = torch.sigmoid(y_pred_base)
                 for i in range(concept_dim):
-                    pred = (y_pred[:, i] > 0.5).float()
+                    pred = (y_pred_base[:, i] > 0.5).float()
                     accuracy = (pred == concepts[:, i]).float().mean().item()
                     metrics[i].append(accuracy)
             else:
                 for i in range(concept_dim):
-                    mse = ((y_pred[:, i] - concepts[:, i]) ** 2).mean().item()
+                    mse = ((y_pred_base[:, i] - concepts[:, i]) ** 2).mean().item()
                     metrics[i].append(mse)
 
-    # Calculate mean metric for each concept
-    mean_metrics = [np.mean(metric) for metric in metrics]
+            # perform concept interventions with concept full concepts
+            if model_type == "cem" or model_type == "cem_mi":
+                r_dim = residual.shape[-1]
+                pos_embedding = residual[:, :, : r_dim // 2]
+                neg_embedding = residual[:, :, r_dim // 2 :]
+                x_test = pos_embedding * torch.unsqueeze(
+                    concepts[:, :-hidden_concepts], dim=-1
+                ) + neg_embedding * torch.unsqueeze(
+                    1 - concepts[:, :-hidden_concepts], dim=-1
+                )
+            else:
+                x_test = residual
 
-    return np.array(mean_metrics)
+            y_pred_intervention = concept_predictor(x_test)
+
+            if model.concept_model.concept_type == "binary":
+                y_pred_intervention = torch.sigmoid(y_pred_intervention)
+                for i in range(concept_dim):
+                    pred_intervene = (y_pred_intervention[:, i] > 0.5).float()
+                    pred = (y_pred_base[:, i] > 0.5).float()
+                    change = (pred != pred_intervene).float().mean().item()
+                    intchange_metrics[i].append(change)
+
+    # Calculate mean metric for each concept
+    mean_metrics = np.array([np.mean(metric) for metric in metrics])
+    mean_change_metrics = np.array([np.mean(metric) for metric in intchange_metrics])
+
+    if hidden_concepts > 0:
+        return np.array(
+            [
+                np.mean(mean_metrics[:-hidden_concepts]),
+                np.mean(mean_metrics[-hidden_concepts:]),
+                np.mean(mean_change_metrics[:-hidden_concepts]),
+                np.mean(mean_change_metrics[-hidden_concepts:]),
+            ]
+        )
+    else:
+        return np.array(
+            [
+                np.mean(mean_metrics),
+                0,
+                np.mean(mean_change_metrics),
+                0,
+            ]
+        )
 
 
 ### Loading & Execution
@@ -415,9 +525,16 @@ def evaluate(config: dict):
     metrics = {}
 
     # Get data loader
-    train_loader = make_datamodule(**config).train_dataloader()
-    val_loader = make_datamodule(**config).val_dataloader()
-    test_loader = make_datamodule(**config).test_dataloader()
+    if config["eval_mode"] == "concept_pred" and config["dataset"] == "celeba":
+        new_config = copy.deepcopy(config)
+        # new_config["num_concepts"] = 8
+        train_loader = make_datamodule(**new_config).train_dataloader()
+        val_loader = make_datamodule(**new_config).val_dataloader()
+        test_loader = make_datamodule(**new_config).test_dataloader()
+    else:
+        train_loader = make_datamodule(**config).train_dataloader()
+        val_loader = make_datamodule(**config).val_dataloader()
+        test_loader = make_datamodule(**config).test_dataloader()
 
     # Load model
     tuner = LightningTuner("val_acc", "max")
@@ -456,7 +573,12 @@ def evaluate(config: dict):
 
     elif config["eval_mode"] == "concept_pred":
         metrics["concept_pred"] = test_concept_pred(
-            model, config["model_type"], train_loader, val_loader, test_loader
+            model,
+            config["model_type"],
+            train_loader,
+            val_loader,
+            test_loader,
+            dataset=config["dataset"],
         )
 
     # Report evaluation metrics

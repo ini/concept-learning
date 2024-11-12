@@ -153,18 +153,22 @@ def get_datasets(
             root=data_dir, split="test", transform=transform_test, download=True
         )
 
-    elif dataset_name.startswith('oai'):
-        transform_train = transforms.Compose([
-            transforms.Resize(224, antialias=False) if resize_oai else lambda x: x,
-            transforms.Normalize(mean=-31334.48612, std=1324.959356),
-            RandomTranslation(0.1, 0.1),
-            lambda x: x.expand(3, -1, -1) # expand to 3 channels
-        ])
-        transform_test = transforms.Compose([
-            transforms.Resize(224, antialias=False) if resize_oai else lambda x: x,
-            transforms.Normalize(mean=-31334.48612, std=1324.959356),
-            lambda x: x.expand(3, -1, -1) # expand to 3 channels
-        ])
+    elif dataset_name.startswith("oai"):
+        transform_train = transforms.Compose(
+            [
+                transforms.Resize(224, antialias=False) if resize_oai else lambda x: x,
+                transforms.Normalize(mean=-31334.48612, std=1324.959356),
+                RandomTranslation(0.1, 0.1),
+                lambda x: x.expand(3, -1, -1),  # expand to 3 channels
+            ]
+        )
+        transform_test = transforms.Compose(
+            [
+                transforms.Resize(224, antialias=False) if resize_oai else lambda x: x,
+                transforms.Normalize(mean=-31334.48612, std=1324.959356),
+                lambda x: x.expand(3, -1, -1),  # expand to 3 channels
+            ]
+        )
         train_dataset = OAI(
             root=data_dir,
             split="train",
@@ -223,10 +227,10 @@ def get_datasets(
             "num_classes": 1000,
             "use_imbalance": True,
             "use_binary_vector_class": True,
-            "num_concepts": 6,
+            "num_concepts": 6 if num_concepts == -1 else num_concepts,
             "label_binary_width": 1,
             "label_dataset_subsample": 12,
-            "num_hidden_concepts": 2,
+            "num_hidden_concepts": 2 if num_concepts == -1 else 0,
             "selected_concepts": False,
             "num_workers": 8,
             "sampling_percent": 1,

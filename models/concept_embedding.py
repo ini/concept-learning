@@ -107,8 +107,7 @@ class ConceptEmbeddingModel(ConceptModel):
             intervention_idxs = torch.zeros_like(concepts)
         # intervene on concepts
         concept_preds = (
-            c_sem.detach().sigmoid() * (1 - intervention_idxs)
-            + concepts * intervention_idxs
+            c_sem.detach() * (1 - intervention_idxs) + concepts * intervention_idxs
         )
 
         if self.training and self.training_mode == "independent":

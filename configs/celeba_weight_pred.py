@@ -1,19 +1,19 @@
 from ray import tune
-from experiments.cifar import (
-    get_config as get_cifar_config,
+from experiments.celeba import (
+    get_config as get_celeba_config,
     make_concept_model,
 )
 
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": tune.grid_search(["cem", "cem_mi"]),
+        "model_type": "mi_residual",
         "save_dir": "/data/renos/supervised_concept_learning/",
-        "data_dir": "/data/Datasets/cifar/",
+        "data_dir": "/data/Datasets/celeba/",
         "ray_storage_dir": "/data/renos/ray_results/",
-        "residual_dim": 16,
-        "lr": 0.001,
-        "num_epochs": 200,
+        "residual_dim": 96,
+        "lr": 0.006,
+        "num_epochs": 25,
         "momentum": 0.9,
         "lr_scheduler": "reduce_on_plateau",
         "chosen_optim": "sgd",
@@ -21,29 +21,27 @@ def get_config(**kwargs) -> dict:
         # "chosen_optim": "adam",
         "alpha": 1.0,
         "beta": 1.0,
-        # "initial_horizon": 10,
-        "max_horizon": 6,
         "mi_estimator_hidden_dim": 256,
         "mi_optimizer_lr": 0.001,
         "cw_alignment_frequency": 20,
         "num_cpus": 8,
         "num_gpus": 1.0,
-        "num_samples": 5,
+        "num_samples": 1,
         "batch_size": 64,
-        "checkpoint_frequency": 5,
+        "checkpoint_frequency": 1,
         "norm_type": None,
         "T_whitening": 3,
         "weight_decay": 4e-6,
         "training_mode": "sequential",
         "num_hidden": 0,
-        "complete_intervention_weight": 0.0,
+        "complete_intervention_weight": 1.0,
         "training_intervention_prob": 0.25,
         "intervention_task_loss_weight": 1.0,
-        "intervention_weight": 2.0,
-        "gpu_memory_per_worker": "5500 MiB",
-        "cross": False,
-        "backbone": "resnet18",
+        "intervention_weight": 5.0,
+        "patience": 3,
+        "cross": True,
+        "weight_pred": False,
     }
     experiment_config.update(kwargs)
-    experiment_config = get_cifar_config(**experiment_config)
+    experiment_config = get_celeba_config(**experiment_config)
     return experiment_config

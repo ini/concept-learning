@@ -505,6 +505,49 @@ def plot_intervention_vs_disentanglement(
             )
 
 
+# def plot_concept_predictions(
+#     plot_results: ResultGrid,
+#     plot_key: tuple[str, ...],
+#     groupby: list[str] = ["model_type"],
+#     save_dir: Path | str = "./plots",
+#     show: bool = True,
+#     name: str = "",
+# ):
+#     """
+#     Plot positive intervention results.
+
+#     Parameters
+#     ----------
+#     plot_results : ResultGrid
+#         Results for the given plot
+#     plot_key : tuple[str]
+#         Identifier for this plot
+#     groupby : list[str]
+#         List of train config keys to group by
+#     save_dir : Path or str
+#         Directory to save plots to
+#     show : bool
+#         Whether to show the plot
+#     """
+#     plot_curves(
+#         plot_results,
+#         plot_key,
+#         groupby=groupby,
+#         title=f"Concept Predictions: {format_plot_title(plot_key)} {name}",
+#         x_label="Concept #",
+#         y_label="Concept Prediction Accuracy",
+#         get_x=lambda results: np.linspace(
+#             0, 1, len(results[0].metrics["concept_pred"])
+#         ),
+#         get_y=lambda result: result.metrics["concept_pred"],
+#         eval_mode="concept_pred",
+#         save_dir=save_dir,
+#         save_name="concept_pred",
+#         prefix=name,
+#         show=show,
+#     )
+
+
 def plot_concept_predictions(
     plot_results: ResultGrid,
     plot_key: tuple[str, ...],
@@ -512,9 +555,10 @@ def plot_concept_predictions(
     save_dir: Path | str = "./plots",
     show: bool = True,
     name: str = "",
+    plot_hidden_concepts: bool = False,
 ):
     """
-    Plot positive intervention results.
+    Plot results for concept disentanglement.
 
     Parameters
     ----------
@@ -529,31 +573,145 @@ def plot_concept_predictions(
     show : bool
         Whether to show the plot
     """
-    plot_curves(
-        plot_results,
-        plot_key,
-        groupby=groupby,
-        title=f"Concept Predictions: {format_plot_title(plot_key)} {name}",
-        x_label="Concept #",
-        y_label="Concept Prediction Accuracy",
-        get_x=lambda results: np.linspace(
-            0, 1, len(results[0].metrics["concept_pred"])
-        ),
-        get_y=lambda result: result.metrics["concept_pred"],
-        eval_mode="concept_pred",
-        save_dir=save_dir,
-        save_name="concept_pred",
-        prefix=name,
-        show=show,
+    plt.clf()
+    save_path_disentanglement = get_save_path(
+        plot_key, prefix=name, suffix="disentanglement", save_dir=save_dir
     )
+    save_path_change = get_save_path(
+        plot_key, prefix=name, suffix="change", save_dir=save_dir
+    )
+
+    supervised_accs, hidden_accs = [], []
+    supervised_change, hidden_change = [], []
+    supervised_accs_std, hidden_accs_std = [], []
+    supervised_change_std, hidden_change_std = [], []
+
+    # Aggregate results
+    groupby = groupby[0] if len(groupby) == 1 else groupby
+    plot_results = group_results(plot_results, groupby=groupby)
+    for key in plot_results.keys():
+        results = plot_results[key]
+        supervised_accs.append(
+            np.mean([result.metrics["concept_pred"][0] for result in results])
+        )
+        supervised_change.append(
+            np.mean([result.metrics["concept_pred"][2] for result in results])
+        )
+        supervised_accs_std.append(
+            np.std([result.metrics["concept_pred"][0] for result in results])
+        )
+        supervised_change_std.append(
+            np.std([result.metrics["concept_pred"][2] for result in results])
+        )
+        if plot_hidden_concepts:
+            hidden_accs.append(
+                np.mean([result.metrics["concept_pred"][1] for result in results])
+            )
+            hidden_change.append(
+                np.mean([result.metrics["concept_pred"][3] for result in results])
+            )
+            hidden_accs_std.append(
+                np.std([result.metrics["concept_pred"][1] for result in results])
+            )
+            hidden_change_std.append(
+                np.std([result.metrics["concept_pred"][3] for result in results])
+            )
+
+    # Create CSV file
+    if plot_hidden_concepts:
+        data = np.stack(
+            [
+                supervised_accs,
+                hidden_accs,
+                supervised_change,
+                hidden_change,
+            ],
+            axis=1,
+        )
+        columns = [
+            "Supervised Concepts Acc.",
+            "Hidden Concepts Acc.",
+            "Supervised Concepts Change",
+            "Hidden Concepts Change",
+        ]
+    else:
+        data = np.stack(
+            [
+                supervised_accs,
+                supervised_change,
+            ],
+            axis=1,
+        )
+        columns = [
+            "Supervised Concepts Acc.",
+            "Supervised Concepts Change",
+        ]
+    df = pd.DataFrame(data, columns=columns)
+    df.to_csv(save_path_disentanglement.with_suffix(".csv"), index=False)
+
+    # Create figure for concept accuracy
+    x = np.arange(len(plot_results.keys()))
+    plt.figure()
+    plt.bar(
+        x - 0.2,
+        supervised_accs,
+        yerr=supervised_accs_std,
+        label="Supervised Concepts Acc.",
+        width=0.2,
+        capsize=5,
+    )
+    if plot_hidden_concepts:
+        plt.bar(
+            x,
+            hidden_accs,
+            yerr=hidden_accs_std,
+            label="Hidden Concepts Acc.",
+            width=0.2,
+            capsize=5,
+        )
+    plt.xticks(np.arange(len(plot_results.keys())), plot_results.keys())
+    plt.ylabel("Accuracy")
+    plt.title(f"Concept Accuracy: {format_plot_title(plot_key)} {name}")
+    plt.legend()
+    plt.savefig(save_path_disentanglement.with_suffix(".png"))
+    if show:
+        plt.show()
+
+    # Create figure for concept prediction change
+    plt.figure()
+    plt.bar(
+        x - 0.2,
+        supervised_change,
+        yerr=supervised_change_std,
+        label="Supervised Concepts Change",
+        width=0.2,
+        capsize=5,
+    )
+    if plot_hidden_concepts:
+        plt.bar(
+            x,
+            hidden_change,
+            yerr=hidden_change_std,
+            label="Hidden Concepts Change",
+            width=0.2,
+            capsize=5,
+        )
+    plt.xticks(np.arange(len(plot_results.keys())), plot_results.keys())
+    plt.ylabel("Change")
+    plt.title(f"Concept Prediction Change: {format_plot_title(plot_key)} {name}")
+    plt.legend()
+    plt.savefig(save_path_change.with_suffix(".png"))
+    if show:
+        plt.show()
 
 
 if __name__ == "__main__":
     PLOT_FUNCTIONS = {
-        "neg_intervention": plot_negative_interventions,
-        "pos_intervention": plot_positive_interventions,
-        "random": plot_random_concepts_residual,
+        # "neg_intervention": plot_negative_interventions,
+        # "pos_intervention": plot_positive_interventions,
+        # "random": plot_random_concepts_residual,
         "concept_pred": plot_concept_predictions,
+        # "concept_change": plot_concept_changes,
         # "disentanglement": plot_disentanglement,
         # "intervention_vs_disentanglement": plot_intervention_vs_disentanglement,
     }
