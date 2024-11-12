@@ -11,7 +11,7 @@ def get_config(**kwargs) -> dict:
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/celeba/",
         "ray_storage_dir": "/data/renos/ray_results/",
-        "residual_dim": 16,
+        "residual_dim": tune.grid_search([1, 2, 4, 8, 16]),
         "lr": 0.005,
         "num_epochs": 100,
         "momentum": 0.9,
