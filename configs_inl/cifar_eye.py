@@ -27,7 +27,7 @@ def get_config(**kwargs) -> dict:
         "cw_alignment_frequency": 20,
         "num_cpus": 2,
         "num_gpus": 1.0,
-        "num_samples": 3,
+        "num_samples": 5,
         "batch_size": 64,
         "checkpoint_frequency": 5,
         "norm_type": None,
