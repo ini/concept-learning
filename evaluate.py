@@ -442,11 +442,16 @@ def test_concept_pred(
                 r_dim = residual.shape[-1]
                 pos_embedding = residual[:, :, : r_dim // 2]
                 neg_embedding = residual[:, :, r_dim // 2 :]
-                x_test = pos_embedding * torch.unsqueeze(
-                    concepts[:, :-hidden_concepts], dim=-1
-                ) + neg_embedding * torch.unsqueeze(
-                    1 - concepts[:, :-hidden_concepts], dim=-1
-                )
+                if hidden_concepts != 0:
+                    x_test = pos_embedding * torch.unsqueeze(
+                        concepts[:, :-hidden_concepts], dim=-1
+                    ) + neg_embedding * torch.unsqueeze(
+                        1 - concepts[:, :-hidden_concepts], dim=-1
+                    )
+                else:
+                    x_test = pos_embedding * torch.unsqueeze(
+                        concepts, dim=-1
+                    ) + neg_embedding * torch.unsqueeze(1 - concepts, dim=-1)
             else:
                 x_test = residual
 
