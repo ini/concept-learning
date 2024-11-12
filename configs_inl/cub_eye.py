@@ -36,7 +36,7 @@ def get_config(**kwargs) -> dict:
         "intervention_weight": 5.0,
         "gpu_memory_per_worker": "14000 MiB",
         "reg_type": "eye",
-        "cross": True,
+        "cross": False,
     }
     experiment_config.update(kwargs)
     experiment_config = get_cub_config(**experiment_config)
