@@ -589,32 +589,33 @@ def plot_concept_predictions(
     # Aggregate results
     groupby = groupby[0] if len(groupby) == 1 else groupby
     plot_results = group_results(plot_results, groupby=groupby)
+    info = (
+        (supervised_accs, supervised_accs_std, "concept_pred", 0),
+        (supervised_change, supervised_change_std, "concept_pred", 2),
+    )
+    if plot_hidden_concepts:
+        info += (
+            (hidden_accs, hidden_accs_std, "concept_pred", 1),
+            (hidden_change, hidden_change_std, "concept_pred", 3),
+        )
     for key in plot_results.keys():
-        results = plot_results[key]
-        supervised_accs.append(
-            np.mean([result.metrics["concept_pred"][0] for result in results])
-        )
-        supervised_change.append(
-            np.mean([result.metrics["concept_pred"][2] for result in results])
-        )
-        supervised_accs_std.append(
-            np.std([result.metrics["concept_pred"][0] for result in results])
-        )
-        supervised_change_std.append(
-            np.std([result.metrics["concept_pred"][2] for result in results])
-        )
-        if plot_hidden_concepts:
-            hidden_accs.append(
-                np.mean([result.metrics["concept_pred"][1] for result in results])
+        results = group_results(plot_results[key], groupby="eval_mode")
+        for values, stds, eval_mode, metric_idx in info:
+            values.append(
+                np.mean(
+                    [
+                        result.metrics[eval_mode][metric_idx]
+                        for result in results[eval_mode]
+                    ]
+                )
             )
-            hidden_change.append(
-                np.mean([result.metrics["concept_pred"][3] for result in results])
-            )
-            hidden_accs_std.append(
-                np.std([result.metrics["concept_pred"][1] for result in results])
-            )
-            hidden_change_std.append(
-                np.std([result.metrics["concept_pred"][3] for result in results])
+            stds.append(
+                np.std(
+                    [
+                        result.metrics[eval_mode][metric_idx]
+                        for result in results[eval_mode]
+                    ]
+                )
             )
 
     # Create CSV file
@@ -707,9 +708,9 @@ def plot_concept_predictions(
 
 if __name__ == "__main__":
     PLOT_FUNCTIONS = {
-        # "neg_intervention": plot_negative_interventions,
-        # "pos_intervention": plot_positive_interventions,
-        # "random": plot_random_concepts_residual,
+        "neg_intervention": plot_negative_interventions,
+        "pos_intervention": plot_positive_interventions,
+        "random": plot_random_concepts_residual,
         "concept_pred": plot_concept_predictions,
         # "concept_change": plot_concept_changes,
         # "disentanglement": plot_disentanglement,
@@ -768,6 +769,7 @@ if __name__ == "__main__":
     plot_folder = "plots"
     for plot_key, plot_results in tqdm(results.items()):
         for mode in tqdm(args.mode):
+            print(plot_key)
             PLOT_FUNCTIONS[mode](
                 plot_results,
                 plot_key,
