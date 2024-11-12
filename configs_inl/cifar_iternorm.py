@@ -26,7 +26,7 @@ def get_config(**kwargs) -> dict:
         "mi_estimator_hidden_dim": 512,
         "mi_optimizer_lr": 0.001,
         "cw_alignment_frequency": 20,
-        "num_cpus": 4,
+        "num_cpus": 2,
         "num_gpus": 1.0,
         "num_samples": 3,
         "batch_size": 64,
