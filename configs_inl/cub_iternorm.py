@@ -4,13 +4,7 @@ from experiments.cub import get_config as get_cub_config, make_concept_model
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": tune.grid_search(
-            [
-                "latent_residual",
-                "decorrelated_residual",
-                "mi_residual",
-            ]
-        ),
+        "model_type": "latent_residual",
         "residual_dim": tune.grid_search([1, 2, 4, 8, 16, 32, 64]),
         "lr": 1e-4,
         "num_epochs": 200,
@@ -31,7 +25,7 @@ def get_config(**kwargs) -> dict:
         "num_samples": 5,
         "batch_size": 64,
         "checkpoint_frequency": 5,
-        "norm_type": None,
+        "norm_type": "iter_norm",
         "T_whitening": 3,
         "weight_decay": 4e-6,
         "training_mode": "sequential",
