@@ -8,7 +8,6 @@ def get_config(**kwargs) -> dict:
             [
                 "latent_residual",
                 "decorrelated_residual",
-                "mi_residual",
             ]
         ),
         "residual_dim": tune.grid_search([1, 2, 4, 8, 16, 32, 64]),
