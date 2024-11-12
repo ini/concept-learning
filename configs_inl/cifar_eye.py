@@ -8,8 +8,7 @@ from experiments.cifar import (
 def get_config(**kwargs) -> dict:
     experiment_config = {
         "model_type": "latent_residual",
-        "save_dir": "/data/renos/supervised_concept_learning/",
-        "data_dir": "/data/Datasets/cifar/",
+        "data_dir": "/home/zaboreno/Datasets/cifar/",
         "ray_storage_dir": "/data/renos/ray_results/",
         "residual_dim": tune.grid_search([1, 2, 4, 8, 16, 32, 64, 128, 256]),
         "lr": 0.001,
