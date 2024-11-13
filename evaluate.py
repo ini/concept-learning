@@ -707,16 +707,24 @@ def test_concept_change_probe(
             # assert (
             #     0
             # ), f"{int_idxs.shape} {pred_concepts.shape} {pred_int_concepts.shape} {concepts.shape}"
-
-            num_changed_concepts = np.sum(
-                (pred_concepts[:, :6] != pred_int_concepts[:, :6]) & ~mask, axis=1
-            )
-            concept_updated = np.any(
-                np_concepts[:, :6] != pred_int_concepts[:, :6] & mask, axis=1
-            )
-            hidden_concepts_updated = np.sum(
-                pred_concepts[:, 6:8] != pred_int_concepts[:, 6:8], axis=1
-            )
+            if dataset == "celeba":
+                num_changed_concepts = np.sum(
+                    (pred_concepts[:, :6] != pred_int_concepts[:, :6]) & ~mask, axis=1
+                )
+                concept_updated = np.any(
+                    np_concepts[:, :6] != pred_int_concepts[:, :6] & mask, axis=1
+                )
+                hidden_concepts_updated = np.sum(
+                    pred_concepts[:, 6:8] != pred_int_concepts[:, 6:8], axis=1
+                )
+            else:
+                num_changed_concepts = np.sum(
+                    (pred_concepts != pred_int_concepts) & ~mask, axis=1
+                )
+                concept_updated = np.any(
+                    np_concepts != pred_int_concepts & mask, axis=1
+                )
+                hidden_concepts_updated = 0.0
 
             num_changed_concepts_list.extend(num_changed_concepts)
             concept_updated_list.extend(concept_updated)
