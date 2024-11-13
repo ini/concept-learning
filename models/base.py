@@ -953,7 +953,9 @@ class ConceptLightningModel(pl.LightningModule):
 
         return intervention_idxs
 
-    def test_step(self, batch: ConceptBatch, batch_idx: int) -> Tensor:
+    def test_step(
+        self, batch: ConceptBatch, batch_idx: int, return_intervention_idxs=False
+    ) -> Tensor:
         """
         Test step.
 
@@ -970,5 +972,29 @@ class ConceptLightningModel(pl.LightningModule):
             )
         else:
             intervention_idxs = None
+        if return_intervention_idxs:
+            return (
+                self.step(batch, split="test", intervention_idxs=intervention_idxs),
+                intervention_idxs,
+            )
+        else:
+            return self.step(batch, split="test", intervention_idxs=intervention_idxs)
 
-        return self.step(batch, split="test", intervention_idxs=intervention_idxs)
+    def forward_intervention(
+        self, batch: ConceptBatch, batch_idx: int, return_intervention_idxs=False
+    ) -> Tensor:
+
+        if self.num_test_interventions is not None:
+            intervention_idxs = self.perform_k_interventions(
+                batch, split="test", k=self.num_test_interventions
+            )
+        else:
+            intervention_idxs = None
+
+        (data, concepts), targets = batch
+        return (
+            self.concept_model.forward(
+                data, concepts, intervention_idxs=intervention_idxs
+            ),
+            intervention_idxs,
+        )

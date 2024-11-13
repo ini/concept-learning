@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import copy
+import json
 
 # make sure slurm isn't exposed
 if "SLURM_NTASKS" in os.environ:
@@ -489,6 +490,335 @@ def test_concept_pred(
         )
 
 
+def test_concept_change_probe(
+    model: ConceptLightningModel,
+    model_type: str,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    num_train_epochs: int = 1,
+    dataset=None,
+) -> float:
+    """
+    Test mutual information between concepts and residuals.
+
+    Parameters
+    ----------
+    model : ConceptLightningModel
+        Model to evaluate
+    test_loader : DataLoader
+        Test data loader
+    num_train_epochs : int
+        Number of epochs to train mutual information estimator
+    """
+    # Get mutual information estimator
+    if dataset == "celeba":
+        hidden_concepts = 2
+    else:
+        hidden_concepts = 0
+    (data, concepts), targets = next(iter(test_loader))
+    if hidden_concepts != 0:
+        _, residual, _ = model(data, concepts=concepts[:, :-hidden_concepts])
+    else:
+        _, residual, _ = model(data, concepts=concepts)
+    if model_type == "cem" or model_type == "cem_mi":
+        concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1] // 2
+        concept_predictor = ConceptResidualConceptPred(
+            (concept_dim - hidden_concepts) * residual_dim,
+            concept_dim,
+            binary=model.concept_model.concept_type == "binary",
+            hidden_concept=hidden_concepts > 0,
+            num_hidden_concept=hidden_concepts,
+        )
+    else:
+        concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
+        concept_predictor = ConceptResidualConceptPred(
+            (concept_dim - hidden_concepts) + residual_dim,
+            concept_dim,
+            binary=model.concept_model.concept_type == "binary",
+            hidden_concept=hidden_concepts > 0,
+            num_hidden_concept=hidden_concepts,
+        )
+
+    best_val_loss = float("inf")
+    best_predictor_state = None
+
+    # Train the concept predictor
+    for epoch in range(num_train_epochs):
+        # Training phase
+        concept_predictor.train()
+        for (data, concepts), targets in train_loader:
+            if model_type == "cem" or model_type == "cem_mi":
+                with torch.no_grad():
+                    if hidden_concepts != 0:
+                        pre_contexts, residual, _ = model(
+                            data, concepts=concepts[:, :-hidden_concepts]
+                        )
+                    else:
+                        pre_contexts, residual, _ = model(data, concepts=concepts)
+                contexts = pre_contexts.sigmoid()
+                r_dim = residual.shape[-1]
+                pos_embedding = residual[:, :, : r_dim // 2]
+                neg_embedding = residual[:, :, r_dim // 2 :]
+                x = pos_embedding * torch.unsqueeze(
+                    contexts, dim=-1
+                ) + neg_embedding * torch.unsqueeze(1 - contexts, dim=-1)
+                x = x.reshape((x.shape[0], -1))
+                concept_predictor.step(x.detach(), concepts.detach())
+            else:
+                with torch.no_grad():
+                    if hidden_concepts != 0:
+                        pre_contexts, residual, _ = model(
+                            data, concepts=concepts[:, :-hidden_concepts]
+                        )
+                    else:
+                        pre_contexts, residual, _ = model(data, concepts=concepts)
+                x = torch.cat((residual, pre_contexts), dim=-1)
+                concept_predictor.step(x.detach(), concepts.detach())
+
+        # Validation phase
+        val_losses = []
+        concept_predictor.eval()
+        for (data, concepts), targets in val_loader:
+            with torch.no_grad():
+                if hidden_concepts != 0:
+                    pre_contexts, residual, _ = model(
+                        data, concepts=concepts[:, :-hidden_concepts]
+                    )
+                else:
+                    pre_contexts, residual, _ = model(data, concepts=concepts)
+                if model_type == "cem" or model_type == "cem_mi":
+                    contexts = pre_contexts.sigmoid()
+                    r_dim = residual.shape[-1]
+                    pos_embedding = residual[:, :, : r_dim // 2]
+                    neg_embedding = residual[:, :, r_dim // 2 :]
+                    x = pos_embedding * torch.unsqueeze(
+                        contexts, dim=-1
+                    ) + neg_embedding * torch.unsqueeze(1 - contexts, dim=-1)
+                    x = x.reshape((x.shape[0], -1))
+                else:
+                    x = torch.cat((residual, pre_contexts), dim=-1)
+
+                y_pred = concept_predictor(x)
+                if model.concept_model.concept_type == "binary":
+                    loss_fn = nn.BCEWithLogitsLoss()
+                else:
+                    loss_fn = nn.MSELoss()
+                val_loss = loss_fn(y_pred, concepts).item()
+                val_losses.append(val_loss)
+
+        mean_val_loss = np.mean(val_losses)
+        print(f"Epoch {epoch}: Validation loss = {mean_val_loss}")
+        if mean_val_loss < best_val_loss:
+            best_val_loss = mean_val_loss
+            best_predictor_state = concept_predictor.state_dict()
+
+    # Load the best predictor state
+    if best_predictor_state is not None:
+        concept_predictor.load_state_dict(best_predictor_state)
+
+    # Evaluate the concept predictor
+    metrics = []
+    for i in range(concept_dim):
+        metrics.append([])
+
+    num_changed_concepts_list = []
+    concept_updated_list = []
+    hidden_concepts_updated_list = []
+
+    for (data, concepts), target in test_loader:
+        with torch.no_grad():
+            if hidden_concepts != 0:
+                model.num_test_interventions = 1
+                tup, int_idxs = model.forward_intervention(
+                    ((data, concepts[:, :-hidden_concepts]), target),
+                    0,
+                    return_intervention_idxs=True,
+                )
+                pre_contexts, residual, _ = tup
+                contexts = pre_contexts.sigmoid()
+                intervened_contexts = (
+                    contexts.detach() * (1 - int_idxs)
+                    + concepts[:, :-hidden_concepts] * int_idxs
+                )
+            else:
+                model.num_test_interventions = 1
+                tup, int_idxs = model.forward_intervention(
+                    ((data, concepts), target), 0, return_intervention_idxs=True
+                )
+                pre_contexts, residual, _ = tup
+                contexts = pre_contexts.sigmoid()
+                intervened_contexts = (
+                    contexts.detach() * (1 - int_idxs) + concepts * int_idxs
+                )
+
+            if model_type == "cem" or model_type == "cem_mi":
+                r_dim = residual.shape[-1]
+                pos_embedding = residual[:, :, : r_dim // 2]
+                neg_embedding = residual[:, :, r_dim // 2 :]
+                x_test = pos_embedding * torch.unsqueeze(
+                    contexts, dim=-1
+                ) + neg_embedding * torch.unsqueeze(1 - contexts, dim=-1)
+                x_test = x_test.reshape((x_test.shape[0], -1))
+            else:
+                x_test = torch.cat((residual, contexts), dim=-1)
+            y_pred_base = concept_predictor(x_test)
+
+            if model.concept_model.concept_type == "binary":
+                y_pred_base = torch.sigmoid(y_pred_base)
+                for i in range(concept_dim):
+                    pred = (y_pred_base[:, i] > 0.5).float()
+                    accuracy = (pred == concepts[:, i]).float().mean().item()
+                    metrics[i].append(accuracy)
+            else:
+                for i in range(concept_dim):
+                    mse = ((y_pred_base[:, i] - concepts[:, i]) ** 2).mean().item()
+                    metrics[i].append(mse)
+
+            # perform concept interventions with concept full concepts
+            if model_type == "cem" or model_type == "cem_mi":
+                r_dim = residual.shape[-1]
+                pos_embedding = residual[:, :, : r_dim // 2]
+                neg_embedding = residual[:, :, r_dim // 2 :]
+
+                x_test = pos_embedding * torch.unsqueeze(
+                    intervened_contexts, dim=-1
+                ) + neg_embedding * torch.unsqueeze(1 - intervened_contexts, dim=-1)
+                x_test = x_test.reshape((x_test.shape[0], -1))
+
+            else:
+                x_test = torch.cat((residual, intervened_contexts), dim=-1)
+
+            y_pred_intervention = concept_predictor(x_test)
+            if model.concept_model.concept_type == "binary":
+                y_pred_intervention = torch.sigmoid(y_pred_intervention)
+
+            pred_concepts = np.array(y_pred_base >= 0.5)
+            pred_int_concepts = np.array(y_pred_intervention >= 0.5)
+            np_concepts = np.array(concepts)
+
+            # Vectorized calculations
+            mask = np.array(
+                int_idxs == 0
+            )  # Assuming int_idxs is of shape (batch_size, 6)
+            # mask = np.pad(
+            #     mask, ((0, 0), (0, 2)), "constant", constant_values=0
+            # )  # Add buffer of 0's to the right to make it (batch_size, 8)
+            # assert (
+            #     0
+            # ), f"{int_idxs.shape} {pred_concepts.shape} {pred_int_concepts.shape} {concepts.shape}"
+
+            num_changed_concepts = np.sum(
+                (pred_concepts[:, :6] != pred_int_concepts[:, :6]) & ~mask, axis=1
+            )
+            concept_updated = np.any(
+                np_concepts[:, :6] != pred_int_concepts[:, :6] & mask, axis=1
+            )
+            hidden_concepts_updated = np.sum(
+                pred_concepts[:, 6:8] != pred_int_concepts[:, 6:8], axis=1
+            )
+
+            num_changed_concepts_list.extend(num_changed_concepts)
+            concept_updated_list.extend(concept_updated)
+            hidden_concepts_updated_list.extend(hidden_concepts_updated)
+
+        # assert (
+        #     0
+        # ), f"{gt_concepts[9]} and {pred_concepts[9]} and {pred_int_concepts[9]} and {int_idxs.shape}"
+
+    # Calculate mean metrics
+    mean_accuracy = np.array([np.mean(metric) for metric in metrics])
+    mean_num_changed_concepts = np.mean(num_changed_concepts_list)
+    mean_concept_updated = np.mean(concept_updated_list)
+    mean_hidden_concepts_updated = np.mean(hidden_concepts_updated_list)
+    return (
+        mean_accuracy,
+        mean_num_changed_concepts,
+        mean_concept_updated,
+        mean_hidden_concepts_updated,
+    )
+
+
+def test_concept_change(
+    model: ConceptLightningModel,
+    model_type: str,
+    test_loader: DataLoader,
+    dataset=None,
+) -> float:
+    """
+    Test mutual information between concepts and residuals.
+
+    Parameters
+    ----------
+    model : ConceptLightningModel
+        Model to evaluate
+    test_loader : DataLoader
+        Test data loader
+    num_mi_epochs : int
+        Number of epochs to train mutual information estimator
+    """
+    # Get mutual information estimator
+    with open("/home/renos/label_invert.json", "r") as f:
+        label_invert = json.load(f)
+    (data, concepts), targets = next(iter(test_loader))
+    _, residual, _ = model(data, concepts=concepts)
+
+    def invert_binarize(binary_int):
+        binary_str = bin(binary_int)[2:].zfill(8)
+        concepts = np.array([int(bit) for bit in binary_str], dtype=int)
+        return concepts
+
+    def update_all(vector):
+        return np.array(
+            [invert_binarize(int(label_invert[str(int(v))])) for v in vector]
+        )
+
+    num_changed_concepts_list = []
+    concept_updated_list = []
+    hidden_concepts_updated_list = []
+
+    for (data, concepts), target in test_loader:
+        with torch.no_grad():
+            _, residual, y_pred = model(data, concepts=concepts)
+            model.num_test_interventions = 1
+            tup, int_idxs = model.forward_intervention(
+                ((data, concepts), target), 0, return_intervention_idxs=True
+            )
+            _, _, y_pred_int = tup
+        y_pred_amax = torch.argmax(y_pred, dim=1)
+        y_pred_int_amex = torch.argmax(y_pred_int, dim=1)
+        gt_concepts = update_all(target)
+        pred_concepts = update_all(y_pred_amax)
+        pred_int_concepts = update_all(y_pred_int_amex)
+
+        # Vectorized calculations
+        mask = np.array(int_idxs == 0)  # Assuming int_idxs is of shape (batch_size, 6)
+
+        num_changed_concepts = np.sum(
+            (pred_concepts[:, :6] != pred_int_concepts[:, :6]) & ~mask, axis=1
+        )
+        concept_updated = np.any(
+            gt_concepts[:, :6] != pred_int_concepts[:, :6] & mask, axis=1
+        )
+        hidden_concepts_updated = np.sum(
+            pred_concepts[:, 6:8] != pred_int_concepts[:, 6:8], axis=1
+        )
+
+        num_changed_concepts_list.extend(num_changed_concepts)
+        concept_updated_list.extend(concept_updated)
+        hidden_concepts_updated_list.extend(hidden_concepts_updated)
+
+        # assert (
+        #     0
+        # ), f"{gt_concepts[9]} and {pred_concepts[9]} and {pred_int_concepts[9]} and {int_idxs.shape}"
+
+    # Calculate mean metrics
+    mean_num_changed_concepts = np.mean(num_changed_concepts_list)
+    mean_concept_updated = np.mean(concept_updated_list)
+    mean_hidden_concepts_updated = np.mean(hidden_concepts_updated_list)
+    return mean_num_changed_concepts, mean_concept_updated, mean_hidden_concepts_updated
+
+
 ### Loading & Execution
 
 
@@ -530,9 +860,9 @@ def evaluate(config: dict):
     metrics = {}
 
     # Get data loader
-    if config["eval_mode"] == "concept_pred" and config["dataset"] == "celeba":
+    if config["eval_mode"] == "concept_change_probe" and config["dataset"] == "celeba":
         new_config = copy.deepcopy(config)
-        # new_config["num_concepts"] = 8
+        new_config["num_concepts"] = 8
         train_loader = make_datamodule(**new_config).train_dataloader()
         val_loader = make_datamodule(**new_config).val_dataloader()
         test_loader = make_datamodule(**new_config).test_dataloader()
@@ -552,7 +882,7 @@ def evaluate(config: dict):
             if key in results:
                 metrics[key] = results[key]
 
-    if config["eval_mode"] == "neg_intervention":
+    elif config["eval_mode"] == "neg_intervention":
         concept_dim = DATASET_INFO[config["dataset"]]["concept_dim"]
         metrics["neg_intervention_accs"] = test_interventions(
             model, test_loader, concept_dim, negative=True
@@ -585,6 +915,22 @@ def evaluate(config: dict):
             test_loader,
             dataset=config["dataset"],
         )
+    elif config["eval_mode"] == "concept_change":
+        metrics["concept_change"] = test_concept_change(
+            model,
+            config["model_type"],
+            test_loader,
+            dataset=config["dataset"],
+        )
+    elif config["eval_mode"] == "concept_change_probe":
+        metrics["concept_change_probe"] = test_concept_change_probe(
+            model,
+            config["model_type"],
+            train_loader,
+            val_loader,
+            test_loader,
+            dataset=config["dataset"],
+        )
 
     # Report evaluation metrics
     ray.train.report(metrics)
@@ -599,7 +945,9 @@ if __name__ == "__main__":
         "random_residual",
         # "correlation",
         # "mutual_info",
-        "concept_pred",
+        # "concept_pred",
+        # "concept_change",
+        "concept_change_probe",
     ]
 
     parser = argparse.ArgumentParser()

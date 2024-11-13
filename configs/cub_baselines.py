@@ -4,12 +4,8 @@ from experiments.cub import get_config as get_cub_config, make_concept_model
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": tune.grid_search(
-            [
-                "latent_residual",
-                "decorrelated_residual",
-            ]
-        ),
+        "save_dir": "/data/renos/supervised_concept_learning/",
+        "model_type": "latent_residual",
         "residual_dim": tune.grid_search([1, 2, 4, 8, 16, 32, 64]),
         "lr": 1e-4,
         "num_epochs": 200,

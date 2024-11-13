@@ -6,7 +6,7 @@ from torch.nn.functional import one_hot
 from torch.utils.data import Dataset
 from torchvision import datasets
 
-
+import json
 import logging
 import numpy as np
 import os
@@ -149,6 +149,7 @@ def generate_data(
             result = []
             binary_repr = []
             concepts = concepts[selected]
+            print(selected)
             for i in range(0, concepts.shape[-1], width):
                 binary_repr.append(str(int(np.sum(concepts[i : i + width]) > 0)))
             return int("".join(binary_repr), 2)
@@ -189,6 +190,7 @@ def generate_data(
             )
         else:
             hidden_concepts = []
+        print(concept_idxs, hidden_concepts)
         logging.debug(f"Selecting concepts: {concept_idxs}")
         logging.debug(f"\tAnd hidden concepts: {hidden_concepts}")
 
@@ -247,6 +249,9 @@ def generate_data(
         )
         for i, label in enumerate(vals):
             label_remap[label] = i
+        # label_invert = {int(v): int(k) for k, v in label_remap.items()}
+        # with open("/home/renos/label_invert.json", "w") as f:
+        #     json.dump(label_invert, f)
 
         celeba_train_data = torchvision.datasets.CelebA(
             root=root_dir,

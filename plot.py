@@ -706,12 +706,270 @@ def plot_concept_predictions(
         plt.show()
 
 
+def plot_concept_change(
+    plot_results: ResultGrid,
+    plot_key: tuple[str, ...],
+    groupby: list[str] = ["model_type"],
+    save_dir: Path | str = "./plots",
+    show: bool = True,
+    name: str = "",
+    plot_hidden_concepts: bool = False,
+):
+    """
+    Plot results for concept change.
+
+    Parameters
+    ----------
+    plot_results : ResultGrid
+        Results for the given plot
+    plot_key : tuple[str]
+        Identifier for this plot
+    groupby : list[str]
+        List of train config keys to group by
+    save_dir : Path or str
+        Directory to save plots to
+    show : bool
+        Whether to show the plot
+    plot_hidden_concepts : bool
+        Whether to plot hidden concepts
+    """
+    plt.clf()
+    save_path_change = get_save_path(
+        plot_key, prefix=name, suffix="concept_change", save_dir=save_dir
+    )
+
+    num_changed_concepts, concept_updated, hidden_concepts_updated = [], [], []
+    num_changed_concepts_std, concept_updated_std, hidden_concepts_updated_std = (
+        [],
+        [],
+        [],
+    )
+
+    # Aggregate results
+    groupby = groupby[0] if len(groupby) == 1 else groupby
+    plot_results = group_results(plot_results, groupby=groupby)
+    for key in plot_results.keys():
+        results = plot_results[key]
+        num_changed_concepts.append(
+            np.mean([result.metrics["concept_change"][0] for result in results])
+        )
+        concept_updated.append(
+            np.mean([result.metrics["concept_change"][1] for result in results])
+        )
+        hidden_concepts_updated.append(
+            np.mean([result.metrics["concept_change"][2] for result in results])
+        )
+        num_changed_concepts_std.append(
+            np.std([result.metrics["concept_change"][0] for result in results])
+        )
+        concept_updated_std.append(
+            np.std([result.metrics["concept_change"][1] for result in results])
+        )
+        hidden_concepts_updated_std.append(
+            np.std([result.metrics["concept_change"][2] for result in results])
+        )
+
+    # Create CSV file
+    data = np.stack(
+        [
+            num_changed_concepts,
+            concept_updated,
+            hidden_concepts_updated,
+        ],
+        axis=1,
+    )
+    columns = [
+        "Num Changed Concepts",
+        "Concept Updated",
+        "Hidden Concepts Updated",
+    ]
+    df = pd.DataFrame(data, columns=columns)
+    df.to_csv(save_path_change.with_suffix(".csv"), index=False)
+
+    # Create figure for concept change
+    x = np.arange(len(plot_results.keys()))
+    plt.figure()
+    plt.bar(
+        x - 0.2,
+        num_changed_concepts,
+        yerr=num_changed_concepts_std,
+        label="Num Changed Concepts",
+        width=0.2,
+        capsize=5,
+    )
+    plt.bar(
+        x,
+        concept_updated,
+        yerr=concept_updated_std,
+        label="Concept Updated",
+        width=0.2,
+        capsize=5,
+    )
+    if plot_hidden_concepts:
+        plt.bar(
+            x + 0.2,
+            hidden_concepts_updated,
+            yerr=hidden_concepts_updated_std,
+            label="Hidden Concepts Updated",
+            width=0.2,
+            capsize=5,
+        )
+    plt.xticks(np.arange(len(plot_results.keys())), plot_results.keys())
+    plt.ylabel("Metrics")
+    plt.title(f"Concept Change: {format_plot_title(plot_key)} {name}")
+    plt.legend()
+    plt.savefig(save_path_change.with_suffix(".png"))
+    if show:
+        plt.show()
+
+
+def plot_concept_change_probe(
+    plot_results: ResultGrid,
+    plot_key: tuple[str, ...],
+    groupby: list[str] = ["model_type"],
+    save_dir: Path | str = "./plots",
+    show: bool = True,
+    name: str = "",
+    plot_hidden_concepts: bool = False,
+):
+    """
+    Plot results for concept change probe.
+
+    Parameters
+    ----------
+    plot_results : ResultGrid
+        Results for the given plot
+    plot_key : tuple[str]
+        Identifier for this plot
+    groupby : list[str]
+        List of train config keys to group by
+    save_dir : Path or str
+        Directory to save plots to
+    show : bool
+        Whether to show the plot
+    plot_hidden_concepts : bool
+        Whether to plot hidden concepts
+    """
+    plt.clf()
+    save_path_change_probe = get_save_path(
+        plot_key, prefix=name, suffix="concept_change_probe", save_dir=save_dir
+    )
+
+    accuracy, num_changed_concepts, concept_updated, hidden_concepts_updated = (
+        [],
+        [],
+        [],
+        [],
+    )
+    (
+        accuracy_std,
+        num_changed_concepts_std,
+        concept_updated_std,
+        hidden_concepts_updated_std,
+    ) = ([], [], [], [])
+
+    # Aggregate results
+    groupby = groupby[0] if len(groupby) == 1 else groupby
+    plot_results = group_results(plot_results, groupby=groupby)
+    for key in plot_results.keys():
+        results = plot_results[key]
+        accuracy.append(
+            np.mean([result.metrics["concept_change_probe"][0] for result in results])
+        )
+        num_changed_concepts.append(
+            np.mean([result.metrics["concept_change_probe"][1] for result in results])
+        )
+        concept_updated.append(
+            np.mean([result.metrics["concept_change_probe"][2] for result in results])
+        )
+        hidden_concepts_updated.append(
+            np.mean([result.metrics["concept_change_probe"][3] for result in results])
+        )
+        accuracy_std.append(
+            np.std([result.metrics["concept_change_probe"][0] for result in results])
+        )
+        num_changed_concepts_std.append(
+            np.std([result.metrics["concept_change_probe"][1] for result in results])
+        )
+        concept_updated_std.append(
+            np.std([result.metrics["concept_change_probe"][2] for result in results])
+        )
+        hidden_concepts_updated_std.append(
+            np.std([result.metrics["concept_change_probe"][3] for result in results])
+        )
+
+    # Create CSV file
+    data = np.stack(
+        [
+            accuracy,
+            num_changed_concepts,
+            concept_updated,
+            hidden_concepts_updated,
+        ],
+        axis=1,
+    )
+    columns = [
+        "Accuracy",
+        "Num Changed Concepts",
+        "Concept Updated",
+        "Hidden Concepts Updated",
+    ]
+    df = pd.DataFrame(data, columns=columns)
+    df.to_csv(save_path_change_probe.with_suffix(".csv"), index=False)
+
+    # Create figure for concept change probe
+    x = np.arange(len(plot_results.keys()))
+    plt.figure()
+    plt.bar(
+        x - 0.3,
+        accuracy,
+        yerr=accuracy_std,
+        label="Accuracy",
+        width=0.2,
+        capsize=5,
+    )
+    plt.bar(
+        x - 0.1,
+        num_changed_concepts,
+        yerr=num_changed_concepts_std,
+        label="Num Changed Concepts",
+        width=0.2,
+        capsize=5,
+    )
+    plt.bar(
+        x + 0.1,
+        concept_updated,
+        yerr=concept_updated_std,
+        label="Concept Updated",
+        width=0.2,
+        capsize=5,
+    )
+    if plot_hidden_concepts:
+        plt.bar(
+            x + 0.3,
+            hidden_concepts_updated,
+            yerr=hidden_concepts_updated_std,
+            label="Hidden Concepts Updated",
+            width=0.2,
+            capsize=5,
+        )
+    plt.xticks(np.arange(len(plot_results.keys())), plot_results.keys())
+    plt.ylabel("Metrics")
+    plt.title(f"Concept Change Probe: {format_plot_title(plot_key)} {name}")
+    plt.legend()
+    plt.savefig(save_path_change_probe.with_suffix(".png"))
+    if show:
+        plt.show()
+
+
 if __name__ == "__main__":
     PLOT_FUNCTIONS = {
-        "neg_intervention": plot_negative_interventions,
-        "pos_intervention": plot_positive_interventions,
-        "random": plot_random_concepts_residual,
-        "concept_pred": plot_concept_predictions,
+        # "neg_intervention": plot_negative_interventions,
+        # "pos_intervention": plot_positive_interventions,
+        # "random": plot_random_concepts_residual,
+        # "concept_pred": plot_concept_predictions,
+        # "concept_change": plot_concept_change,
+        "concept_change_probe": plot_concept_change_probe,
         # "concept_change": plot_concept_changes,
         # "disentanglement": plot_disentanglement,
         # "intervention_vs_disentanglement": plot_intervention_vs_disentanglement,
