@@ -724,7 +724,7 @@ def test_concept_change_probe(
                 concept_updated = np.any(
                     np_concepts != pred_int_concepts & mask, axis=1
                 )
-                hidden_concepts_updated = 0.0
+                hidden_concepts_updated = [0.0]
 
             num_changed_concepts_list.extend(num_changed_concepts)
             concept_updated_list.extend(concept_updated)
