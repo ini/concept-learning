@@ -6,7 +6,7 @@ import torch.nn as nn
 from nn_extensions import Dummy
 from models import ConceptModel, make_bottleneck_layer
 from utils import make_mlp
-
+import torch
 
 
 def make_concept_model(config: dict) -> ConceptModel:
@@ -14,6 +14,9 @@ def make_concept_model(config: dict) -> ConceptModel:
     concept_dim = config['concept_dim']
     residual_dim = config['residual_dim']
     bottleneck_dim = concept_dim + residual_dim
+
+    int_model_use_bn = config.get("int_model_use_bn", True)
+    int_model_layers = config.get("int_model_layers", None)
 
     # Create concept and target networks
     if config['dataset'] == 'pitfalls_synthetic':
@@ -52,11 +55,42 @@ def make_concept_model(config: dict) -> ConceptModel:
     else:
         residual_network = Dummy()
 
+    if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
+        units = (
+            [
+                concept_dim * residual_dim + concept_dim
+            ]  # for cem, input is concept_dim * residual_dim (# of concepts * concept embedding dim)
+            + (int_model_layers or [256, 128])  # + previous interventions
+            + [concept_dim]
+        )
+    else:
+        units = (
+            [
+                concept_dim + residual_dim + concept_dim
+            ]  # Bottleneck  # Prev interventions
+            + (int_model_layers or [256, 128])
+            + [concept_dim]
+        )
+    layers = []
+    for i in range(1, len(units)):
+        if int_model_use_bn:
+            layers.append(
+                torch.nn.BatchNorm1d(num_features=units[i - 1]),
+            )
+        layers.append(torch.nn.Linear(units[i - 1], units[i]))
+        if i != len(units) - 1:
+            layers.append(torch.nn.LeakyReLU())
+    if config.get("intervention_weight", 0.0) > 0:
+        concept_rank_model = torch.nn.Sequential(*layers)
+    else:
+        concept_rank_model = nn.Identity()
+
     return ConceptModel(
         concept_network=concept_network,
         residual_network=residual_network,
         target_network=target_network,
         bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
+        concept_rank_model=concept_rank_model,
         **config,
     )
 

@@ -149,7 +149,7 @@ def generate_data(
             result = []
             binary_repr = []
             concepts = concepts[selected]
-            print(selected)
+            #print(selected)
             for i in range(0, concepts.shape[-1], width):
                 binary_repr.append(str(int(np.sum(concepts[i : i + width]) > 0)))
             return int("".join(binary_repr), 2)
@@ -190,7 +190,7 @@ def generate_data(
             )
         else:
             hidden_concepts = []
-        print(concept_idxs, hidden_concepts)
+        #print(concept_idxs, hidden_concepts)
         logging.debug(f"Selecting concepts: {concept_idxs}")
         logging.debug(f"\tAnd hidden concepts: {hidden_concepts}")
 

@@ -31,6 +31,10 @@ class CrossAttentionModel(nn.Module):
 
         # Scaling factor for attended residuals
         self.scale = nn.Parameter(torch.tensor(0.5))
+        if embed_dim != input_dim_r:
+            self.proj = nn.Linear(embed_dim, input_dim_r)
+        else:
+            self.proj = nn.Identity()
 
     def forward(self, concepts, residuals, intervention_idxs, attention_mask=None):
         """
@@ -71,7 +75,9 @@ class CrossAttentionModel(nn.Module):
         combined_residuals = (
             residuals_norm.squeeze(0) + self.scale * attended_residuals
         )  # (batch_size, embed_dim)
-
+        
+        # Project to input_dim_r if dimensions don't match
+        combined_residuals = self.proj(combined_residuals)
         return combined_residuals
 
 
@@ -220,8 +226,15 @@ def make_concept_model(config: dict) -> ConceptModel:
         #     **config,
         # )
         if config.get("cross", False) and residual_dim >= 4:
+            # For residual_dim = 6, use 2 heads
+            if residual_dim == 6:
+                num_heads = 2
+            else:
+                num_heads = min(8, residual_dim)
+            # Make embed_dim divisible by num_heads
+            embed_dim = (residual_dim // num_heads) * num_heads
             cross_attention = CrossAttentionModel(
-                concept_dim, residual_dim, residual_dim, min(residual_dim, 8)
+                concept_dim, residual_dim, embed_dim, num_heads
             )
         else:
             cross_attention = PassThrough(concept_dim, residual_dim, residual_dim, 8)

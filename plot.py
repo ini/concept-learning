@@ -738,8 +738,8 @@ def plot_concept_change(
         plot_key, prefix=name, suffix="concept_change", save_dir=save_dir
     )
 
-    num_changed_concepts, concept_updated, hidden_concepts_updated = [], [], []
-    num_changed_concepts_std, concept_updated_std, hidden_concepts_updated_std = (
+    num_changed_concepts, concept_updated_when_wrong, hidden_concepts_updated = [], [], []
+    num_changed_concepts_std, concept_updated_when_wrong_std, hidden_concepts_updated_std = (
         [],
         [],
         [],
@@ -753,7 +753,7 @@ def plot_concept_change(
         num_changed_concepts.append(
             np.mean([result.metrics["concept_change"][0] for result in results])
         )
-        concept_updated.append(
+        concept_updated_when_wrong.append(
             np.mean([result.metrics["concept_change"][1] for result in results])
         )
         hidden_concepts_updated.append(
@@ -762,7 +762,7 @@ def plot_concept_change(
         num_changed_concepts_std.append(
             np.std([result.metrics["concept_change"][0] for result in results])
         )
-        concept_updated_std.append(
+        concept_updated_when_wrong_std.append(
             np.std([result.metrics["concept_change"][1] for result in results])
         )
         hidden_concepts_updated_std.append(
@@ -773,15 +773,21 @@ def plot_concept_change(
     data = np.stack(
         [
             num_changed_concepts,
-            concept_updated,
+            concept_updated_when_wrong,
             hidden_concepts_updated,
+            num_changed_concepts_std,
+            concept_updated_when_wrong_std,
+            hidden_concepts_updated_std,
         ],
         axis=1,
     )
     columns = [
         "Num Changed Concepts",
-        "Concept Updated",
+        "Concept Updated When Wrong",
         "Hidden Concepts Updated",
+        "Num Changed Concepts Std.",
+        "Concept Updated When Wrong Std.",
+        "Hidden Concepts Updated Std.",
     ]
     df = pd.DataFrame(data, columns=columns)
     df.to_csv(save_path_change.with_suffix(".csv"), index=False)
@@ -799,8 +805,8 @@ def plot_concept_change(
     )
     plt.bar(
         x,
-        concept_updated,
-        yerr=concept_updated_std,
+        concept_updated_when_wrong,
+        yerr=concept_updated_when_wrong_std,
         label="Concept Updated",
         width=0.2,
         capsize=5,
@@ -901,10 +907,12 @@ def plot_concept_change_probe(
     # Create CSV file
     data = np.stack(
         [
-            accuracy,
             num_changed_concepts,
             concept_updated,
             hidden_concepts_updated,
+            num_changed_concepts_std,
+            concept_updated_std,
+            hidden_concepts_updated_std,
         ],
         axis=1,
     )
@@ -913,6 +921,9 @@ def plot_concept_change_probe(
         "Num Changed Concepts",
         "Concept Updated",
         "Hidden Concepts Updated",
+        "Num Changed Concepts Std.",
+        "Concept Updated Std.",
+        "Hidden Concepts Updated Std.",
     ]
     df = pd.DataFrame(data, columns=columns)
     df.to_csv(save_path_change_probe.with_suffix(".csv"), index=False)
@@ -968,8 +979,8 @@ if __name__ == "__main__":
         # "pos_intervention": plot_positive_interventions,
         # "random": plot_random_concepts_residual,
         # "concept_pred": plot_concept_predictions,
-        # "concept_change": plot_concept_change,
-        "concept_change_probe": plot_concept_change_probe,
+        "concept_change": plot_concept_change,
+        #"concept_change_probe": plot_concept_change_probe,
         # "concept_change": plot_concept_changes,
         # "disentanglement": plot_disentanglement,
         # "intervention_vs_disentanglement": plot_intervention_vs_disentanglement,

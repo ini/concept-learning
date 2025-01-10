@@ -783,6 +783,8 @@ def test_concept_change(
 
     num_changed_concepts_list = []
     concept_updated_list = []
+    int_concept_correct_list = []
+    base_concept_correct_list = []
     hidden_concepts_updated_list = []
 
     for (data, concepts), target in test_loader:
@@ -800,31 +802,54 @@ def test_concept_change(
         pred_int_concepts = update_all(y_pred_int_amex)
 
         # Vectorized calculations
+        #only other concepts
         mask = np.array(int_idxs == 0)  # Assuming int_idxs is of shape (batch_size, 6)
 
+        #number of supervised concepts changed during an intervention
         num_changed_concepts = np.sum(
+            (pred_concepts[:, :6] != pred_int_concepts[:, :6]) & mask, axis=1
+        )
+        # Did an intervention change a concept?
+        concept_updated = np.any(
             (pred_concepts[:, :6] != pred_int_concepts[:, :6]) & ~mask, axis=1
         )
-        concept_updated = np.any(
-            gt_concepts[:, :6] != pred_int_concepts[:, :6] & mask, axis=1
+
+        # Is concept correct after intervention?
+        int_concept_correct = np.any(
+            (gt_concepts[:, :6] == pred_int_concepts[:, :6]) & ~mask, axis=1
+        )
+        # Is concept correct before?
+        base_concept_correct = np.any(
+            (gt_concepts[:, :6] == pred_concepts[:, :6]) & ~mask, axis=1
         )
         hidden_concepts_updated = np.sum(
             pred_concepts[:, 6:8] != pred_int_concepts[:, 6:8], axis=1
         )
 
-        num_changed_concepts_list.extend(num_changed_concepts)
         concept_updated_list.extend(concept_updated)
+        num_changed_concepts_list.extend(num_changed_concepts)
+        int_concept_correct_list.extend(int_concept_correct)
+        base_concept_correct_list.extend(base_concept_correct)
         hidden_concepts_updated_list.extend(hidden_concepts_updated)
 
         # assert (
         #     0
         # ), f"{gt_concepts[9]} and {pred_concepts[9]} and {pred_int_concepts[9]} and {int_idxs.shape}"
+    num_changed_concepts = np.array(num_changed_concepts_list)
+    concept_updated = np.array(concept_updated_list).astype(bool)
+    print(np.mean(concept_updated))
+    int_concept_correct = np.array(int_concept_correct_list)
+    base_concept_correct = np.array(base_concept_correct_list).astype(bool)
+    hidden_concepts_updated = np.array(hidden_concepts_updated_list)
+    base_concept_correct = np.array(base_concept_correct_list).astype(bool)
 
-    # Calculate mean metrics
-    mean_num_changed_concepts = np.mean(num_changed_concepts_list)
-    mean_concept_updated = np.mean(concept_updated_list)
-    mean_hidden_concepts_updated = np.mean(hidden_concepts_updated_list)
-    return mean_num_changed_concepts, mean_concept_updated, mean_hidden_concepts_updated
+
+    # Calculate Metrics
+    mean_num_changed_concepts = np.mean(num_changed_concepts)
+    mean_hidden_concepts_updated = np.mean(hidden_concepts_updated)
+    concept_updated_when_wrong = np.sum(concept_updated & ~base_concept_correct) / np.sum(~base_concept_correct)
+    print(concept_updated_when_wrong)
+    return mean_num_changed_concepts, concept_updated_when_wrong, mean_hidden_concepts_updated
 
 
 ### Loading & Execution
@@ -946,16 +971,16 @@ def evaluate(config: dict):
 
 if __name__ == "__main__":
     MODES = [
-        "accuracy",
-        "neg_intervention",
-        "pos_intervention",
-        "random_concepts",
-        "random_residual",
+        # "accuracy",
+        # "neg_intervention",
+        # "pos_intervention",
+        # "random_concepts",
+        # "random_residual",
         # "correlation",
         # "mutual_info",
         # "concept_pred",
-        # "concept_change",
-        "concept_change_probe",
+        "concept_change",
+        #"concept_change_probe",
     ]
 
     parser = argparse.ArgumentParser()
