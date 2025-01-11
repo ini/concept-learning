@@ -837,7 +837,7 @@ def test_concept_change(
         # ), f"{gt_concepts[9]} and {pred_concepts[9]} and {pred_int_concepts[9]} and {int_idxs.shape}"
     num_changed_concepts = np.array(num_changed_concepts_list)
     concept_updated = np.array(concept_updated_list).astype(bool)
-    print(np.mean(concept_updated))
+
     int_concept_correct = np.array(int_concept_correct_list)
     base_concept_correct = np.array(base_concept_correct_list).astype(bool)
     hidden_concepts_updated = np.array(hidden_concepts_updated_list)
@@ -845,10 +845,10 @@ def test_concept_change(
 
 
     # Calculate Metrics
-    mean_num_changed_concepts = np.mean(num_changed_concepts)
-    mean_hidden_concepts_updated = np.mean(hidden_concepts_updated)
+    mean_num_changed_concepts = np.sum(num_changed_concepts & ~base_concept_correct) / np.sum(~base_concept_correct)
+    mean_hidden_concepts_updated = np.sum(hidden_concepts_updated & ~base_concept_correct) / np.sum(~base_concept_correct)
     concept_updated_when_wrong = np.sum(concept_updated & ~base_concept_correct) / np.sum(~base_concept_correct)
-    print(concept_updated_when_wrong)
+
     return mean_num_changed_concepts, concept_updated_when_wrong, mean_hidden_concepts_updated
 
 
