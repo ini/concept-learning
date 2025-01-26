@@ -60,6 +60,7 @@ class ConceptModel(nn.Module):
         training_mode: Literal[
             "independent", "sequential", "joint", "intervention_aware"
         ] = "independent",
+        additive_residual = False,
         **kwargs,
     ):
         """
@@ -132,6 +133,7 @@ class ConceptModel(nn.Module):
             )
             super().load_state_dict(modified_state_dict, strict=False)
         self.negative_intervention = False
+        self.additive_residual = additive_residual
 
     def forward(
         self,
@@ -195,7 +197,11 @@ class ConceptModel(nn.Module):
         attended_residual = self.cross_attention(
             x_concepts, residual, intervention_idxs.detach()
         )
-        x = torch.cat([x_concepts.detach(), attended_residual], dim=-1)
+        if not self.additive_residual:
+            x = torch.cat([x_concepts.detach(), attended_residual], dim=-1)
+        else:
+            assert x_concepts.shape == attended_residual.shape, f"When additive, the concept and residual should have the same shape, but they are {x_concepts.shape} and {attended_residual.shape}"
+            x = x_concepts.detach() + attended_residual
 
         # Get target logits
         target_logits = self.target_network(
@@ -240,7 +246,10 @@ class ConceptModel(nn.Module):
         attended_residual = self.cross_attention(
             concept_preds.detach(), residual, intervention_idxs.detach()
         )
-        x = torch.cat([concept_preds.detach(), attended_residual], dim=-1)
+        if not self.additive_residual:
+            x = torch.cat([concept_preds.detach(), attended_residual], dim=-1)
+        else:
+            x = concept_preds.detach() + attended_residual
 
         rank_input = torch.concat(
             [x, intervention_idxs],
@@ -248,7 +257,6 @@ class ConceptModel(nn.Module):
         ).detach()
 
         next_concept_group_scores = self.concept_rank_model(rank_input)
-
         if train:
             return next_concept_group_scores
 
@@ -283,8 +291,11 @@ class ConceptModel(nn.Module):
         attended_residual = self.cross_attention(
             concept_preds, residual, intervention_idxs.detach()
         )
-        x = torch.cat([concept_preds.detach(), attended_residual], dim=-1)
-
+        if not self.additive_residual:
+            x = torch.cat([concept_preds.detach(), attended_residual], dim=-1)
+        else:
+            x = concept_preds.detach() + attended_residual
+        
         target_logits = self.target_network(
             x, concepts=concepts, intervention_idxs=intervention_idxs.detach()
         )
@@ -678,7 +689,12 @@ class ConceptLightningModel(pl.LightningModule):
             #     gamma,
             # )
         else:
+            assert concept_logits.shape == concepts.shape, f"concept_logits.shape, concepts.shape: {concept_logits.shape, concepts.shape}"
             concept_loss = self.concept_loss_fn(concept_logits, concepts)
+            # try: 
+            #     concept_loss = self.concept_loss_fn(concept_logits, concepts)
+            # except:
+            #     breakpoint()
         if concept_loss.requires_grad:
             self.log("concept_loss", concept_loss, **self.log_kwargs)
 

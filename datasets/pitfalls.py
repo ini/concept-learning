@@ -75,23 +75,63 @@ class DatasetC(Dataset):
         return (self.data[idx], self.concepts[idx]), self.targets[idx]
 
 
+# class DatasetD(Dataset):
+#     """
+#     See "Promises and Pitfalls of Black-Box Concept Learning Models"
+#     Appendix D (https://arxiv.org/pdf/2106.13314.pdf).
+#     """
+
+#     def __init__(self, train: bool = True):
+#         num_samples = 2000 if train else 1000
+#         generator = torch.Generator().manual_seed(int(train))
+#         points = 2 * torch.randn(num_samples, 3, generator=generator)
+#         self.data = torch.cat([
+#             torch.sin(points) + points,
+#             torch.cos(points) + points,
+#             (points ** 2).sum(dim=-1).unsqueeze(-1),
+#         ], dim=-1)
+#         self.concepts = (points > 0).float()
+#         self.targets = (self.concepts.sum(dim=-1) > 1).long()
+
+#     def __len__(self):
+#         return len(self.data)
+
+#     def __getitem__(self, idx: int):
+#         return (self.data[idx], self.concepts[idx]), self.targets[idx]
+
+def _binarize_to_256(concepts):
+    # concepts is a 1D tensor of length 8 containing binary values (0 or 1)
+    # Convert them to a string like "01001101" and interpret it as base-2.
+    bits = ''.join(str(int(x.item())) for x in concepts)
+    return int(bits, 2)
+
+
 class DatasetD(Dataset):
     """
     See "Promises and Pitfalls of Black-Box Concept Learning Models"
     Appendix D (https://arxiv.org/pdf/2106.13314.pdf).
     """
 
-    def __init__(self, train: bool = True):
+    def __init__(self, train: bool = True, num_concepts=6):
         num_samples = 2000 if train else 1000
         generator = torch.Generator().manual_seed(int(train))
-        points = 2 * torch.randn(num_samples, 3, generator=generator)
+        points = 2 * torch.randn(num_samples, 8, generator=generator)
         self.data = torch.cat([
             torch.sin(points) + points,
             torch.cos(points) + points,
-            (points ** 2).sum(dim=-1).unsqueeze(-1),
+            (points ** 2).sum(dim=-1, keepdim=True),
         ], dim=-1)
-        self.concepts = (points > 0).float()
-        self.targets = (self.concepts.sum(dim=-1) > 1).long()
+        concepts = (points > 0).float()
+
+        # Convert the 8 binary concept bits into an integer label from 0..255
+        targets = []
+        for concept_vec in concepts:
+            label = _binarize_to_256(concept_vec)
+            targets.append(label)
+        if num_concepts == -1:
+            num_concepts = 6
+        self.concepts = concepts[:, :num_concepts]
+        self.targets = torch.tensor(targets, dtype=torch.int64)
 
     def __len__(self):
         return len(self.data)

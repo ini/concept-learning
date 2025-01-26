@@ -142,6 +142,11 @@ def make_cnn(
         )
         model.fc = nn.Linear(model.fc.in_features, output_dim)
         return model
+    elif cnn_type == "vit_b_16":
+        from torchvision.models.vision_transformer import vit_b_16, ViT_B_16_Weights
+        model = vit_b_16(weights=ViT_B_16_Weights.IMAGENET1K_V1 if load_weights else None)
+        model.heads = nn.Linear(model.heads.in_features, output_dim)
+        return model
 
     elif cnn_type == "inception_v3":
         from torchvision.models.inception import inception_v3, Inception_V3_Weights

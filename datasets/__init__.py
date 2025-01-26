@@ -33,11 +33,8 @@ DATASET_INFO = {
         "concept_dim": 100,
         "num_classes": 2,
     },
-    "pitfalls_synthetic": {
-        "concept_type": "binary",
-        "concept_dim": 3,
-        "num_classes": 2,
-    },
+    "pitfalls_synthetic": {"concept_type": "binary", "concept_dim": 6, "num_classes": 256},
+
     "pitfalls_mnist_123456": {
         "concept_type": "binary",
         "concept_dim": 3,
@@ -96,9 +93,9 @@ def get_datasets(
         test_dataset = DatasetC(root=data_dir, num_concepts=100, train=False)
 
     elif dataset_name == "pitfalls_synthetic":
-        train_dataset = DatasetD(train=True)
-        val_dataset = DatasetD(train=False)
-        test_dataset = DatasetD(train=False)
+        train_dataset = DatasetD(train=True, num_concepts=num_concepts)
+        val_dataset = DatasetD(train=False, num_concepts=num_concepts)
+        test_dataset = DatasetD(train=False, num_concepts=num_concepts)
 
     elif dataset_name == "pitfalls_mnist_123456":
         train_dataset = DatasetE(root=data_dir, train=True)
@@ -392,6 +389,7 @@ def get_concept_loss_fn(
 
             pos_weight = concepts_neg_count / (concepts_pos_count + 1e-6)
             torch.save(pos_weight, weights_path)
+       # breakpoint()
 
         return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 

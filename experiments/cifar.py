@@ -21,6 +21,8 @@ def make_concept_model(config: dict) -> ConceptModel:
         bottleneck_dim = (
             concept_dim * residual_dim
         )  # residual dim is the size of the concept embedding for cem
+    # elif config.get("additive_residual", False):
+    #     bottleneck_dim = concept_dim
     else:
         bottleneck_dim = concept_dim + residual_dim
 
@@ -30,6 +32,15 @@ def make_concept_model(config: dict) -> ConceptModel:
                 concept_dim * residual_dim + concept_dim
             ]  # for cem, input is concept_dim * residual_dim (# of concepts * concept embedding dim)
             + (int_model_layers or [256, 128])  # + previous interventions
+            + [concept_dim]
+        )
+    elif config.get("additive_residual", False):
+        #residual is added to concept not concatenated
+        units = (
+            [
+                concept_dim + residual_dim
+            ]  # Bottleneck  # Prev interventions
+            + (int_model_layers or [256, 128])
             + [concept_dim]
         )
     else:
@@ -55,8 +66,10 @@ def make_concept_model(config: dict) -> ConceptModel:
         concept_rank_model = torch.nn.Sequential(*layers)
     else:
         concept_rank_model = nn.Identity()
-
-    target_network = nn.Linear(bottleneck_dim, num_classes)
+    if config.get("additive_residual", False):
+        target_network = nn.Linear(concept_dim, num_classes)
+    else:
+        target_network = nn.Linear(bottleneck_dim, num_classes)
     if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
         concept_prob_generators, concept_context_generators = (
             make_concept_embedding_model(
@@ -79,7 +92,6 @@ def make_concept_model(config: dict) -> ConceptModel:
             )
         else:
             cross_attention = PassThrough(concept_dim, residual_dim, residual_dim, 8)
-
         return ConceptModel(
             base_network=make_cnn(bottleneck_dim, cnn_type=backbone),
             concept_network=Apply(lambda x: x[..., :concept_dim]),
