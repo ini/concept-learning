@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 
+torch.set_float32_matmul_precision("high")
 import argparse
 import importlib
 import pytorch_lightning as pl

@@ -11,7 +11,7 @@ from torch import Tensor
 from torchmetrics import Accuracy
 from typing import Any
 from open_clip import create_model_from_pretrained, get_tokenizer
-
+from transformers import ViTForImageClassification
 
 ### Torch
 
@@ -143,9 +143,20 @@ def make_cnn(
         model.fc = nn.Linear(model.fc.in_features, output_dim)
         return model
     elif cnn_type == "vit_b_16":
-        from torchvision.models.vision_transformer import vit_b_16, ViT_B_16_Weights
-        model = vit_b_16(weights=ViT_B_16_Weights.IMAGENET1K_V1 if load_weights else None)
-        model.heads = nn.Linear(model.heads.in_features, output_dim)
+        model_name = "google/vit-base-patch16-224"
+        # Load the pre-trained ViT model with BF16 precision
+        model = ViTForImageClassification.from_pretrained(
+            model_name, return_dict=True, torch_dtype=torch.bfloat16
+        )
+        model.classifier = nn.Linear(768, output_dim, bias=True)
+        # from torchvision.models.vision_transformer import vit_b_16, ViT_B_16_Weights
+
+        # model = vit_b_16(
+        #     weights=ViT_B_16_Weights.IMAGENET1K_V1 if load_weights else None
+        # )
+        # model.heads = nn.Sequential(nn.Linear(model.heads[0].in_features, output_dim))
+        model = torch.compile(model)
+        # model = model.to(dtype=torch.bfloat16)
         return model
 
     elif cnn_type == "inception_v3":

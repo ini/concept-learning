@@ -14,6 +14,7 @@ from nn_extensions import Apply, VariableKwargs
 from utils import accuracy, unwrap, zero_loss_fn, remove_prefix, remove_keys_with_prefix
 from nn_extensions import Chain
 import numpy as np
+import time
 
 ### Typing
 
@@ -60,7 +61,8 @@ class ConceptModel(nn.Module):
         training_mode: Literal[
             "independent", "sequential", "joint", "intervention_aware"
         ] = "independent",
-        additive_residual = False,
+        additive_residual=False,
+        intervention_aware=True,
         **kwargs,
     ):
         """
@@ -114,7 +116,12 @@ class ConceptModel(nn.Module):
         self.residual_network = VariableKwargs(residual_network)
         self.target_network = VariableKwargs(target_network)
         self.bottleneck_layer = VariableKwargs(bottleneck_layer)
-        self.concept_rank_model = VariableKwargs(concept_rank_model)
+        self.intervention_aware = intervention_aware
+
+        if self.intervention_aware:
+            self.concept_rank_model = VariableKwargs(concept_rank_model)
+        else:
+            self.concept_rank_model = None
         self.cross_attention = VariableKwargs(cross_attention)
 
         self.concept_type = concept_type
@@ -165,7 +172,23 @@ class ConceptModel(nn.Module):
             concepts = 1 - concepts
 
         # Get concept logits & residual
-        x = self.base_network(x, concepts=concepts)
+        # x = self.base_network(x, concepts=concepts)
+        # with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        #     x = self.base_network(x)
+        print(x.device)
+        # breakpoint()
+        if x.device.type == "cpu":
+            model_float = self.base_network.to(torch.float32)
+            x = model_float(x)
+
+        else:
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                x = self.base_network(x)
+
+        if not isinstance(x, torch.Tensor):
+            # Handle non-tensor case
+            x = x.logits
+        x = x.float()
         concept_logits = self.concept_network(x, concepts=concepts)
         residual = self.residual_network(x, concepts=concepts)
 
@@ -200,7 +223,9 @@ class ConceptModel(nn.Module):
         if not self.additive_residual:
             x = torch.cat([x_concepts.detach(), attended_residual], dim=-1)
         else:
-            assert x_concepts.shape == attended_residual.shape, f"When additive, the concept and residual should have the same shape, but they are {x_concepts.shape} and {attended_residual.shape}"
+            assert (
+                x_concepts.shape == attended_residual.shape
+            ), f"When additive, the concept and residual should have the same shape, but they are {x_concepts.shape} and {attended_residual.shape}"
             x = x_concepts.detach() + attended_residual
 
         # Get target logits
@@ -295,7 +320,7 @@ class ConceptModel(nn.Module):
             x = torch.cat([concept_preds.detach(), attended_residual], dim=-1)
         else:
             x = concept_preds.detach() + attended_residual
-        
+
         target_logits = self.target_network(
             x, concepts=concepts, intervention_idxs=intervention_idxs.detach()
         )
@@ -394,6 +419,7 @@ class ConceptLightningModel(pl.LightningModule):
         self.num_test_interventions = None
         self.complete_intervention_weight = complete_intervention_weight
         self.patience = patience
+        self.intervention_aware = self.concept_model.intervention_aware
 
     def dummy_pass(self, loader: Iterable[ConceptBatch]):
         """
@@ -689,9 +715,11 @@ class ConceptLightningModel(pl.LightningModule):
             #     gamma,
             # )
         else:
-            assert concept_logits.shape == concepts.shape, f"concept_logits.shape, concepts.shape: {concept_logits.shape, concepts.shape}"
+            assert (
+                concept_logits.shape == concepts.shape
+            ), f"concept_logits.shape, concepts.shape: {concept_logits.shape, concepts.shape}"
             concept_loss = self.concept_loss_fn(concept_logits, concepts)
-            # try: 
+            # try:
             #     concept_loss = self.concept_loss_fn(concept_logits, concepts)
             # except:
             #     breakpoint()
@@ -810,7 +838,7 @@ class ConceptLightningModel(pl.LightningModule):
             Dataset split
         """
         (data, concepts), targets = batch
-
+        t1 = time.time()
         if self.training:
             mask = torch.bernoulli(
                 torch.ones_like(concepts[0]) * self.training_intervention_prob,
@@ -830,7 +858,9 @@ class ConceptLightningModel(pl.LightningModule):
         concept_logits, residual, target_logits = outputs
 
         # Rollout loss
-        if self.intervention_weight > 0 or self.intervention_task_loss_weight > 0:
+        if self.intervention_aware and (
+            self.intervention_weight > 0 or self.intervention_task_loss_weight > 0
+        ):
             intervention_loss, intervention_task_loss, int_mask_accuracy = (
                 self.rollout_loss_fn(batch, outputs, intervention_idxs)
             )
@@ -849,6 +879,7 @@ class ConceptLightningModel(pl.LightningModule):
             concepts=concepts,
             intervention_idxs=torch.ones_like(intervention_idxs),
         )
+        print(intervention_target_logits.shape)
         complete_intervention_loss = F.cross_entropy(
             intervention_target_logits, targets
         )
@@ -881,6 +912,8 @@ class ConceptLightningModel(pl.LightningModule):
         else:
             concept_rmse = F.mse_loss(concept_logits, concepts).sqrt()
             self.log(f"{split}_concept_rmse", concept_rmse, **self.log_kwargs)
+        t2 = time.time()
+        print(t2 - t1)
 
         return loss
 
@@ -937,28 +970,42 @@ class ConceptLightningModel(pl.LightningModule):
         concept_logits, residual, target_logits = outputs
 
         for i in range(k):
-            # And generate a probability distribution over previously
-            # unseen concepts to indicate which one we should intervene
-            # on next!
-            concept_group_scores = self.concept_model.calc_concept_group(
-                concept_logits=concept_logits,
-                residual=residual,
-                concepts=concepts,
-                intervention_idxs=intervention_idxs,
-                train=True,
-            )
-            concept_group_scores = torch.where(
-                intervention_idxs == 1,
-                torch.ones(intervention_idxs.shape).to(intervention_idxs.device)
-                * (-1000),
-                concept_group_scores,
-            )
-            selected_groups = torch.nn.functional.gumbel_softmax(
-                concept_group_scores,
-                dim=-1,
-                hard=True,
-                tau=1,
-            )
+            if not self.intervention_aware:
+                # Randomly select an intervention index
+                selected_groups = torch.zeros_like(intervention_idxs)
+                for b in range(intervention_idxs.shape[0]):  # Batch dimension
+                    # Get indices of concepts that haven't been intervened on for this sample
+                    non_intervened_indices = torch.where(intervention_idxs[b] == 0)[0]
+
+                    if len(non_intervened_indices) > 0:
+                        # Randomly select an index from the non-intervened ones
+                        random_idx = non_intervened_indices[
+                            torch.randint(0, len(non_intervened_indices), (1,))
+                        ]
+                        selected_groups[b, random_idx] = 1
+            else:
+                # And generate a probability distribution over previously
+                # unseen concepts to indicate which one we should intervene
+                # on next!
+                concept_group_scores = self.concept_model.calc_concept_group(
+                    concept_logits=concept_logits,
+                    residual=residual,
+                    concepts=concepts,
+                    intervention_idxs=intervention_idxs,
+                    train=True,
+                )
+                concept_group_scores = torch.where(
+                    intervention_idxs == 1,
+                    torch.ones(intervention_idxs.shape).to(intervention_idxs.device)
+                    * (-1000),
+                    concept_group_scores,
+                )
+                selected_groups = torch.nn.functional.gumbel_softmax(
+                    concept_group_scores,
+                    dim=-1,
+                    hard=True,
+                    tau=1,
+                )
 
             intervention_idxs += selected_groups
             intervention_idxs = torch.clamp(

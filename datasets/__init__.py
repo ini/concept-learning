@@ -33,8 +33,11 @@ DATASET_INFO = {
         "concept_dim": 100,
         "num_classes": 2,
     },
-    "pitfalls_synthetic": {"concept_type": "binary", "concept_dim": 6, "num_classes": 256},
-
+    "pitfalls_synthetic": {
+        "concept_type": "binary",
+        "concept_dim": 6,
+        "num_classes": 256,
+    },
     "pitfalls_mnist_123456": {
         "concept_type": "binary",
         "concept_dim": 3,
@@ -102,20 +105,48 @@ def get_datasets(
         test_dataset = DatasetE(root=data_dir, train=False)
 
     elif dataset_name == "cifar100":
-        transform_train = transforms.Compose(
-            [
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
-            ]
-        )
-        transform_test = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
-            ]
-        )
+        if backbone == "vit_b_16":
+            transform_train = transforms.Compose(
+                [
+                    transforms.RandomResizedCrop(
+                        224
+                    ),  # Resizes to 224x224 with random cropping
+                    transforms.RandomHorizontalFlip(),  # Random horizontal flipping
+                    transforms.ColorJitter(
+                        brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1
+                    ),  # Optional: Color augmentation
+                    transforms.ToTensor(),  # Converts image to tensor
+                    transforms.Normalize(
+                        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                    ),  # Normalization for ImageNet
+                ]
+            )
+            transform_test = transforms.Compose(
+                [
+                    transforms.Resize(256),  # Resize shorter side to 256 pixels
+                    transforms.CenterCrop(224),  # Center crop to 224x224
+                    transforms.ToTensor(),  # Converts image to tensor
+                    transforms.Normalize(
+                        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                    ),  # Normalization for ImageNet
+                ]
+            )
+
+        else:
+            transform_train = transforms.Compose(
+                [
+                    transforms.RandomCrop(32, padding=4),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
+                ]
+            )
+            transform_test = transforms.Compose(
+                [
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
+                ]
+            )
         train_dataset = CIFAR100(
             root=data_dir, train=True, transform=transform_train, download=True
         )
@@ -389,7 +420,7 @@ def get_concept_loss_fn(
 
             pos_weight = concepts_neg_count / (concepts_pos_count + 1e-6)
             torch.save(pos_weight, weights_path)
-       # breakpoint()
+        # breakpoint()
 
         return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
