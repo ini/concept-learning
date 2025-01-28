@@ -12,8 +12,10 @@ from torchmetrics import Accuracy
 from typing import Any
 from open_clip import create_model_from_pretrained, get_tokenizer
 from transformers import ViTForImageClassification
-
+import torchxrayvision as xrv
+import skimage, torch, torchvision
 ### Torch
+from torchmetrics import AUROC
 
 
 def zero_loss_fn(*tensors: Tensor):
@@ -44,6 +46,31 @@ def accuracy(logits: Tensor, targets: Tensor, task: str = "multiclass") -> Tenso
         )
 
     return accuracy_fn(preds, targets)
+
+
+def auroc(logits: Tensor, targets: Tensor, task: str = "multiclass") -> Tensor:
+    """
+    Compute AUROC from logits and targets.
+
+    Parameters
+    ----------
+    logits : Tensor
+        Logits
+    targets : Tensor
+        Targets
+    task : str, optional
+        Task type: "binary" or "multiclass". Defaults to "multiclass".
+    """
+    if task == "binary":
+        preds = logits.sigmoid()
+        auroc_fn = AUROC(task="binary").to(logits.device)
+    else:
+        preds = logits.softmax(dim=-1)
+        auroc_fn = AUROC(task="multiclass", num_classes=logits.shape[-1]).to(
+            logits.device
+        )
+
+    return auroc_fn(preds, targets)
 
 
 def to_device(
@@ -141,6 +168,21 @@ def make_cnn(
             weights=ResNet34_Weights.IMAGENET1K_V1 if load_weights else None
         )
         model.fc = nn.Linear(model.fc.in_features, output_dim)
+        model = torch.compile(model)
+        return model
+    elif cnn_type == "densenet121":
+        #transform = torchvision.transforms.Compose([xrv.datasets.XRayCenterCrop(),xrv.datasets.XRayResizer(224)])
+        # model = xrv.models.DenseNet(weights="densenet121-res224-all")
+        # model.classifier = nn.Linear(1024, output_dim, bias=True)
+        # model.op_threshs = None
+        from torchvision.models import densenet121, DenseNet121_Weights
+
+        model = densenet121(
+            weights=DenseNet121_Weights.IMAGENET1K_V1 if load_weights else None
+        )
+        model.classifier = nn.Linear(model.classifier.in_features, output_dim)
+        model = model.to(dtype=torch.bfloat16)
+        #model = torch.compile(model)
         return model
     elif cnn_type == "vit_b_16":
         model_name = "google/vit-base-patch16-224"

@@ -11,10 +11,11 @@ from datetime import datetime
 from pathlib import Path
 from ray.tune.schedulers import AsyncHyperBandScheduler
 
-from datasets import get_concept_loss_fn, get_dummy_batch, get_datamodule, DATASET_INFO
+from datasets import get_concept_loss_fn, get_target_loss_weights, get_dummy_batch, get_datamodule, DATASET_INFO
 from lightning_ray import LightningTuner, parse_args_dynamic
 from models import *
 from utils import cross_correlation, RayConfig
+from torch.nn import functional as F
 
 
 def make_concept_model(**config) -> ConceptLightningModel:
@@ -51,7 +52,10 @@ def make_concept_model(**config) -> ConceptLightningModel:
         DATASET_INFO[config["dataset"]]["concept_dim"] = config["num_concepts"]
         config["concept_dim"] = config["num_concepts"]
 
-    dataset_info = DATASET_INFO[config["dataset"]]
+    if config["dataset"] == "mimic_cxr":
+        dataset_info = DATASET_INFO[config["dataset"]][config["subset"]]
+    else:
+        dataset_info = DATASET_INFO[config["dataset"]]
     config = {**dataset_info, **config}
 
     # Get concept loss function
@@ -60,7 +64,18 @@ def make_concept_model(**config) -> ConceptLightningModel:
         config["data_dir"],
         num_concepts=config.get("num_concepts", -1),
         backbone=config.get("backbone", "resnet34"),
+        subset=config.get("subset", None),
     )
+    if config["dataset"] == "mimic_cxr":
+        config["target_loss_fn"] = get_target_loss_weights(
+            config["dataset"],
+            config["data_dir"],
+            num_concepts=config.get("num_concepts", -1),
+            backbone=config.get("backbone", "resnet34"),
+            subset=config.get("subset", None),
+        )
+    else:
+        config["target_loss_fn"] = F.cross_entropy
 
     # No residual
     if model_type == "no_residual":
@@ -129,6 +144,8 @@ def make_concept_model(**config) -> ConceptLightningModel:
         config["data_dir"],
         config.get("num_concepts", -1),
         config.get("backbone", "resnet34"),
+        config.get("subset", None),
+
     )
     model.dummy_pass([batch])
 
@@ -144,6 +161,7 @@ def make_datamodule(**config) -> pl.LightningDataModule:
         resize_oai=config.get("resize_oai", True),
         num_concepts=config.get("num_concepts", -1),
         backbone=config.get("backbone", "resnet34"),
+        subset=config.get("subset", None),
     )
 
 
@@ -183,11 +201,14 @@ if __name__ == "__main__":
     if isinstance(dataset_names, dict) and "grid_search" in dataset_names:
         dataset_names = list(dataset_names.values())
     dataset_names = [dataset_names] if isinstance(dataset_names, str) else dataset_names
+    subsets = []
+    #if type(config.get("subset", None)) == list
     for dataset_name in dataset_names:
         get_datamodule(
             dataset_name,
             data_dir=config.get("data_dir"),
             backbone=config.get("backbone", "resnet34"),
+            subset="cardiomegaly",
         )
 
     # Create trial scheduler

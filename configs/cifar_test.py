@@ -7,30 +7,28 @@ from experiments.cifar import (
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": tune.grid_search(
-            ["latent_residual", "decorrelated_residual", "mi_residual"]
-        ),
+        "model_type": "mi_residual",
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/cifar/",
         "ray_storage_dir": "/data/renos/ray_results/",
-        "residual_dim": 20,
-        "lr": 1e-4,
-        "num_epochs": 100,
+        "residual_dim": 32,
+        "lr": 0.001,
+        "num_epochs": 200,
         "momentum": 0.9,
-        # "lr_scheduler": "reduce_on_plateau",
-        # "chosen_optim": "sgd",
-        "lr_scheduler": "cosine annealing",
-        "chosen_optim": "adam",
+        "lr_scheduler": "reduce_on_plateau",
+        "chosen_optim": "sgd",
+        # "lr_scheduler": "cosine annealing",
+        # "chosen_optim": "adam",
         "alpha": 1.0,
         "beta": 1.0,
         # "initial_horizon": 10,
-        "max_horizon": 4,
+        "max_horizon": 6,
         "mi_estimator_hidden_dim": 512,
         "mi_optimizer_lr": 0.001,
         "cw_alignment_frequency": 20,
         "num_cpus": 4,
         "num_gpus": 1.0,
-        "num_samples": 3,
+        "num_samples": 1,
         "batch_size": 64,
         "checkpoint_frequency": 5,
         "norm_type": None,
@@ -45,8 +43,6 @@ def get_config(**kwargs) -> dict:
         "gpu_memory_per_worker": "5500 MiB",
         "cross": False,
         "backbone": "resnet18",
-        "additive_residual": True,
-
     }
     experiment_config.update(kwargs)
     experiment_config = get_cifar_config(**experiment_config)

@@ -752,6 +752,7 @@ def test_concept_change(
     model_type: str,
     test_loader: DataLoader,
     dataset=None,
+    celeba=True,
 ) -> float:
     """
     Test mutual information between concepts and residuals.
@@ -766,20 +767,28 @@ def test_concept_change(
         Number of epochs to train mutual information estimator
     """
     # Get mutual information estimator
-    with open("/home/renos/label_invert.json", "r") as f:
-        label_invert = json.load(f)
-    (data, concepts), targets = next(iter(test_loader))
-    _, residual, _ = model(data, concepts=concepts)
-
     def invert_binarize(binary_int):
         binary_str = bin(binary_int)[2:].zfill(8)
         concepts = np.array([int(bit) for bit in binary_str], dtype=int)
         return concepts
+    
+    if dataset == "celeba":
+        with open("/home/renos/label_invert.json", "r") as f:
+            label_invert = json.load(f)
+        (data, concepts), targets = next(iter(test_loader))
+        _, residual, _ = model(data, concepts=concepts)
 
-    def update_all(vector):
-        return np.array(
-            [invert_binarize(int(label_invert[str(int(v))])) for v in vector]
-        )
+
+        def update_all(vector):
+            return np.array(
+                [invert_binarize(int(label_invert[str(int(v))])) for v in vector]
+            )
+    else:
+        def update_all(vector):
+            return np.array(
+                [invert_binarize(int(v)) for v in vector]
+            )
+
 
     num_changed_concepts_list = []
     concept_updated_list = []
@@ -845,9 +854,10 @@ def test_concept_change(
 
 
     # Calculate Metrics
-    mean_num_changed_concepts = np.sum(num_changed_concepts & ~base_concept_correct) / np.sum(~base_concept_correct)
-    mean_hidden_concepts_updated = np.sum(hidden_concepts_updated & ~base_concept_correct) / np.sum(~base_concept_correct)
+    mean_num_changed_concepts = np.mean(num_changed_concepts)
+    mean_hidden_concepts_updated = np.mean(hidden_concepts_updated)
     concept_updated_when_wrong = np.sum(concept_updated & ~base_concept_correct) / np.sum(~base_concept_correct)
+
 
     return mean_num_changed_concepts, concept_updated_when_wrong, mean_hidden_concepts_updated
 
@@ -893,7 +903,7 @@ def evaluate(config: dict):
     metrics = {}
 
     # Get data loader
-    if config["eval_mode"] == "concept_change_probe" and config["dataset"] == "celeba":
+    if config["eval_mode"] == "concept_change_probe" and (config["dataset"] == "celeba" or config["dataset"] == "pitfalls_synthetic"):
         new_config = copy.deepcopy(config)
         new_config["num_concepts"] = 8
         train_loader = make_datamodule(**new_config).train_dataloader()

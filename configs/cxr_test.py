@@ -1,21 +1,19 @@
 from ray import tune
-from experiments.cifar import (
-    get_config as get_cifar_config,
+from experiments.cxr import (
+    get_config as get_cxr_config,
     make_concept_model,
 )
 
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": tune.grid_search(
-            ["latent_residual", "decorrelated_residual", "mi_residual"]
-        ),
+        "model_type": "mi_residual",
         "save_dir": "/data/renos/supervised_concept_learning/",
-        "data_dir": "/data/Datasets/cifar/",
+        "data_dir": "/data/Datasets/mimic_cxr_processed/out/mimic_cxr/t/lr_0.01_epochs_60_loss_BCE_W_flattening_type_flatten_layer_features_denseblock4/densenet121",
         "ray_storage_dir": "/data/renos/ray_results/",
-        "residual_dim": 20,
-        "lr": 1e-4,
-        "num_epochs": 100,
+        "residual_dim": 32,
+        "lr": 0.0005,
+        "num_epochs": 1,
         "momentum": 0.9,
         # "lr_scheduler": "reduce_on_plateau",
         # "chosen_optim": "sgd",
@@ -28,10 +26,10 @@ def get_config(**kwargs) -> dict:
         "mi_estimator_hidden_dim": 512,
         "mi_optimizer_lr": 0.001,
         "cw_alignment_frequency": 20,
-        "num_cpus": 4,
+        "num_cpus": 8,
         "num_gpus": 1.0,
-        "num_samples": 3,
-        "batch_size": 64,
+        "num_samples": 1,
+        "batch_size": 128,
         "checkpoint_frequency": 5,
         "norm_type": None,
         "T_whitening": 3,
@@ -42,12 +40,12 @@ def get_config(**kwargs) -> dict:
         "training_intervention_prob": 0.25,
         "intervention_task_loss_weight": 0.0,
         "intervention_weight": 2.0,
-        "gpu_memory_per_worker": "5500 MiB",
+        "gpu_memory_per_worker": "20000 MiB",
         "cross": False,
-        "backbone": "resnet18",
-        "additive_residual": True,
-
+        "backbone": "vit_b_16",
+        "intervention_aware": False,
+        "subset": "effusion", #effusion cardiomegaly edema pneumonia pneumothorax
     }
     experiment_config.update(kwargs)
-    experiment_config = get_cifar_config(**experiment_config)
+    experiment_config = get_cxr_config(**experiment_config)
     return experiment_config

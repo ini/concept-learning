@@ -19,7 +19,8 @@ from .pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 from .imagenet import ImageNet
 from .celeba import generate_data as celeba_generate_data
 from .aa2 import AA2
-
+from .cxr import MIMIC_CXR
+import torchxrayvision as xrv
 
 DATASET_INFO = {
     "mnist_modulo": {"concept_type": "binary", "concept_dim": 5, "num_classes": 10},
@@ -50,6 +51,11 @@ DATASET_INFO = {
     "imagenet": {"concept_type": "binary", "concept_dim": 65, "num_classes": 1000},
     "celeba": {"concept_type": "binary", "concept_dim": 6, "num_classes": 256},
     "aa2": {"concept_type": "binary", "concept_dim": 85, "num_classes": 50},
+    "mimic_cxr": {"cardiomegaly": {"concept_type": "binary", "concept_dim": 60, "num_classes": 2},\
+                    "effusion": {"concept_type": "binary", "concept_dim": 90, "num_classes": 2},\
+                    "edema": {"concept_type": "binary", "concept_dim": 62, "num_classes": 2},\
+                    "pneumonia": {"concept_type": "binary", "concept_dim": 97, "num_classes": 2},\
+                    "pneumothorax": {"concept_type": "binary", "concept_dim": 35, "num_classes": 2}},
 }
 
 
@@ -60,6 +66,7 @@ def get_datasets(
     resize_oai: bool = True,
     num_concepts: int = -1,
     backbone: str = "resnet34",
+    subset = "cardiomegaly",
 ) -> tuple[Dataset, Dataset, Dataset]:
     """
     Get train, validation, and test splits for the given dataset.
@@ -152,6 +159,89 @@ def get_datasets(
         )
         test_dataset = CIFAR100(
             root=data_dir, train=False, transform=transform_test, download=True
+        )
+    
+    elif dataset_name == "mimic_cxr":
+        if backbone == "vit_b_16":
+            transform_train = transforms.Compose(
+                [
+                    transforms.RandomResizedCrop(
+                        224
+                    ),  # Resizes to 224x224 with random cropping
+                    transforms.RandomHorizontalFlip(),  # Random horizontal flipping
+                    transforms.ColorJitter(
+                        brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1
+                    ),  # Optional: Color augmentation
+                    transforms.ToTensor(),  # Converts image to tensor
+                    transforms.Normalize(
+                        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                    ),  # Normalization for ImageNet
+                ]
+            )
+            transform_test = transforms.Compose(
+                [
+                    transforms.Resize(256),  # Resize shorter side to 256 pixels
+                    transforms.CenterCrop(224),  # Center crop to 224x224
+                    transforms.ToTensor(),  # Converts image to tensor
+                    transforms.Normalize(
+                        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                    ),  # Normalization for ImageNet
+                ]
+            )
+        # elif backbone == "densenet121":
+        #     class ToNumpyArray:
+        #         def __call__(self, pic):
+        #             return np.array(pic)
+        #     transform_train = transforms.Compose([
+        #         transforms.RandomCrop(32, padding=4),
+        #         transforms.RandomHorizontalFlip(),
+        #         #transforms.ToTensor(),
+        #         ToNumpyArray(),
+        #         transforms.Lambda(lambda img: xrv.datasets.normalize(img, 255)),  # Normalize to [-1024, 1024]
+        #         transforms.Lambda(lambda img: img.mean(2)[None, ...]),           # Convert to single color channel
+        #         xrv.datasets.XRayCenterCrop(),                                   # Center crop
+        #         xrv.datasets.XRayResizer(224),                                   # Resize to 224x224                                           # Convert to PyTorch tensor
+        #     ])
+        #     transform_test = transforms.Compose([
+        #         #transforms.ToTensor(),
+        #         ToNumpyArray(),
+        #         transforms.Lambda(lambda img: xrv.datasets.normalize(img, 255)),  # Normalize to [-1024, 1024]
+        #         transforms.Lambda(lambda img: img.mean(2)[None, ...]),           # Convert to single color channel
+        #         xrv.datasets.XRayCenterCrop(),                                   # Center crop
+        #         xrv.datasets.XRayResizer(224),                                   # Resize to 224x224                                       # Convert to PyTorch tensor
+
+        #     ])
+        #     #transform = torchvision.transforms.Compose([xrv.datasets.XRayCenterCrop(),xrv.datasets.XRayResizer(224)])
+
+        else:
+            transform_train = transforms.Compose(
+                [
+                    transforms.RandomCrop(32, padding=4),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.Resize(256),  # Resize shorter side to 256 pixels
+                    transforms.CenterCrop(224),  # Center crop to 224x224
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
+                ]
+            )
+            transform_test = transforms.Compose(
+                [
+                    transforms.Resize(256),  # Resize shorter side to 256 pixels
+                    transforms.CenterCrop(224),  # Center crop to 224x224
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
+                ]
+            )
+        train_dataset = MIMIC_CXR(
+            root=data_dir,subset=subset, split="train", transform=transform_train
+        )
+
+        test_dataset = MIMIC_CXR(
+            root=data_dir,subset=subset, split="test", transform=transform_test
+        )
+
+        val_dataset = MIMIC_CXR(
+            root=data_dir,subset=subset, split="val", transform=transform_test
         )
 
     elif dataset_name == "cub":
@@ -324,6 +414,7 @@ def get_datamodule(
     resize_oai: bool = True,
     num_concepts: int = -1,
     backbone: str = "resnet34",
+    subset = "cardiomegaly",
 ) -> pl.LightningDataModule:
     """
     Get a LightningDataModule for the specified dataset.
@@ -340,8 +431,9 @@ def get_datamodule(
         Number of workers for the data loaders
     """
     train_dataset, val_dataset, test_dataset = get_datasets(
-        dataset_name, data_dir, resize_oai, num_concepts, backbone=backbone
+        dataset_name, data_dir, resize_oai, num_concepts, backbone=backbone, subset=subset
     )
+
     return pl.LightningDataModule.from_datasets(
         train_dataset=train_dataset,
         val_dataset=val_dataset,
@@ -353,7 +445,7 @@ def get_datamodule(
 
 @functools.cache
 def get_dummy_batch(
-    dataset_name: str, data_dir: str, num_concepts: int, backbone: str
+    dataset_name: str, data_dir: str, num_concepts: int, backbone: str, subset: str
 ) -> tuple[Any, Any]:
     """
     Get dummy batch for the specified dataset.
@@ -366,14 +458,14 @@ def get_dummy_batch(
         Directory where data is stored (or will be downloaded to)
     """
     loader = get_datamodule(
-        dataset_name, data_dir, num_concepts=num_concepts, backbone=backbone
+        dataset_name, data_dir, num_concepts=num_concepts, backbone=backbone, subset=subset
     ).train_dataloader()
     return next(iter(loader))
 
 
 @functools.cache
 def get_concept_loss_fn(
-    dataset_name: str, data_dir: str, num_concepts: int, backbone: str
+    dataset_name: str, data_dir: str, num_concepts: int, backbone: str, subset: str
 ) -> nn.BCEWithLogitsLoss:
     """
     Get BCE concept loss function for the specified dataset.
@@ -396,7 +488,11 @@ def get_concept_loss_fn(
         return weighted_mse
 
     else:
-        weights_path = os.path.join(data_dir, f"{dataset_name}_pos_weights.pt")
+        if dataset_name == "mimic_cxr":
+            subset_name = f"_{subset}"
+        else:
+            subset_name = ""
+        weights_path = os.path.join(data_dir, f"{dataset_name}{subset_name}_pos_weights.pt")
 
         if os.path.exists(weights_path):
             # Load the pos_weight tensor if it already exists
@@ -410,8 +506,12 @@ def get_concept_loss_fn(
                 num_workers=8,
                 num_concepts=num_concepts,
                 backbone=backbone,
+                subset=subset,
             ).train_dataloader()
-            concept_dim = DATASET_INFO[dataset_name]["concept_dim"]
+            if dataset_name == "mimic_cxr":
+                concept_dim = DATASET_INFO[dataset_name][subset]["concept_dim"]
+            else:
+                concept_dim = DATASET_INFO[dataset_name]["concept_dim"]
             concepts_pos_count = torch.zeros(concept_dim)
             concepts_neg_count = torch.zeros(concept_dim)
             for (data, concepts), targets in tqdm(train_loader):
@@ -421,9 +521,72 @@ def get_concept_loss_fn(
             pos_weight = concepts_neg_count / (concepts_pos_count + 1e-6)
             torch.save(pos_weight, weights_path)
         # breakpoint()
-
         return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
+
+@functools.cache
+def get_target_loss_weights(
+    dataset_name: str, data_dir: str, num_concepts: int, backbone: str, subset: str
+) -> nn.BCEWithLogitsLoss:
+    """
+    Get BCE concept loss function for the specified dataset.
+
+    Parameters
+    ----------
+    dataset_name : str
+        Name of the dataset
+    data_dir : str
+        Directory where data is stored (or will be downloaded to)
+    """
+    if dataset_name == "oai":
+        # Get weighted mean squared error loss
+        def weighted_mse(input, target):
+            loss = (input - target) ** 2
+            loss *= target.not_nan
+            loss *= target.loss_class_wts
+            return loss.mean()
+
+        return weighted_mse
+
+    else:
+        if dataset_name == "mimic_cxr":
+            subset_name = f"_{subset}"
+        else:
+            subset_name = ""
+        weights_path = os.path.join(data_dir, f"{dataset_name}{subset_name}_class_weights.pt")
+
+        if os.path.exists(weights_path):
+            # Load the class weight tensor if it already exists
+            class_weights = torch.load(weights_path)
+            print("Loaded class weights from file.")
+        else:
+            # Get data loader
+            train_loader = get_datamodule(
+                dataset_name,
+                data_dir,
+                num_workers=16,
+                num_concepts=num_concepts,
+                backbone=backbone,
+                subset=subset,
+            ).train_dataloader()
+
+            # Initialize counts for each class
+            class_counts = torch.zeros(2)
+
+            # Count occurrences of each class in the dataset
+            for (data, concepts), targets in tqdm(train_loader):
+                for target in targets:
+                    class_counts[target] += 1
+
+            # Calculate weights as the inverse of class frequencies
+            total_samples = class_counts.sum()
+            class_weights = total_samples / (class_counts + 1e-6)
+            # Save the computed weights
+            torch.save(class_weights, weights_path)
+        # breakpoint()
+
+        return nn.CrossEntropyLoss(weight=class_weights)
+    
 
 class RandomTranslation:
     """

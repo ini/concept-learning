@@ -11,7 +11,7 @@ from torch.nn import functional as F
 from typing import Any, Callable, Iterable, Literal
 
 from nn_extensions import Apply, VariableKwargs
-from utils import accuracy, unwrap, zero_loss_fn, remove_prefix, remove_keys_with_prefix
+from utils import accuracy, auroc, unwrap, zero_loss_fn, remove_prefix, remove_keys_with_prefix
 from nn_extensions import Chain
 import numpy as np
 import time
@@ -175,7 +175,6 @@ class ConceptModel(nn.Module):
         # x = self.base_network(x, concepts=concepts)
         # with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         #     x = self.base_network(x)
-        print(x.device)
         # breakpoint()
         if x.device.type == "cpu":
             model_float = self.base_network.to(torch.float32)
@@ -340,6 +339,7 @@ class ConceptLightningModel(pl.LightningModule):
         concept_model: ConceptModel,
         concept_loss_fn: Callable | None = F.binary_cross_entropy_with_logits,
         residual_loss_fn: Callable | None = None,
+        target_loss_fn: Callable | None = F.cross_entropy,
         lr: float = 1e-3,
         alpha: float = 1.0,
         beta: float = 1.0,
@@ -390,6 +390,7 @@ class ConceptLightningModel(pl.LightningModule):
         self.concept_model = concept_model
         self.concept_loss_fn = concept_loss_fn or zero_loss_fn
         self.residual_loss_fn = residual_loss_fn or zero_loss_fn
+        self.target_loss_fn = target_loss_fn or zero_loss_fn
         self.focal_loss = focal_loss
         self.lr = lr
         self.alpha = alpha
@@ -788,6 +789,12 @@ class ConceptLightningModel(pl.LightningModule):
                 lr=self.lr,
                 weight_decay=self.weight_decay,
             )
+        elif self.chosen_optim == "adamw":
+            optimizer = torch.optim.AdamW(
+                self.concept_model.parameters(),
+                lr=self.lr,
+                weight_decay=self.weight_decay
+            )
         elif self.chosen_optim == "sgd":
             optimizer = torch.optim.SGD(
                 self.concept_model.parameters(),
@@ -852,15 +859,22 @@ class ConceptLightningModel(pl.LightningModule):
         else:
             intervention_idxs = torch.zeros_like(concepts)
 
+
         outputs = self.concept_model(
-            data, concepts=concepts, intervention_idxs=intervention_idxs
+            data,
+            concepts=concepts,
+            intervention_idxs=torch.ones_like(intervention_idxs),
         )
-        concept_logits, residual, target_logits = outputs
+        concept_logits, _, intervention_target_logits = outputs
 
         # Rollout loss
         if self.intervention_aware and (
             self.intervention_weight > 0 or self.intervention_task_loss_weight > 0
         ):
+            outputs = self.concept_model(
+                data, concepts=concepts, intervention_idxs=intervention_idxs
+            )
+            _, residual, target_logits = outputs
             intervention_loss, intervention_task_loss, int_mask_accuracy = (
                 self.rollout_loss_fn(batch, outputs, intervention_idxs)
             )
@@ -874,13 +888,7 @@ class ConceptLightningModel(pl.LightningModule):
             batch, outputs
         )
 
-        _, _, intervention_target_logits = self.concept_model(
-            data,
-            concepts=concepts,
-            intervention_idxs=torch.ones_like(intervention_idxs),
-        )
-        print(intervention_target_logits.shape)
-        complete_intervention_loss = F.cross_entropy(
+        complete_intervention_loss = self.target_loss_fn(
             intervention_target_logits, targets
         )
 
@@ -894,10 +902,23 @@ class ConceptLightningModel(pl.LightningModule):
         )
 
         self.log(f"{split}_loss", loss, **self.log_kwargs)
+        
+        if split != "train":
+            # Track baseline accuracy
+            outputs = self.concept_model(
+                data, concepts=concepts, intervention_idxs=torch.zeros_like(concepts)
+            )
+            _, _, target_logits_baseline = outputs
+            
+            acc_base = accuracy(target_logits_baseline, targets)
+            self.log(f"{split}_acc", acc_base, **self.log_kwargs)
 
-        # Track accuracy
-        acc = accuracy(target_logits, targets)
-        self.log(f"{split}_acc", acc, **self.log_kwargs)
+            auroc_score_baseline = auroc(target_logits_baseline, targets)
+            self.log(f"{split}_auroc", auroc_score_baseline, **self.log_kwargs)
+
+
+        auroc_score = auroc(intervention_target_logits, targets)
+        self.log(f"{split}_intervention_auroc", auroc_score, **self.log_kwargs)
 
         intervention_acc = accuracy(intervention_target_logits, targets)
         self.log(f"{split}_intervention_acc", intervention_acc, **self.log_kwargs)
