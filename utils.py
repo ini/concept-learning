@@ -16,6 +16,7 @@ import torchxrayvision as xrv
 import skimage, torch, torchvision
 ### Torch
 from torchmetrics import AUROC
+import torch_explain as te
 
 
 def zero_loss_fn(*tensors: Tensor):
@@ -131,6 +132,41 @@ def make_mlp(
     """
     hidden_layers = []
     for _ in range(num_hidden_layers):
+        hidden_layers.append(nn.LazyLinear(hidden_dim))
+        hidden_layers.append(nn.ReLU())
+        if add_layer_norm:
+            hidden_layers.append(nn.LayerNorm(hidden_dim))
+
+    pre_input_layer = nn.Flatten() if flatten_input else nn.Identity()
+    return nn.Sequential(pre_input_layer, *hidden_layers, nn.LazyLinear(output_dim))
+
+
+def make_explain_mlp(
+    input_dim: int,
+    output_dim: int,
+    hidden_dim: int = 256,
+    num_hidden_layers: int = 2,
+    flatten_input: bool = False,
+    add_layer_norm: bool = False,
+    num_classes: int = 2,
+) -> nn.Module:
+    """
+    Create a multi-layer perceptron.
+
+    Parameters
+    ----------
+    output_dim : int
+        Dimension of the output
+    hidden_dim : int
+        Dimension of the hidden layers
+    num_hidden_layers : int
+        Number of hidden layers
+    output_activation : nn.Module
+        Activation function for the output layer
+    """
+    hidden_layers = []
+    hidden_layers.append(te.nn.EntropyLinear(input_dim, hidden_dim, n_classes=2),)
+    for _ in range(num_hidden_layers-1):
         hidden_layers.append(nn.LazyLinear(hidden_dim))
         hidden_layers.append(nn.ReLU())
         if add_layer_norm:

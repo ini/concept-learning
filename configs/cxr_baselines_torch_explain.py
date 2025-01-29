@@ -11,7 +11,7 @@ def get_config(**kwargs) -> dict:
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/mimic_cxr_processed/out/mimic_cxr/t/lr_0.01_epochs_60_loss_BCE_W_flattening_type_flatten_layer_features_denseblock4/densenet121",
         "ray_storage_dir": "/data/renos/ray_results/",
-        "residual_dim": tune.grid_search([8, 32, 128]), #tune.grid_search([1, 2, 4, 8, 16, 32, 64, 128, 256]),
+        "residual_dim": 32, #tune.grid_search([1, 2, 4, 8, 16, 32, 64, 128, 256]),
         "lr": 1e-4,
         "num_epochs": 25,
         "momentum": 0.9,
@@ -44,8 +44,9 @@ def get_config(**kwargs) -> dict:
         "cross": False,
         "backbone": "vit_b_16",
         "intervention_aware": False, # effusion cardiomegaly edema pneumonia pneumothorax
-        "subset": "cardiomegaly", #tune.grid_search(["effusion", "cardiomegaly", "edema", "pneumonia", "pneumothorax"]),
+        "subset": tune.grid_search(["effusion", "cardiomegaly", "edema", "pneumonia", "pneumothorax"]),
         "num_hidden_layers": 2,
+        "torch_explain": True,
     }
     experiment_config.update(kwargs)
     experiment_config = get_cxr_config(**experiment_config)

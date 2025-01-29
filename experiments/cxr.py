@@ -5,7 +5,7 @@ import torch
 
 from models import ConceptModel, ConceptEmbeddingModel, make_bottleneck_layer
 from nn_extensions import Apply
-from utils import make_cnn, process_grid_search_tuples, make_concept_embedding_model
+from utils import make_cnn, make_mlp, process_grid_search_tuples, make_concept_embedding_model, make_explain_mlp
 from .celeba import CrossAttentionModel, PassThrough
 
 
@@ -66,10 +66,32 @@ def make_concept_model(config: dict) -> ConceptModel:
         concept_rank_model = torch.nn.Sequential(*layers)
     else:
         concept_rank_model = nn.Identity()
-    if config.get("additive_residual", False):
-        target_network = nn.Linear(concept_dim, num_classes)
+    
+    num_hidden_layers=config.get("num_hidden_layers", 0)
+    if config.get("torch_explain", False):
+        target_network = make_explain_mlp(
+            bottleneck_dim,
+            num_classes,
+            num_hidden_layers=num_hidden_layers,
+            hidden_dim=32,
+            num_classes=num_classes,)
+        
+    if num_hidden_layers == 0:
+        if config.get("additive_residual", False):
+            target_network = nn.Linear(concept_dim, num_classes)
+        else:
+            target_network = nn.Linear(bottleneck_dim, num_classes)
     else:
-        target_network = nn.Linear(bottleneck_dim, num_classes)
+        target_network = make_mlp(
+            num_classes,
+            num_hidden_layers=config.get("num_hidden_layers", 0),
+            hidden_dim=32,
+        )
+
+        
+    
+    
+
     if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
         concept_prob_generators, concept_context_generators = (
             make_concept_embedding_model(

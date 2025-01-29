@@ -94,7 +94,7 @@ def test(model: pl.LightningModule, loader: DataLoader):
     """
     trainer = pl.Trainer(
         accelerator="cpu" if MPSAccelerator.is_available() else "auto",
-        enable_progress_bar=False,
+        enable_progress_bar=True,
     )
     return trainer.test(model, loader)[0]
 
@@ -104,7 +104,7 @@ def test_interventions(
     test_loader: DataLoader,
     concept_dim: int,
     negative: bool,
-    max_samples: int = 10,
+    max_samples: int = 4,
 ) -> float:
     """
     Test model accuracy with concept interventions.
@@ -917,22 +917,24 @@ def evaluate(config: dict):
     # Load model
     tuner = LightningTuner("val_acc", "max")
     model = tuner.load_model(make_concept_model, config["train_result"])
-
+    if config["dataset"] == "mimic_cxr":
+        dataset_info = DATASET_INFO[config["dataset"]][config["subset"]]
+    else:
+        dataset_info = DATASET_INFO[config["dataset"]]
     # Evaluate model
     if config["eval_mode"] == "accuracy":
         results = test(model, test_loader)
         for key in ("test_acc", "test_concept_acc"):
             if key in results:
                 metrics[key] = results[key]
-
     elif config["eval_mode"] == "neg_intervention":
-        concept_dim = DATASET_INFO[config["dataset"]]["concept_dim"]
+        concept_dim = dataset_info["concept_dim"]
         metrics["neg_intervention_accs"] = test_interventions(
             model, test_loader, concept_dim, negative=True
         )
 
     elif config["eval_mode"] == "pos_intervention":
-        concept_dim = DATASET_INFO[config["dataset"]]["concept_dim"]
+        concept_dim = dataset_info["concept_dim"]
         metrics["pos_intervention_accs"] = test_interventions(
             model, test_loader, concept_dim, negative=False
         )
@@ -981,15 +983,15 @@ def evaluate(config: dict):
 
 if __name__ == "__main__":
     MODES = [
-        # "accuracy",
-        # "neg_intervention",
-        # "pos_intervention",
-        # "random_concepts",
-        # "random_residual",
+        "accuracy",
+        "neg_intervention",
+        "pos_intervention",
+        "random_concepts",
+        "random_residual",
         # "correlation",
         # "mutual_info",
         # "concept_pred",
-        "concept_change",
+        #"concept_change",
         #"concept_change_probe",
     ]
 
