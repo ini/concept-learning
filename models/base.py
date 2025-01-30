@@ -15,6 +15,7 @@ from utils import accuracy, auroc, unwrap, zero_loss_fn, remove_prefix, remove_k
 from nn_extensions import Chain
 import numpy as np
 import time
+import torch_explain as te
 
 ### Typing
 
@@ -63,6 +64,7 @@ class ConceptModel(nn.Module):
         ] = "independent",
         additive_residual=False,
         intervention_aware=True,
+        freeze_base_model=False,
         **kwargs,
     ):
         """
@@ -85,8 +87,9 @@ class ConceptModel(nn.Module):
         """
         super().__init__()
         cross_attention = cross_attention or Apply(lambda *args: args[1])
+        self.freeze_base_model = freeze_base_model
 
-        def freeze_layers_except_final(model, final_layer_name="fc"):
+        def freeze_layers_except_final(model, final_layer_name="fc", freeze_all=False):
             """
             Freezes all layers except the specified final layer.
 
@@ -99,7 +102,7 @@ class ConceptModel(nn.Module):
             """
             # Iterate through named parameters in the base network
             for name, param in model.named_parameters():
-                if (
+                if freeze_all or (
                     final_layer_name not in name
                 ):  # Freeze all layers not containing `final_layer_name`
                     param.requires_grad = False  # Freeze
@@ -109,6 +112,8 @@ class ConceptModel(nn.Module):
 
         if "freeze_backbone" in kwargs and kwargs["freeze_backbone"]:
             base_network = freeze_layers_except_final(base_network)
+        if self.freeze_base_model:
+            base_network = freeze_layers_except_final(base_network, freeze_all=True)
 
         self.base_network = VariableKwargs(base_network)
 
@@ -141,7 +146,6 @@ class ConceptModel(nn.Module):
             super().load_state_dict(modified_state_dict, strict=False)
         self.negative_intervention = False
         self.additive_residual = additive_residual
-
     def forward(
         self,
         x: Tensor,
@@ -226,7 +230,6 @@ class ConceptModel(nn.Module):
                 x_concepts.shape == attended_residual.shape
             ), f"When additive, the concept and residual should have the same shape, but they are {x_concepts.shape} and {attended_residual.shape}"
             x = x_concepts.detach() + attended_residual
-
         # Get target logits
         target_logits = self.target_network(
             x, concepts=concepts, intervention_idxs=intervention_idxs.detach()
@@ -363,6 +366,8 @@ class ConceptLightningModel(pl.LightningModule):
         complete_intervention_weight=0,
         patience=15,
         focal_loss=False,
+        torch_explain = False,
+        freeze_base_model=False,
         **kwargs,
     ):
         """
@@ -421,6 +426,7 @@ class ConceptLightningModel(pl.LightningModule):
         self.complete_intervention_weight = complete_intervention_weight
         self.patience = patience
         self.intervention_aware = self.concept_model.intervention_aware
+        self.torch_explain = torch_explain
 
     def dummy_pass(self, loader: Iterable[ConceptBatch]):
         """
@@ -846,7 +852,7 @@ class ConceptLightningModel(pl.LightningModule):
         """
         (data, concepts), targets = batch
         t1 = time.time()
-        if self.training:
+        if self.training and self.intervention_aware:
             mask = torch.bernoulli(
                 torch.ones_like(concepts[0]) * self.training_intervention_prob,
             )
@@ -900,13 +906,17 @@ class ConceptLightningModel(pl.LightningModule):
             + self.intervention_task_loss_weight * intervention_task_loss
             + self.complete_intervention_weight * complete_intervention_loss
         )
+        if self.torch_explain:
+            entropy_loss = te.nn.functional.entropy_logic_loss(self.concept_model.target_network)
+            loss += 0.0001 * entropy_loss
+            self.log("entropy_loss", entropy_loss, **self.log_kwargs)
 
         self.log(f"{split}_loss", loss, **self.log_kwargs)
         
         if split != "train":
             # Track baseline accuracy
             outputs = self.concept_model(
-                data, concepts=concepts, intervention_idxs=torch.zeros_like(concepts)
+                data, concepts=concepts, intervention_idxs=intervention_idxs
             )
             _, _, target_logits_baseline = outputs
             
@@ -962,7 +972,8 @@ class ConceptLightningModel(pl.LightningModule):
         batch_idx : int
             Batch index
         """
-        return self.step(batch, split="val")
+        with torch.no_grad():
+            return self.step(batch, split="val")
 
     def perform_k_interventions(
         self,
@@ -982,28 +993,35 @@ class ConceptLightningModel(pl.LightningModule):
         """
         (data, concepts), targets = batch
 
-        # start with no interventions
         intervention_idxs = torch.zeros_like(concepts)
 
-        outputs = self.concept_model(
-            data, concepts=concepts, intervention_idxs=intervention_idxs
-        )
-        concept_logits, residual, target_logits = outputs
+        if self.intervention_aware:
+            # start with no interventions
+
+            outputs = self.concept_model(
+                data, concepts=concepts, intervention_idxs=intervention_idxs
+            )
+            concept_logits, residual, target_logits = outputs
 
         for i in range(k):
             if not self.intervention_aware:
                 # Randomly select an intervention index
-                selected_groups = torch.zeros_like(intervention_idxs)
-                for b in range(intervention_idxs.shape[0]):  # Batch dimension
-                    # Get indices of concepts that haven't been intervened on for this sample
-                    non_intervened_indices = torch.where(intervention_idxs[b] == 0)[0]
-
-                    if len(non_intervened_indices) > 0:
-                        # Randomly select an index from the non-intervened ones
-                        random_idx = non_intervened_indices[
-                            torch.randint(0, len(non_intervened_indices), (1,))
-                        ]
-                        selected_groups[b, random_idx] = 1
+                available_mask = (intervention_idxs == 0).float()
+    
+                # Set very low probability for already intervened concepts
+                scores = torch.where(
+                    available_mask == 1,
+                    torch.zeros_like(intervention_idxs),
+                    torch.ones_like(intervention_idxs) * (-1000)
+                )
+                
+                # Use gumbel_softmax for random selection, just like in intervention_aware case
+                selected_groups = torch.nn.functional.gumbel_softmax(
+                    scores,
+                    dim=-1,
+                    hard=True,
+                    tau=1,
+                )
             else:
                 # And generate a probability distribution over previously
                 # unseen concepts to indicate which one we should intervene
@@ -1050,24 +1068,31 @@ class ConceptLightningModel(pl.LightningModule):
         batch_idx : int
             Batch index
         """
+        t0 = time.time()
         if self.num_test_interventions is not None:
             intervention_idxs = self.perform_k_interventions(
                 batch, split="test", k=self.num_test_interventions
             )
         else:
             intervention_idxs = None
-        if return_intervention_idxs:
-            return (
-                self.step(batch, split="test", intervention_idxs=intervention_idxs),
-                intervention_idxs,
-            )
-        else:
-            return self.step(batch, split="test", intervention_idxs=intervention_idxs)
+        t1 = time.time()
+        print(f"Intervention mask time {t1 - t0}")
+
+        res = self.step(batch, split="test", intervention_idxs=intervention_idxs)
+        t2 = time.time()
+        print(f"Forward time {t2 - t1}")
+        with torch.no_grad():
+            if return_intervention_idxs:
+                return (
+                    res,
+                    intervention_idxs,
+                )
+            else:
+                return res
 
     def forward_intervention(
         self, batch: ConceptBatch, batch_idx: int, return_intervention_idxs=False
     ) -> Tensor:
-
         if self.num_test_interventions is not None:
             intervention_idxs = self.perform_k_interventions(
                 batch, split="test", k=self.num_test_interventions
@@ -1076,9 +1101,10 @@ class ConceptLightningModel(pl.LightningModule):
             intervention_idxs = None
 
         (data, concepts), targets = batch
-        return (
-            self.concept_model.forward(
+        forw = self.concept_model.forward(
                 data, concepts, intervention_idxs=intervention_idxs
-            ),
+            )
+        return (
+            forw,
             intervention_idxs,
         )

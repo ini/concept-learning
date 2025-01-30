@@ -15,6 +15,12 @@ import numpy as np
 import h5py
 import os
 import time
+from skimage.io import imread
+import torchxrayvision as xrv
+
+from PIL import Image
+
+
 class MIMIC_CXR_old(Dataset):
     """
     MIMIC CXR Dataset
@@ -353,3 +359,88 @@ class MIMIC_CXR(Dataset):
             img = self.transform(img)
             
         return (img, torch.tensor(concepts, dtype=torch.float32)), int(label)
+    
+
+
+import pandas as pd
+
+
+class CheX_Dataset(Dataset):
+    """CheXpert Dataset
+
+    Citation:
+
+    CheXpert: A Large Chest Radiograph Dataset with Uncertainty Labels and
+    Expert Comparison. Jeremy Irvin *, Pranav Rajpurkar *, Michael Ko,
+    Yifan Yu, Silviana Ciurea-Ilcus, Chris Chute, Henrik Marklund, Behzad
+    Haghgoo, Robyn Ball, Katie Shpanskaya, Jayne Seekins, David A. Mong,
+    Safwan S. Halabi, Jesse K. Sandberg, Ricky Jones, David B. Larson,
+    Curtis P. Langlotz, Bhavik N. Patel, Matthew P. Lungren, Andrew Y. Ng.
+    https://arxiv.org/abs/1901.07031
+
+    Dataset website here:
+    https://stanfordmlgroup.github.io/competitions/chexpert/
+
+    A small validation set is provided with the data as well, but is so tiny,
+    it is not included here.
+    """
+
+    def __init__(self,
+                 split="train",
+                 views=["PA"],
+                 transform=None,
+                 data_aug=None,
+                 flat_dir=True,
+                 seed=0,
+
+                 ):
+
+        super(CheX_Dataset, self).__init__()
+        np.random.seed(seed)  # Reset the seed so all runs are the same.
+        self.split = split
+        if split == "train":
+            self.df = pd.read_csv("/data/Datasets/mimic_cxr_processed/csvs/cardiomegaly/master_tot_15000.csv")
+        else:
+            self.df = pd.read_csv("/data/Datasets/Stanford_CheXpert_Dataset/CheXpert-v1.0-small/valid.csv")
+            self.df = self.df.fillna(0)
+            header = "Path" if split == "val" else "image_names"
+            self.df = self.df.set_index(header)
+            self.labels = [label.replace(" ", "_") for label in list(self.df.columns.values)[4:]]
+            self.df.columns = list(self.df.columns.values)[0:4] + self.labels
+            self.label_idx = self.labels.index("Cardiomegaly")
+        self.parent_dir = "/data/Datasets/Stanford_CheXpert_Dataset/"
+        self.transform = transform
+
+        if split == "train":
+            self.concepts = np.array(torch.load('/data/Datasets/mimic_cxr_processed/out/stanford_cxr/t/lr_0.1_epochs_90_loss_BCE_W_flattening_type_flatten_layer_features_denseblock4/densenet121/sample_size_15000/cardiomegaly/train_sample_size_15000_sub_select_attributes.pt'))
+
+        else:
+            # Load the PyTorch file
+            self.concepts = np.array(torch.load('/data/Datasets/mimic_cxr_processed/out/stanford_cxr/t/lr_0.1_epochs_90_loss_BCE_W_flattening_type_flatten_layer_features_denseblock4/densenet121/sample_size_15000/cardiomegaly/test_sample_size_15000_sub_select_attributes.pt'))
+
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        if self.split == "val":
+            image = Image.open(os.path.join(self.parent_dir, self.df.index[idx]))
+            image = image.convert("RGB")
+            if self.transform:
+                image = self.transform(image)
+
+            label = np.zeros(len(self.labels), dtype=int)
+            for i in range(0, len(self.labels)):
+                label[i] = self.df[self.labels[i].strip()].iloc[idx].astype('int')
+                if label[i] == -1:
+                    label[i] = self.uncertain
+            return (image, torch.tensor(self.concepts[idx], dtype=torch.float32)), int(torch.FloatTensor(label)[self.label_idx])
+        else:
+            image_names = self.df.loc[idx, "image_names"]
+            disease_label = self.df.loc[idx, "GT"]
+            image = Image.open(os.path.join(self.parent_dir, image_names))
+            image = image.convert("RGB")
+            if self.transform:
+                image = self.transform(image)
+
+            return (image, torch.tensor(self.concepts[idx], dtype=torch.float32)), int(disease_label)

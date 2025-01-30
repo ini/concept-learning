@@ -228,8 +228,12 @@ if __name__ == "__main__":
     if args.restore_path:
         tuner = LightningTuner.restore(args.restore_path, resume_errored=True)
     else:
+        if config.get("dataset") == "mimic_cxr":
+            metric_to_max = "val_intervention_auroc"
+        else:
+            metric_to_max = "val_intervention_acc"
         tuner = LightningTuner(
-            metric="val_intervention_acc",
+            metric=metric_to_max,
             mode="max",
             scheduler=scheduler,
             num_samples=config.get("num_samples", 1),

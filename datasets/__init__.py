@@ -19,7 +19,7 @@ from .pitfalls import MNIST_45, DatasetC, DatasetD, DatasetE
 from .imagenet import ImageNet
 from .celeba import generate_data as celeba_generate_data
 from .aa2 import AA2
-from .cxr import MIMIC_CXR
+from .cxr import MIMIC_CXR, CheX_Dataset
 import torchxrayvision as xrv
 
 DATASET_INFO = {
@@ -55,7 +55,8 @@ DATASET_INFO = {
                     "effusion": {"concept_type": "binary", "concept_dim": 90, "num_classes": 2},\
                     "edema": {"concept_type": "binary", "concept_dim": 62, "num_classes": 2},\
                     "pneumonia": {"concept_type": "binary", "concept_dim": 97, "num_classes": 2},\
-                    "pneumothorax": {"concept_type": "binary", "concept_dim": 35, "num_classes": 2}},
+                    "pneumothorax": {"concept_type": "binary", "concept_dim": 35, "num_classes": 2},
+                    "cardiomegaly_transfer": {"concept_type": "binary", "concept_dim": 60, "num_classes": 2},},
 }
 
 
@@ -232,17 +233,24 @@ def get_datasets(
                     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
                 ]
             )
-        train_dataset = MIMIC_CXR(
-            root=data_dir,subset=subset, split="train", transform=transform_train
-        )
+        if subset == "cardiomegaly_transfer":
+            train_dataset = CheX_Dataset(split='train', transform=transform_train)
 
-        test_dataset = MIMIC_CXR(
-            root=data_dir,subset=subset, split="test", transform=transform_test
-        )
+            test_dataset = CheX_Dataset(split='val', transform=transform_test)
 
-        val_dataset = MIMIC_CXR(
-            root=data_dir,subset=subset, split="val", transform=transform_test
-        )
+            val_dataset = CheX_Dataset(split='val', transform=transform_test)
+        else:
+            train_dataset = MIMIC_CXR(
+                root=data_dir,subset=subset, split="train", transform=transform_train
+            )
+
+            test_dataset = MIMIC_CXR(
+                root=data_dir,subset=subset, split="test", transform=transform_test
+            )
+
+            val_dataset = MIMIC_CXR(
+                root=data_dir,subset=subset, split="val", transform=transform_test
+            )
 
     elif dataset_name == "cub":
         transform_train = transforms.Compose(

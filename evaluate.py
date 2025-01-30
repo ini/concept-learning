@@ -103,6 +103,7 @@ def test_interventions(
     model: ConceptLightningModel,
     test_loader: DataLoader,
     concept_dim: int,
+    dataset: str,
     negative: bool,
     max_samples: int = 4,
 ) -> float:
@@ -138,13 +139,16 @@ def test_interventions(
         #     new_model.concept_model.target_network,
         # )
         results = test(new_model, test_loader)
-        y[i] = results["test_acc"]
+        if dataset != "mimic_cxr":
+            y[i] = results["test_acc"]
+        else:
+            y[i] = results["test_auroc"]
 
     return {"x": x, "y": y}
 
 
 def test_random_concepts(
-    model: ConceptLightningModel, test_loader: DataLoader
+    model: ConceptLightningModel, test_loader: DataLoader, dataset: str
 ) -> float:
     """
     Test model accuracy with randomized concept predictions.
@@ -176,11 +180,15 @@ def test_random_concepts(
             new_generators.append(new_chain)
         new_model.concept_model.concept_prob_generators = new_generators
     results = test(new_model, test_loader)
-    return results["test_acc"]
+    if dataset != "mimic_cxr":
+        return results["test_acc"]
+    else:
+        return results["test_auroc"]
+    #return results["test_acc"]
 
 
 def test_random_residual(
-    model: ConceptLightningModel, test_loader: DataLoader
+    model: ConceptLightningModel, test_loader: DataLoader, dataset: str
 ) -> float:
     """
     Test model accuracy with randomized residual values.
@@ -214,7 +222,10 @@ def test_random_residual(
             new_generators.append(new_chain)
         new_model.concept_model.concept_context_generators = new_generators
     results = test(new_model, test_loader)
-    return results["test_acc"]
+    if dataset != "mimic_cxr":
+        return results["test_acc"]
+    else:
+        return results["test_auroc"]
 
 
 def test_correlation(model: ConceptLightningModel, test_loader: DataLoader) -> float:
@@ -924,26 +935,30 @@ def evaluate(config: dict):
     # Evaluate model
     if config["eval_mode"] == "accuracy":
         results = test(model, test_loader)
-        for key in ("test_acc", "test_concept_acc"):
+        if config["dataset"] != "mimic_cxr":
+            keys = ["test_acc", "test_concept_acc"]
+        else:
+            keys = ["test_auroc", "test_concept_acc"]
+        for key in keys:
             if key in results:
                 metrics[key] = results[key]
     elif config["eval_mode"] == "neg_intervention":
         concept_dim = dataset_info["concept_dim"]
         metrics["neg_intervention_accs"] = test_interventions(
-            model, test_loader, concept_dim, negative=True
+            model, test_loader, concept_dim, config["dataset"], negative=True
         )
 
     elif config["eval_mode"] == "pos_intervention":
         concept_dim = dataset_info["concept_dim"]
         metrics["pos_intervention_accs"] = test_interventions(
-            model, test_loader, concept_dim, negative=False
+            model, test_loader, concept_dim, config["dataset"], negative=False
         )
 
     elif config["eval_mode"] == "random_concepts":
-        metrics["random_concept_acc"] = test_random_concepts(model, test_loader)
+        metrics["random_concept_acc"] = test_random_concepts(model, test_loader, config["dataset"])
 
     elif config["eval_mode"] == "random_residual":
-        metrics["random_residual_acc"] = test_random_residual(model, test_loader)
+        metrics["random_residual_acc"] = test_random_residual(model, test_loader, config["dataset"])
 
     elif config["eval_mode"] == "correlation":
         metrics["mean_abs_cross_correlation"] = test_correlation(model, test_loader)
