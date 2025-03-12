@@ -3,9 +3,9 @@ import ray
 import torch.nn as nn
 import torch
 
-from models import ConceptModel, ConceptEmbeddingModel, make_bottleneck_layer
+from models import ConceptModel, ConceptEmbeddingModel, make_bottleneck_layer, ProbabilisticConceptModel
 from nn_extensions import Apply
-from utils import make_cnn, process_grid_search_tuples, make_concept_embedding_model
+from utils import make_cnn, make_mlp, process_grid_search_tuples, make_concept_embedding_model
 from .celeba import CrossAttentionModel, PassThrough
 
 
@@ -23,6 +23,8 @@ def make_concept_model(config: dict) -> ConceptModel:
         )  # residual dim is the size of the concept embedding for cem
     # elif config.get("additive_residual", False):
     #     bottleneck_dim = concept_dim
+    elif config.get("model_type") == "mi_residual_prob" or config.get("model_type") == "latent_residual_prob":
+        bottleneck_dim = 2*concept_dim + 2*residual_dim
     else:
         bottleneck_dim = concept_dim + residual_dim
 
@@ -43,6 +45,14 @@ def make_concept_model(config: dict) -> ConceptModel:
             + (int_model_layers or [256, 128])
             + [concept_dim]
         )
+    elif config.get("model_type") == "mi_residual_prob" or config.get("model_type") == "latent_residual_prob":
+        units = (
+            [
+                2*concept_dim + 2*residual_dim
+            ]  # Bottleneck  # Prev interventions
+            + (int_model_layers or [256, 128])
+            + [concept_dim]
+        )
     else:
         units = (
             [
@@ -51,7 +61,6 @@ def make_concept_model(config: dict) -> ConceptModel:
             + (int_model_layers or [256, 128])
             + [concept_dim]
         )
-
     layers = []
     for i in range(1, len(units)):
         if int_model_use_bn:
@@ -66,7 +75,13 @@ def make_concept_model(config: dict) -> ConceptModel:
         concept_rank_model = torch.nn.Sequential(*layers)
     else:
         concept_rank_model = nn.Identity()
-    if config.get("additive_residual", False):
+    if config.get("num_target_network_layers", 0):
+        target_network = make_mlp(
+            num_classes,
+            num_hidden_layers=config.get("num_target_network_layers", 0),
+            hidden_dim=64,
+        )
+    elif config.get("additive_residual", False):
         target_network = nn.Linear(concept_dim, num_classes)
     else:
         target_network = nn.Linear(bottleneck_dim, num_classes)
@@ -92,6 +107,18 @@ def make_concept_model(config: dict) -> ConceptModel:
             )
         else:
             cross_attention = PassThrough(concept_dim, residual_dim, residual_dim, 8)
+
+        if config.get("model_type") == "mi_residual_prob" or config.get("model_type") == "latent_residual_prob":
+            return ProbabilisticConceptModel(
+                base_network=make_cnn(bottleneck_dim, cnn_type=backbone),
+                concept_network=Apply(lambda x: x[..., :2*concept_dim]),
+                residual_network=Apply(lambda x: x[..., 2*concept_dim:]),
+                target_network=target_network,
+                bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
+                cross_attention=cross_attention,
+                concept_rank_model=concept_rank_model,
+                **config,
+            )
         return ConceptModel(
             base_network=make_cnn(bottleneck_dim, cnn_type=backbone),
             concept_network=Apply(lambda x: x[..., :concept_dim]),

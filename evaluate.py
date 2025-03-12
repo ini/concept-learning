@@ -758,6 +758,9 @@ def test_concept_change_probe(
     )
 
 
+
+
+
 def test_concept_change(
     model: ConceptLightningModel,
     model_type: str,
@@ -871,7 +874,6 @@ def test_concept_change(
 
 
     return mean_num_changed_concepts, concept_updated_when_wrong, mean_hidden_concepts_updated
-
 
 ### Loading & Execution
 
@@ -991,6 +993,14 @@ def evaluate(config: dict):
             test_loader,
             dataset=config["dataset"],
         )
+    if config["eval_mode"] == "tcav":
+        # Use Captum's TCAV implementation
+        metrics["tcav_scores"] = test_tcav_captum(
+            model,
+            val_loader,
+            test_loader,
+            config["dataset"]
+        )
 
     # Report evaluation metrics
     ray.train.report(metrics)
@@ -1008,6 +1018,7 @@ if __name__ == "__main__":
         # "concept_pred",
         #"concept_change",
         #"concept_change_probe",
+        #"tcav",
     ]
 
     parser = argparse.ArgumentParser()

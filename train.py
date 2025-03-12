@@ -100,6 +100,9 @@ def make_concept_model(**config) -> ConceptLightningModel:
     elif model_type == "mi_residual":
         model = experiment_module.make_concept_model(config)
         model = MutualInfoConceptLightningModel(model, **config)
+    elif model_type == "mi_residual_prob":
+        model = experiment_module.make_concept_model(config)
+        model = MutualInfoConceptLightningModel(model, **config)
 
     # With concept embedding
     elif model_type == "cem":

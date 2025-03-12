@@ -165,7 +165,7 @@ def make_explain_mlp(
         Activation function for the output layer
     """
     hidden_layers = []
-    hidden_layers.append(te.nn.EntropyLinear(input_dim, hidden_dim, n_classes=2),)
+    hidden_layers.append(te.nn.EntropyLinear(input_dim, hidden_dim, n_classes=output_dim),)
     for _ in range(num_hidden_layers-1):
         hidden_layers.append(nn.LazyLinear(hidden_dim))
         hidden_layers.append(nn.ReLU())
@@ -173,7 +173,7 @@ def make_explain_mlp(
             hidden_layers.append(nn.LayerNorm(hidden_dim))
 
     pre_input_layer = nn.Flatten() if flatten_input else nn.Identity()
-    return nn.Sequential(pre_input_layer, *hidden_layers, nn.LazyLinear(output_dim))
+    return nn.Sequential(pre_input_layer, *hidden_layers, nn.LazyLinear(1))
 
 
 def make_cnn(
@@ -233,7 +233,7 @@ def make_cnn(
         #     weights=ViT_B_16_Weights.IMAGENET1K_V1 if load_weights else None
         # )
         # model.heads = nn.Sequential(nn.Linear(model.heads[0].in_features, output_dim))
-        model = torch.compile(model)
+        #model = torch.compile(model)
         # model = model.to(dtype=torch.bfloat16)
         return model
 

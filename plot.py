@@ -975,11 +975,11 @@ def plot_concept_change_probe(
 
 if __name__ == "__main__":
     PLOT_FUNCTIONS = {
-        # "neg_intervention": plot_negative_interventions,
-        # "pos_intervention": plot_positive_interventions,
-        # "random": plot_random_concepts_residual,
+        "neg_intervention": plot_negative_interventions,
+        "pos_intervention": plot_positive_interventions,
+        "random": plot_random_concepts_residual,
         # "concept_pred": plot_concept_predictions,
-        "concept_change": plot_concept_change,
+        #"concept_change": plot_concept_change,
         #"concept_change_probe": plot_concept_change_probe,
         # "concept_change": plot_concept_changes,
         # "disentanglement": plot_disentanglement,

@@ -68,13 +68,6 @@ def make_concept_model(config: dict) -> ConceptModel:
         concept_rank_model = nn.Identity()
     
     num_hidden_layers=config.get("num_hidden_layers", 0)
-    if config.get("torch_explain", False):
-        target_network = make_explain_mlp(
-            bottleneck_dim,
-            num_classes,
-            num_hidden_layers=num_hidden_layers,
-            hidden_dim=32,
-            num_classes=num_classes,)
         
     if num_hidden_layers == 0:
         if config.get("additive_residual", False):
@@ -87,6 +80,13 @@ def make_concept_model(config: dict) -> ConceptModel:
             num_hidden_layers=config.get("num_hidden_layers", 0),
             hidden_dim=32,
         )
+    if config.get("torch_explain", False):
+        target_network = make_explain_mlp(
+            bottleneck_dim,
+            num_classes,
+            num_hidden_layers=num_hidden_layers,
+            hidden_dim=20,
+            num_classes=num_classes,)
 
         
     

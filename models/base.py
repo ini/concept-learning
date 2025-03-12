@@ -234,6 +234,8 @@ class ConceptModel(nn.Module):
         target_logits = self.target_network(
             x, concepts=concepts, intervention_idxs=intervention_idxs.detach()
         )
+        if target_logits.shape[-1] == 1:
+            target_logits = target_logits.squeeze(-1)
 
         return concept_logits, residual, target_logits
 
@@ -267,7 +269,7 @@ class ConceptModel(nn.Module):
         concept_preds = self.get_concept_predictions(concept_logits)
 
         concept_preds = (
-            concept_logits.detach() * (1 - intervention_idxs)
+            concept_preds.detach() * (1 - intervention_idxs)
             + concepts * intervention_idxs
         )
         attended_residual = self.cross_attention(
@@ -312,7 +314,7 @@ class ConceptModel(nn.Module):
         """
         concept_preds = self.get_concept_predictions(concept_logits)
         concept_preds = (
-            concept_logits.detach() * (1 - intervention_idxs)
+            concept_preds.detach() * (1 - intervention_idxs)
             + concepts * intervention_idxs
         )
         attended_residual = self.cross_attention(
@@ -326,6 +328,8 @@ class ConceptModel(nn.Module):
         target_logits = self.target_network(
             x, concepts=concepts, intervention_idxs=intervention_idxs.detach()
         )
+        if target_logits.shape[-1] == 1:
+            target_logits = target_logits.squeeze(-1)
         return target_logits
 
 
@@ -554,8 +558,8 @@ class ConceptLightningModel(pl.LightningModule):
             )
 
             target_logits = self.concept_model.calc_target_preds(
-                concept_logits=concept_logits.detach(),
-                residual=residual.detach(),
+                concept_logits=concept_logits,
+                residual=residual,
                 concepts=concepts,
                 intervention_idxs=updated_int,
             )
@@ -603,8 +607,11 @@ class ConceptLightningModel(pl.LightningModule):
 
         intervention_task_loss = F.cross_entropy(target_logits, targets)
         intervention_task_loss = intervention_task_loss / task_trajectory_weight
-
-        intervention_loss = torch.tensor(0.0, device=concept_logits.device)
+        if type(concept_logits) == tuple:
+            concept_logits_device = concept_logits[0].device
+        else:
+            concept_logits_device = concept_logits.device
+        intervention_loss = torch.tensor(0.0, device=concept_logits_device)
 
         int_mask_accuracy = 0.0 if current_horizon else -1
 
@@ -706,6 +713,14 @@ class ConceptLightningModel(pl.LightningModule):
         """
         (data, concepts), targets = batch
         concept_logits, residual, target_logits = outputs
+        if type(concept_logits) == tuple:
+            concept_logits, concept_logvars = concept_logits
+        else:
+            concept_logvars = None
+        if type(residual) == tuple:
+            residual, residual_logvars = residual
+        else:
+            residual_logvars = None
 
         # Concept loss
         if self.focal_loss:
@@ -726,6 +741,28 @@ class ConceptLightningModel(pl.LightningModule):
                 concept_logits.shape == concepts.shape
             ), f"concept_logits.shape, concepts.shape: {concept_logits.shape, concepts.shape}"
             concept_loss = self.concept_loss_fn(concept_logits, concepts)
+            # if concept_logvars is None:
+            #     concept_loss = self.concept_loss_fn(concept_logits, concepts)
+            # else:
+            #     pos_weight =  self.concept_loss_fn.pos_weight
+            #     bce_loss = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction='none')
+            #     per_sample_bce = bce_loss(concept_logits, concepts)
+                
+            #     # If per_sample_bce is [batch_size, num_classes], take mean over classes
+            #     if len(per_sample_bce.shape) > 1:
+            #         per_sample_bce = per_sample_bce.mean(dim=1)
+                
+            #     # Calculate certainty weights from concept logvars
+            #     # Lower logvar = higher certainty = higher weight
+            #     # We take the mean across all concepts for each sample
+            #     certainty_weights = torch.exp(-0.5 * concept_logvars.mean(dim=1))
+                
+            #     # Normalize weights to sum to batch size (to keep overall loss magnitude similar)
+            #     batch_size = certainty_weights.size(0)
+            #     normalized_weights = certainty_weights * (batch_size / certainty_weights.sum())
+                
+            #     # Apply weights to the BCE loss
+            #     concept_loss = (per_sample_bce * normalized_weights).mean()
             # try:
             #     concept_loss = self.concept_loss_fn(concept_logits, concepts)
             # except:
@@ -872,6 +909,8 @@ class ConceptLightningModel(pl.LightningModule):
             intervention_idxs=torch.ones_like(intervention_idxs),
         )
         concept_logits, _, intervention_target_logits = outputs
+        if type(concept_logits) == tuple:
+            concept_logits, concept_logvars = concept_logits
 
         # Rollout loss
         if self.intervention_aware and (
@@ -898,6 +937,7 @@ class ConceptLightningModel(pl.LightningModule):
             intervention_target_logits, targets
         )
 
+
         loss = (
             self.alpha * concept_loss
             + self.beta * residual_loss
@@ -907,7 +947,7 @@ class ConceptLightningModel(pl.LightningModule):
             + self.complete_intervention_weight * complete_intervention_loss
         )
         if self.torch_explain:
-            entropy_loss = te.nn.functional.entropy_logic_loss(self.concept_model.target_network)
+            entropy_loss = te.nn.functional.entropy_logic_loss(self.concept_model.target_network.module)
             loss += 0.0001 * entropy_loss
             self.log("entropy_loss", entropy_loss, **self.log_kwargs)
 

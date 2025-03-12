@@ -4,3 +4,4 @@ from .mutual_info import MutualInfoConceptLightningModel
 from .whitening import ConceptWhiteningLightningModel
 from .ccw import CCWConceptLightningModel
 from .concept_embedding import ConceptEmbeddingModel
+from .prob_crm import ProbabilisticConceptModel

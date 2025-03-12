@@ -236,7 +236,11 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
             with torch.no_grad():
                 (data, concepts), targets = batch
                 concept_logits, residual, target_logits = self(data, concepts=concepts)
-
+            if type(concept_logits) == tuple:
+                concept_logits = concept_logits[0]
+            if type(residual) == tuple:
+                residual = residual[0]
+            
             # Calculate mutual information estimator loss
             mi_estimator_loss = self.residual_loss_fn.step(residual, concepts)
             mi_estimate = self.residual_loss_fn(residual, concepts)
