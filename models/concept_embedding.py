@@ -80,8 +80,15 @@ class ConceptEmbeddingModel(ConceptModel):
         if self.negative_intervention:
             concepts = 1 - concepts
 
-        x = self.base_network(x, concepts=concepts)
+        if x.device.type == "cpu":
+            model_float = self.base_network.to(torch.float32)
+            x = model_float(x)
 
+        else:
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                x = self.base_network(x)
+            # x = self.base_network(x)
+        x = x.float()  # Ensure x is float for precision
         contexts = []
         c_sem = []
         concept_logits = []
@@ -103,6 +110,9 @@ class ConceptEmbeddingModel(ConceptModel):
         neg_embedding = contexts[:, :, r_dim // 2 :]
 
         # interventions on concepts for intervention_aware training
+        if concepts is None:
+            concepts = torch.zeros_like(concept_logits).to(x.device)
+
         if intervention_idxs is None:
             intervention_idxs = torch.zeros_like(concepts)
         # intervene on concepts
@@ -122,6 +132,8 @@ class ConceptEmbeddingModel(ConceptModel):
         ) + neg_embedding * torch.unsqueeze(1 - x_concepts, dim=-1)
         batch_size, n_concepts, emb_size = x.shape
         x = x.view((batch_size, emb_size * n_concepts))
+
+        x = self.concept_residual_concat(x)
 
         # Get target logits
         target_logits = self.target_network(x, concepts=concepts)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -738,8 +739,16 @@ def plot_concept_change(
         plot_key, prefix=name, suffix="concept_change", save_dir=save_dir
     )
 
-    num_changed_concepts, concept_updated_when_wrong, hidden_concepts_updated = [], [], []
-    num_changed_concepts_std, concept_updated_when_wrong_std, hidden_concepts_updated_std = (
+    num_changed_concepts, concept_updated_when_wrong, hidden_concepts_updated = (
+        [],
+        [],
+        [],
+    )
+    (
+        num_changed_concepts_std,
+        concept_updated_when_wrong_std,
+        hidden_concepts_updated_std,
+    ) = (
         [],
         [],
         [],
@@ -973,17 +982,292 @@ def plot_concept_change_probe(
         plt.show()
 
 
+def plot_tcav(
+    plot_results: ResultGrid,
+    plot_key: tuple[str, ...],
+    groupby: list[str] = ["model_type"],
+    save_dir: Path | str = "./plots",
+    show: bool = True,
+    name: str = "",
+    plot_magnitude: bool = False,
+):
+    """
+    Plot results for concept change.
+
+    Parameters
+    ----------
+    plot_results : ResultGrid
+        Results for the given plot
+    plot_key : tuple[str]
+        Identifier for this plot
+    groupby : list[str]
+        List of train config keys to group by
+    save_dir : Path or str
+        Directory to save plots to
+    show : bool
+        Whether to show the plot
+    plot_hidden_concepts : bool
+        Whether to plot hidden concepts
+    """
+    plt.clf()
+    pm = "_magnitude" if plot_magnitude else ""
+    save_path = get_save_path(
+        plot_key, prefix=name, suffix=f"tcav{pm}", save_dir=save_dir
+    )
+
+    def tcav_process(result, subkey):
+        """
+        Extracts the TCAV scores from the result.
+        """
+        if plot_magnitude:
+            # Use magnitude instead of sign_count for the plot
+            metric_to_use = "magnitude"
+        else:
+            metric_to_use = "sign_count"
+        # metric_to_use = "magnitude"
+        return {
+            key: (
+                np.mean(value[metric_to_use][subkey]),
+                np.std(value[metric_to_use][subkey])
+                / np.sqrt(len(value[metric_to_use][subkey])),
+            )
+            for key, value in result.metrics["tcav_scores"].items()
+        }
+
+    # Aggregate results
+    groupby = groupby[0] if len(groupby) == 1 else groupby
+    plot_results = group_results(plot_results, groupby=groupby)
+    all_scores = {}
+    for key in plot_results.keys():
+        results = plot_results[key]
+        tcav_scores = [
+            tcav_process(result, "P1")
+            for result in results
+            if "tcav_scores" in result.metrics
+        ]
+        all_scores[key] = tcav_scores
+
+    all_concepts = set()
+    for method, scores_list in all_scores.items():
+        for scores in scores_list:
+            all_concepts.update(scores.keys())
+
+    all_concepts = sorted(list(all_concepts))
+    methods = sorted(list(all_scores.keys()))
+
+    # Create figure with one subplot per concept
+    # n_concepts = len(all_concepts)
+    # fig, axes = plt.subplots(1, n_concepts, figsize=(5 * n_concepts, 8), sharey=True)
+
+    # # If there's only one concept, axes won't be an array
+    # if n_concepts == 1:
+    #     axes = [axes]
+
+    # # Plot each concept
+    # for i, concept in enumerate(all_concepts):
+    #     ax = axes[i]
+
+    #     # Set up bar positions with spacing for each method
+    #     bar_width = 0.8 / len(methods)
+    #     method_positions = np.arange(len(methods))
+
+    #     # Plot each method
+    #     for j, method in enumerate(methods):
+    #         means = []
+    #         stds = []
+    #         for score_dict in all_scores[method]:
+    #             if concept in score_dict:
+    #                 mean, std = score_dict[concept]
+    #                 print(concept, score_dict[concept])
+    #                 means.append(mean)
+    #                 stds.append(std)
+
+    #         if means:
+    #             # Calculate the position for each bar with appropriate spacing
+    #             x_positions = method_positions[j]
+
+    #             # Plot mean as a ba
+    #             print(stds)
+    #             ax.bar(
+    #                 x_positions,
+    #                 np.mean(means),  # np.abs(0.5 - np.mean(means)),
+    #                 width=bar_width,
+    #                 yerr=np.mean(stds),  # Standard error
+    #                 capsize=5,
+    #                 color=plt.cm.tab10.colors[j],
+    #                 edgecolor="black",
+    #                 alpha=0.7,
+    #                 label=str(method),
+    #             )
+
+    #             # Add individual data points if there are multiple results
+    #             if len(means) > 1:
+    #                 scatter_positions = np.random.normal(
+    #                     x_positions, bar_width / 8, len(means)
+    #                 )
+    #                 ax.scatter(scatter_positions, means, color="black", s=20, zorder=3)
+
+    #     # Set title and labels
+    #     ax.set_title(f"{concept}", fontsize=14)
+    #     if i == 0:
+    #         ax.set_ylabel("TCAV Score")
+    #     ax.grid(axis="y", linestyle="--", alpha=0.3)
+
+    #     # Set x-axis labels
+    #     ax.set_xticks(method_positions)
+    #     ax.set_xticklabels(methods, rotation=45, ha="right")
+
+    # # Add legend in the last subplot only if there are multiple methods
+    # if len(methods) > 1:
+    #     handles, labels = axes[-1].get_legend_handles_labels()
+    #     if handles:
+    #         fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(0.99, 0.99))
+
+    # plt.tight_layout()
+    # plt.suptitle("TCAV Scores Across Methods", fontsize=16, y=1.02)
+    # plt.savefig(save_path.with_suffix(".png"))
+
+    # if show:
+    #     plt.show()
+    n_concepts = len(all_concepts)
+
+    # Calculate grid dimensions - max 4 concepts per row
+    max_cols = 4
+    n_cols = min(n_concepts, max_cols)
+    n_rows = (n_concepts + max_cols - 1) // max_cols  # Ceiling division
+
+    # Create figure with subplots
+    fig, axes = plt.subplots(
+        n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows), sharey=False
+    )
+
+    # If there's only one row, axes might not be a 2D array
+    if n_rows == 1:
+        if n_cols == 1:
+            axes = np.array([[axes]])
+        else:
+            axes = np.array([axes])
+
+    # Plot each concept
+    for i, concept in enumerate(all_concepts):
+        # Calculate row and column for this concept
+        row = i // n_cols
+        col = i % n_cols
+        ax = axes[row, col]
+
+        # Set up bar positions with spacing for each method
+        bar_width = 0.8 / len(methods)
+        method_positions = np.arange(len(methods))
+
+        # Plot each method
+        for j, method in enumerate(methods):
+            means = []
+            stds = []
+            for score_dict in all_scores[method]:
+                if concept in score_dict:
+                    mean, std = score_dict[concept]
+                    print(concept, score_dict[concept])
+                    means.append(mean)
+                    stds.append(std)
+
+            if means:
+                # Calculate the position for each bar with appropriate spacing
+                x_positions = method_positions[j]
+
+                # Plot mean as a bar
+                print(stds)
+                ax.bar(
+                    x_positions,
+                    np.mean(means),  # np.abs(0.5 - np.mean(means)),
+                    width=bar_width,
+                    yerr=np.mean(stds),
+                    capsize=5,
+                    color=plt.cm.tab10.colors[
+                        j % 10
+                    ],  # Cycle through colors if more than 10 methods
+                    edgecolor="black",
+                    alpha=0.7,
+                    label=str(method),
+                )
+
+                # Add individual data points if there are multiple results
+                if len(means) > 1:
+                    scatter_positions = np.random.normal(
+                        x_positions, bar_width / 8, len(means)
+                    )
+                    ax.scatter(scatter_positions, means, color="black", s=20, zorder=3)
+        all_values = []
+        for m_idx, m_name in enumerate(methods):
+            for score_dict in all_scores[m_name]:
+                if concept in score_dict:
+                    mean, std = score_dict[concept]
+                    all_values.append(mean)
+                    # Include error bar values
+                    all_values.append(mean + std)
+                    all_values.append(
+                        max(0, mean - std)
+                    )  # Prevent negative values if not meaningful
+
+        if all_values:
+            # Set y-axis limits with 10% padding
+            min_val = min(all_values)
+            max_val = max(all_values)
+            y_range = max_val - min_val
+
+            # If range is very small, use a minimum range to avoid tiny plots
+            if y_range < 0.05:
+                padding = 0.05
+            else:
+                padding = y_range * 0.15  # 15% padding
+
+            # Set limits, ensuring we don't go below 0 if values are all positive
+            y_min = max(0, min_val - padding) if min_val >= 0 else min_val - padding
+            y_max = max_val + padding
+
+            ax.set_ylim(y_min, y_max)
+        # Set title and labels
+        ax.set_title(f"{concept}", fontsize=14)
+        if col == 0:  # Only set y-label for leftmost plots
+            ax.set_ylabel("TCAV Score")
+        ax.grid(axis="y", linestyle="--", alpha=0.3)
+
+        # Set x-axis labels
+        ax.set_xticks(method_positions)
+        ax.set_xticklabels(methods, rotation=45, ha="right")
+
+    # Hide unused subplots
+    for i in range(n_concepts, n_rows * n_cols):
+        row = i // n_cols
+        col = i % n_cols
+        fig.delaxes(axes[row, col])
+
+    # Add legend only once for the entire figure
+    if len(methods) > 1:
+        handles, labels = axes[0, 0].get_legend_handles_labels()
+        if handles:
+            fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(0.99, 0.99))
+
+    plt.tight_layout()
+    plt.suptitle("TCAV Scores Across Methods", fontsize=16, y=1.02)
+    plt.savefig(save_path.with_suffix(".png"))
+
+    if show:
+        plt.show()
+
+
 if __name__ == "__main__":
     PLOT_FUNCTIONS = {
         "neg_intervention": plot_negative_interventions,
         "pos_intervention": plot_positive_interventions,
         "random": plot_random_concepts_residual,
         # "concept_pred": plot_concept_predictions,
-        #"concept_change": plot_concept_change,
-        #"concept_change_probe": plot_concept_change_probe,
+        # "concept_change": plot_concept_change,
+        # "concept_change_probe": plot_concept_change_probe,
         # "concept_change": plot_concept_changes,
         # "disentanglement": plot_disentanglement,
         # "intervention_vs_disentanglement": plot_intervention_vs_disentanglement,
+        "tcav_sign_count": partial(plot_tcav, plot_magnitude=False),
+        "tcav_magnitude": partial(plot_tcav, plot_magnitude=True),
     }
 
     parser = argparse.ArgumentParser()

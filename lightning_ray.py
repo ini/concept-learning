@@ -601,7 +601,7 @@ class LightningTuner:
             "logger": False,  # logging metrics is handled by RayCallback
             "callbacks": [*callbacks, RayCallback(**config)],
             "enable_checkpointing": False,  # checkpointing is handled by RayCallback
-            "enable_progress_bar": False,
+            "enable_progress_bar": True,
             "plugins": [RayLightningEnvironment()],
             **config,
         }
@@ -849,7 +849,7 @@ def make_lighting_trainer(config: dict[str, Any] = {}):
         "logger": False,  # logging metrics is handled by RayCallback
         "callbacks": [RayCallback()],
         "enable_checkpointing": False,  # checkpointing is handled by RayCallback
-        "enable_progress_bar": False,
+        "enable_progress_bar": True,
         "plugins": [RayLightningEnvironment()],
         **config,
     }
@@ -857,8 +857,8 @@ def make_lighting_trainer(config: dict[str, Any] = {}):
     return trainer
 
 
-
 import threading
+
 
 class RepeatingTimer(threading.Thread):
 

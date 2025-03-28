@@ -5,7 +5,13 @@ import torch
 
 from models import ConceptModel, ConceptEmbeddingModel, make_bottleneck_layer
 from nn_extensions import Apply
-from utils import make_cnn, make_mlp, process_grid_search_tuples, make_concept_embedding_model, make_explain_mlp
+from utils import (
+    make_cnn,
+    make_mlp,
+    process_grid_search_tuples,
+    make_concept_embedding_model,
+    make_explain_mlp,
+)
 from .celeba import CrossAttentionModel, PassThrough
 
 
@@ -35,11 +41,9 @@ def make_concept_model(config: dict) -> ConceptModel:
             + [concept_dim]
         )
     elif config.get("additive_residual", False):
-        #residual is added to concept not concatenated
+        # residual is added to concept not concatenated
         units = (
-            [
-                concept_dim + residual_dim
-            ]  # Bottleneck  # Prev interventions
+            [concept_dim + residual_dim]  # Bottleneck  # Prev interventions
             + (int_model_layers or [256, 128])
             + [concept_dim]
         )
@@ -66,9 +70,9 @@ def make_concept_model(config: dict) -> ConceptModel:
         concept_rank_model = torch.nn.Sequential(*layers)
     else:
         concept_rank_model = nn.Identity()
-    
-    num_hidden_layers=config.get("num_hidden_layers", 0)
-        
+
+    num_hidden_layers = config.get("num_hidden_layers", 0)
+
     if num_hidden_layers == 0:
         if config.get("additive_residual", False):
             target_network = nn.Linear(concept_dim, num_classes)
@@ -86,11 +90,8 @@ def make_concept_model(config: dict) -> ConceptModel:
             num_classes,
             num_hidden_layers=num_hidden_layers,
             hidden_dim=20,
-            num_classes=num_classes,)
-
-        
-    
-    
+            num_classes=num_classes,
+        )
 
     if config.get("model_type") == "cem" or config.get("model_type") == "cem_mi":
         concept_prob_generators, concept_context_generators = (

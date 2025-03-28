@@ -2,6 +2,8 @@ from __future__ import annotations
 import os
 import copy
 import json
+from tqdm import tqdm
+import random
 
 # make sure slurm isn't exposed
 if "SLURM_NTASKS" in os.environ:
@@ -93,7 +95,7 @@ def test(model: pl.LightningModule, loader: DataLoader):
         Test data loader
     """
     trainer = pl.Trainer(
-        accelerator="cpu" if MPSAccelerator.is_available() else "auto",
+        accelerator="cuda" if MPSAccelerator.is_available() else "auto",
         enable_progress_bar=True,
     )
     return trainer.test(model, loader)[0]
@@ -184,7 +186,7 @@ def test_random_concepts(
         return results["test_acc"]
     else:
         return results["test_auroc"]
-    #return results["test_acc"]
+    # return results["test_acc"]
 
 
 def test_random_residual(
@@ -758,9 +760,6 @@ def test_concept_change_probe(
     )
 
 
-
-
-
 def test_concept_change(
     model: ConceptLightningModel,
     model_type: str,
@@ -780,29 +779,28 @@ def test_concept_change(
     num_mi_epochs : int
         Number of epochs to train mutual information estimator
     """
+
     # Get mutual information estimator
     def invert_binarize(binary_int):
         binary_str = bin(binary_int)[2:].zfill(8)
         concepts = np.array([int(bit) for bit in binary_str], dtype=int)
         return concepts
-    
+
     if dataset == "celeba":
         with open("/home/renos/label_invert.json", "r") as f:
             label_invert = json.load(f)
         (data, concepts), targets = next(iter(test_loader))
         _, residual, _ = model(data, concepts=concepts)
 
-
         def update_all(vector):
             return np.array(
                 [invert_binarize(int(label_invert[str(int(v))])) for v in vector]
             )
-    else:
-        def update_all(vector):
-            return np.array(
-                [invert_binarize(int(v)) for v in vector]
-            )
 
+    else:
+
+        def update_all(vector):
+            return np.array([invert_binarize(int(v)) for v in vector])
 
     num_changed_concepts_list = []
     concept_updated_list = []
@@ -825,10 +823,10 @@ def test_concept_change(
         pred_int_concepts = update_all(y_pred_int_amex)
 
         # Vectorized calculations
-        #only other concepts
+        # only other concepts
         mask = np.array(int_idxs == 0)  # Assuming int_idxs is of shape (batch_size, 6)
 
-        #number of supervised concepts changed during an intervention
+        # number of supervised concepts changed during an intervention
         num_changed_concepts = np.sum(
             (pred_concepts[:, :6] != pred_int_concepts[:, :6]) & mask, axis=1
         )
@@ -866,14 +864,715 @@ def test_concept_change(
     hidden_concepts_updated = np.array(hidden_concepts_updated_list)
     base_concept_correct = np.array(base_concept_correct_list).astype(bool)
 
-
     # Calculate Metrics
     mean_num_changed_concepts = np.mean(num_changed_concepts)
     mean_hidden_concepts_updated = np.mean(hidden_concepts_updated)
-    concept_updated_when_wrong = np.sum(concept_updated & ~base_concept_correct) / np.sum(~base_concept_correct)
+    concept_updated_when_wrong = np.sum(
+        concept_updated & ~base_concept_correct
+    ) / np.sum(~base_concept_correct)
+
+    return (
+        mean_num_changed_concepts,
+        concept_updated_when_wrong,
+        mean_hidden_concepts_updated,
+    )
 
 
-    return mean_num_changed_concepts, concept_updated_when_wrong, mean_hidden_concepts_updated
+def test_deep_lift_shapley(
+    model: ConceptLightningModel,
+    test_loader: DataLoader,
+    dataset: str,
+) -> dict:
+    """
+    Calculate DeepLift Shapley values for each concept and residual using Captum.
+    Takes the absolute value of each sample before averaging to better capture
+    the magnitude of impact regardless of direction.
+
+    Parameters
+    ----------
+    model : ConceptLightningModel
+        Model to evaluate
+    test_loader : DataLoader
+        Test data loader
+    dataset : str
+        Dataset name
+
+    Returns
+    -------
+    dict
+        Dictionary containing attribution scores for concepts and residuals
+    """
+    from captum.attr import DeepLift, DeepLiftShap
+    import torch.nn.functional as F
+
+    # Create a wrapper class for the concept model that Captum can use
+    class ModelWrapper(nn.Module):
+        def __init__(self, model):
+            super().__init__()
+            self.model = model
+
+        def forward(self, concepts, residuals):
+            # Combine concepts and residuals in the format expected by the model
+            if not concepts.requires_grad:
+                concepts = concepts.detach().requires_grad_()
+            if not residuals.requires_grad:
+                residuals = residuals.detach().requires_grad_()
+
+            # Use the target_network from the concept model to get predictions
+            return self.model.concept_model.calc_target_preds(
+                concepts,
+                residuals,
+                concepts.detach(),
+                torch.zeros_like(concepts).detach(),
+                detach=False,
+                get_concept_pred=False,
+            )
+
+    # Create the wrapped model
+    wrapped_model = ModelWrapper(model)
+
+    # Initialize DeepLift
+    deep_lift = DeepLiftShap(wrapped_model)
+
+    # Store attribution scores
+    concept_attributions = []
+    residual_attributions = []
+
+    num_classes = DATASET_INFO[dataset]["num_classes"]
+
+    # Process batches
+    num_processed = 0
+    max_samples = 10000  # Limit the number of samples for computational efficiency
+
+    for (data, concepts), targets in test_loader:
+        # Skip if we've processed enough samples
+        if num_processed >= max_samples:
+            break
+
+        with torch.no_grad():
+            # Get model predictions and extract concepts and residuals
+            concept_outputs, residual_outputs, _ = model(data, concepts=concepts)
+
+            # For binary concepts, ensure they're in the right format
+            if (
+                hasattr(model.concept_model, "concept_type")
+                and model.concept_model.concept_type == "binary"
+            ):
+                concept_inputs = concepts
+            else:
+                concept_inputs = concepts
+
+        # Create baseline for attribution (typically zeros)
+        concept_baseline = (
+            torch.zeros_like(concept_inputs).float().reshape(concept_inputs.shape)
+        ) + 0.5
+        residual_baseline = (
+            torch.zeros_like(residual_outputs).float().reshape(residual_outputs.shape)
+        )
+
+        # Prepare inputs for DeepLift
+        baselines = (concept_baseline, residual_baseline)
+        inputs = (concept_inputs, residual_outputs)
+
+        # Compute attributions
+        attributions = deep_lift.attribute(
+            inputs, baselines, target=random.randint(0, num_classes - 1)
+        )
+
+        # Extract attributions and take absolute value for each sample
+        # We're not averaging over batch here, keeping individual sample attributions
+        concept_attr = (
+            attributions[0].detach().abs()
+        )  # Take absolute value of each sample
+        residual_attr = (
+            attributions[1].detach().abs()
+        )  # Take absolute value of each sample
+
+        concept_attributions.append(concept_attr)
+        residual_attributions.append(residual_attr)
+
+        num_processed += len(data)
+
+    # Concatenate all samples' attributions
+    all_concept_attr = torch.cat(concept_attributions, dim=0)
+    all_residual_attr = torch.cat(residual_attributions, dim=0)
+
+    # Compute mean across all samples (after taking absolute values)
+    avg_concept_attr = torch.mean(all_concept_attr, dim=0)
+    avg_residual_attr = torch.mean(all_residual_attr, dim=0)
+
+    # Convert to numpy for easier handling
+    concept_attr_np = avg_concept_attr.cpu().numpy()
+    residual_attr_np = avg_residual_attr.cpu().numpy()
+
+    # Create result dictionary
+    attribution_results = {
+        "concept_attributions": concept_attr_np,
+        "residual_attributions": residual_attr_np,
+        "concept_attribution_mean": concept_attr_np.mean(),
+        "residual_attribution_mean": residual_attr_np.mean(),
+        # These will now be the same as the non-abs means since we already took abs values
+        "concept_attribution_abs_mean": concept_attr_np.mean(),
+        "residual_attribution_abs_mean": residual_attr_np.mean(),
+    }
+
+    # For datasets with known concept names, add named attributions
+    if dataset in DATASET_INFO:
+        dataset_info = DATASET_INFO[dataset]
+        if "concept_names" in dataset_info:
+            concept_names = dataset_info["concept_names"]
+            named_concept_attrs = {
+                name: float(attr) for name, attr in zip(concept_names, concept_attr_np)
+            }
+            attribution_results["named_concept_attributions"] = named_concept_attrs
+
+    return attribution_results
+
+
+# def test_deep_lift_shapley(
+#     model: ConceptLightningModel,
+#     test_loader: DataLoader,
+#     dataset: str,
+#     num_baselines_per_class: int = 10,  # Number of baselines per class
+# ) -> dict:
+#     """
+#     Calculate DeepLift Shapley values for each concept and residual using Captum.
+#     Takes the absolute value of each sample before averaging to better capture
+#     the magnitude of impact regardless of direction.
+#     Uses multiple baselines sampled from the data distribution for each target class.
+#     Processes each class in batches for efficiency.
+
+#     Parameters
+#     ----------
+#     model : ConceptLightningModel
+#         Model to evaluate
+#     test_loader : DataLoader
+#         Test data loader
+#     dataset : str
+#         Dataset name
+#     num_baselines_per_class : int, optional
+#         Number of baseline samples to use per class, by default 10
+
+#     Returns
+#     -------
+#     dict
+#         Dictionary containing attribution scores for concepts and residuals
+#     """
+#     from captum.attr import DeepLift, DeepLiftShap
+#     import torch.nn.functional as F
+#     import random
+#     from collections import defaultdict
+
+#     # Create a wrapper class for the concept model that Captum can use
+#     class ModelWrapper(nn.Module):
+#         def __init__(self, model):
+#             super().__init__()
+#             self.model = model
+
+#         def forward(self, concepts, residuals):
+#             # Combine concepts and residuals in the format expected by the model
+#             if not concepts.requires_grad:
+#                 concepts = concepts.detach().requires_grad_()
+#             if not residuals.requires_grad:
+#                 residuals = residuals.detach().requires_grad_()
+
+#             # Use the target_network from the concept model to get predictions
+#             return self.model.concept_model.calc_target_preds(
+#                 concepts,
+#                 residuals,
+#                 concepts.detach(),
+#                 torch.zeros_like(concepts).detach(),
+#                 detach=False,
+#                 get_concept_pred=False,
+#             )
+
+#     # Create the wrapped model
+#     wrapped_model = ModelWrapper(model)
+
+#     # Initialize DeepLiftShap (using multiple baselines)
+#     deep_lift = DeepLiftShap(wrapped_model)
+
+#     # Get the number of classes from the model
+#     num_classes = DATASET_INFO[dataset]["num_classes"]
+#     print(f"Model has {num_classes} output classes")
+
+#     # First pass: collect samples by class and create per-class data structures
+#     print("Organizing data by class...")
+
+#     class_data = defaultdict(
+#         list
+#     )  # Store (concept_inputs, residual_outputs) tuples for each class
+#     class_sizes = defaultdict(int)  # Track number of samples per class
+#     max_samples_per_class = 10000  # Cap samples per class for computational efficiency
+
+#     # We need to collect and organize all data by class first
+#     for (data, concepts), targets in test_loader:
+#         with torch.no_grad():
+#             # Get model predictions and extract concepts and residuals
+#             _, residual_outputs, _ = model(data, concepts=concepts)
+
+#             # For binary concepts, ensure they're in the right format
+#             if (
+#                 hasattr(model.concept_model, "concept_type")
+#                 and model.concept_model.concept_type == "binary"
+#             ):
+#                 concept_inputs = concepts
+#             else:
+#                 concept_inputs = concepts
+
+#             # Organize samples by their target class
+#             for i, target in enumerate(targets):
+#                 class_idx = int(target)
+#                 if class_sizes[class_idx] < max_samples_per_class:
+#                     class_data[class_idx].append(
+#                         (
+#                             concept_inputs[i : i + 1].detach().clone(),
+#                             residual_outputs[i : i + 1].detach().clone(),
+#                         )
+#                     )
+#                     class_sizes[class_idx] += 1
+
+#     print(f"Class distribution: {dict(class_sizes)}")
+
+#     # Create class-specific baselines
+#     class_baselines = {}
+#     for class_idx in range(num_classes):
+#         if class_idx in class_data and len(class_data[class_idx]) > 0:
+#             # Randomly sample baselines from this class's data
+#             baseline_indices = random.sample(
+#                 range(len(class_data[class_idx])),
+#                 min(num_baselines_per_class, len(class_data[class_idx])),
+#             )
+
+#             # Extract and concatenate the baseline samples
+#             concept_baselines = torch.cat(
+#                 [class_data[class_idx][i][0] for i in baseline_indices], dim=0
+#             )
+#             residual_baselines = torch.cat(
+#                 [class_data[class_idx][i][1] for i in baseline_indices], dim=0
+#             )
+
+#             class_baselines[class_idx] = (concept_baselines, residual_baselines)
+#             print(f"Class {class_idx}: {len(baseline_indices)} baselines")
+
+#     # Handle classes with no samples by using baselines from other classes
+#     for class_idx in range(num_classes):
+#         if class_idx not in class_baselines:
+#             print(
+#                 f"Warning: No baselines for class {class_idx}, using baselines from other classes"
+#             )
+
+#             # Use baselines from all classes combined as fallback
+#             if len(class_baselines) > 0:
+#                 # Take the first available class baselines as template
+#                 any_class = next(iter(class_baselines.keys()))
+#                 class_baselines[class_idx] = class_baselines[any_class]
+#             else:
+#                 # If no baselines exist at all, create default ones
+#                 print(
+#                     f"Warning: No baselines available for any class, using default baselines"
+#                 )
+#                 # Use a single sample as template to get shapes
+#                 for (data, concepts), _ in test_loader:
+#                     with torch.no_grad():
+#                         _, residual_outputs, _ = model(data, concepts=concepts)
+#                         if (
+#                             hasattr(model.concept_model, "concept_type")
+#                             and model.concept_model.concept_type == "binary"
+#                         ):
+#                             concept_inputs = concepts
+#                         else:
+#                             concept_inputs = concepts
+
+#                     # Create default baselines
+#                     concept_baselines = (
+#                         torch.zeros((1,) + concept_inputs.shape[1:]).to(
+#                             concept_inputs.device
+#                         )
+#                         + 0.5
+#                     )
+#                     residual_baselines = torch.zeros(
+#                         (1,) + residual_outputs.shape[1:]
+#                     ).to(residual_outputs.device)
+#                     class_baselines[class_idx] = (concept_baselines, residual_baselines)
+#                     break
+
+#     # Now process attribution by class
+#     print("Computing attributions class by class...")
+
+#     # Store attributions for all samples
+#     all_concept_attrs = []
+#     all_residual_attrs = []
+
+#     # Process each class
+#     for class_idx in range(num_classes):
+#         if class_idx not in class_data or len(class_data[class_idx]) == 0:
+#             print(f"Skipping class {class_idx} (no samples)")
+#             continue
+
+#         print(f"Processing class {class_idx} with {len(class_data[class_idx])} samples")
+
+#         # Get the baselines for this class
+#         concept_baselines, residual_baselines = class_baselines[class_idx]
+
+#         # Process this class's samples in batches for efficiency
+#         batch_size = 32  # Adjust based on memory requirements
+
+#         # Calculate how many batches we'll need
+#         num_batches = (len(class_data[class_idx]) + batch_size - 1) // batch_size
+
+#         for batch_idx in range(num_batches):
+#             start_idx = batch_idx * batch_size
+#             end_idx = min((batch_idx + 1) * batch_size, len(class_data[class_idx]))
+
+#             # Gather batch data
+#             batch_concepts = torch.cat(
+#                 [class_data[class_idx][i][0] for i in range(start_idx, end_idx)], dim=0
+#             )
+#             batch_residuals = torch.cat(
+#                 [class_data[class_idx][i][1] for i in range(start_idx, end_idx)], dim=0
+#             )
+
+#             # Compute attributions for this batch
+#             batch_attributions = deep_lift.attribute(
+#                 inputs=(batch_concepts, batch_residuals),
+#                 baselines=(concept_baselines, residual_baselines),
+#                 target=class_idx,
+#             )
+
+#             # Extract and store attributions
+#             batch_concept_attr = (
+#                 batch_attributions[0].detach().abs()
+#             )  # Take absolute value
+#             batch_residual_attr = (
+#                 batch_attributions[1].detach().abs()
+#             )  # Take absolute value
+
+#             all_concept_attrs.append(batch_concept_attr)
+#             all_residual_attrs.append(batch_residual_attr)
+
+#             if (batch_idx + 1) % 10 == 0 or batch_idx == num_batches - 1:
+#                 print(
+#                     f"  Processed {end_idx}/{len(class_data[class_idx])} samples for class {class_idx}"
+#                 )
+
+#     # Concatenate attributions from all classes
+#     all_concept_attr = torch.cat(all_concept_attrs, dim=0)
+#     all_residual_attr = torch.cat(all_residual_attrs, dim=0)
+
+#     # Compute mean across all samples (after taking absolute values)
+#     avg_concept_attr = torch.mean(all_concept_attr, dim=0)
+#     avg_residual_attr = torch.mean(all_residual_attr, dim=0)
+
+#     # Convert to numpy for easier handling
+#     concept_attr_np = avg_concept_attr.cpu().numpy()
+#     residual_attr_np = avg_residual_attr.cpu().numpy()
+
+#     # Create result dictionary
+#     attribution_results = {
+#         "concept_attributions": concept_attr_np,
+#         "residual_attributions": residual_attr_np,
+#         "concept_attribution_mean": concept_attr_np.mean(),
+#         "residual_attribution_mean": residual_attr_np.mean(),
+#         "concept_attribution_abs_mean": concept_attr_np.mean(),  # Already taking abs values
+#         "residual_attribution_abs_mean": residual_attr_np.mean(),  # Already taking abs values
+#         "class_distribution": {k: v for k, v in class_sizes.items()},
+#         "baselines_per_class": {k: len(v[0]) for k, v in class_baselines.items()},
+#     }
+
+#     # For datasets with known concept names, add named attributions
+#     if dataset in DATASET_INFO:
+#         dataset_info = DATASET_INFO[dataset]
+#         if "concept_names" in dataset_info:
+#             concept_names = dataset_info["concept_names"]
+#             named_concept_attrs = {
+#                 name: float(attr) for name, attr in zip(concept_names, concept_attr_np)
+#             }
+#             attribution_results["named_concept_attributions"] = named_concept_attrs
+
+#     return attribution_results
+
+
+def test_tcav_captum(
+    model: ConceptLightningModel,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    dataset: str,
+) -> dict:
+    """
+    Calculate TCAV (Testing with Concept Activation Vectors) scores using Captum.
+
+    Parameters
+    ----------
+    model : ConceptLightningModel
+        Model to evaluate
+    val_loader : DataLoader
+        Validation data loader for training concept classifiers
+    test_loader : DataLoader
+        Test data loader for calculating TCAV scores
+    dataset : str
+        Dataset name
+
+    Returns
+    -------
+    dict
+        Dictionary containing TCAV scores for concepts
+    """
+    import torch
+
+    model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    print(
+        f"Using device: {torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU'}"
+    )
+    import os
+    import glob
+    import torch
+    from captum.concept._utils.data_iterator import (
+        dataset_to_dataloader,
+        CustomIterableDataset,
+    )
+    from captum.concept import Concept
+    from captum.concept import TCAV
+    from captum.attr import LayerGradientXActivation, LayerIntegratedGradients
+    from scipy.stats import ttest_ind
+
+    def format_float(f):
+        return float("{:.3f}".format(f) if abs(f) >= 0.0005 else "{:.3e}".format(f))
+
+    def assemble_scores(scores, experimental_sets, idx, score_layer, score_type):
+        score_list = []
+        for concepts in experimental_sets:
+            score_list.append(
+                scores["-".join([str(c.id) for c in concepts])][score_layer][
+                    score_type
+                ][idx]
+                .cpu()
+                .numpy()
+            )
+
+        return score_list
+
+    def get_pval(
+        scores, experimental_sets, score_layer, score_type, alpha=0.05, print_ret=False
+    ):
+        P1 = assemble_scores(scores, experimental_sets, 0, score_layer, score_type)
+        P2 = assemble_scores(scores, experimental_sets, 1, score_layer, score_type)
+
+        if print_ret:
+            print(
+                "P1[mean, std]: ", format_float(np.mean(P1)), format_float(np.std(P1))
+            )
+            print(
+                "P2[mean, std]: ", format_float(np.mean(P2)), format_float(np.std(P2))
+            )
+
+        _, pval = ttest_ind(P1, P2)
+
+        if print_ret:
+            print("p-values:", format_float(pval))
+
+        if pval < alpha:  # alpha value is 0.05 or 5%
+            relation = "Disjoint"
+            if print_ret:
+                print("Disjoint")
+        else:
+            relation = "Overlap"
+            if print_ret:
+                print("Overlap")
+
+        return P1, P2, format_float(pval), relation
+
+    def get_tensor_from_filename(filename):
+        return torch.load(filename).to("cuda" if torch.cuda.is_available() else "cpu")
+
+    def assemble_concept(name, id, concepts_path="/data/Datasets/tcav/celeba/"):
+        concept_path = os.path.join(concepts_path, name) + "/"
+        dataset = CustomIterableDataset(get_tensor_from_filename, concept_path)
+        concept_iter = dataset_to_dataloader(dataset)
+
+        return Concept(id=id, name=name, data_iter=concept_iter)
+
+    if dataset == "celeba":
+        concepts_path = "/data/Datasets/tcav/celeba/"
+        concept_names = [
+            "Attractive",
+            "High_Cheekbones",
+            "Male",
+            "Mouth_Slightly_Open",
+            "Smiling",
+            "Wearing_Lipstick",
+            "Heavy_Makeup",
+            "Wavy_Hair",
+        ]
+    elif dataset == "cifar100":
+        concepts_path = "/data/Datasets/tcav/cifar/"
+        concept_names = DATASET_INFO[dataset]["class_names"]
+    else:
+        assert 0, "Dataset not supported for TCAV"
+
+    named_concepts = concept_set = [
+        assemble_concept(name, j, concepts_path=concepts_path)
+        for j, name in enumerate(concept_names)
+    ]
+    random_concept_sets = [
+        assemble_concept(
+            f"random_{i-len(concept_names)}", i, concepts_path=concepts_path
+        )
+        for i in range(len(concept_names), len(concept_names) + 100)
+    ]
+    print(f"Random concepts: {[c for c in random_concept_sets]}")
+    print(f"Named concepts: {[c for c in named_concepts]}")
+    all_concept_sets = []
+    flattened_concept_sets = []
+    for named_concept in named_concepts:
+        concept_sets = []
+        for random_concept in random_concept_sets:
+            concept_set = [named_concept, random_concept]
+            concept_sets.append(concept_set)
+        all_concept_sets.append(concept_sets)
+        flattened_concept_sets.extend(concept_sets)
+
+    from captum.attr import DeepLift, DeepLiftShap
+    import torch.nn.functional as F
+
+    # Create a wrapper class for the concept model that Captum can use
+    class ModelWrapper(nn.Module):
+        def __init__(self, model):
+            super().__init__()
+            self.model = model
+
+        def forward(self, data):
+            # breakpoint()
+            # print(tupled.shape)
+            # Combine concepts and residuals in the format expected by the model
+            _, _, target_logits = self.model(data, concepts=None)
+            print(data.device)
+            assert (
+                type(target_logits) == torch.Tensor
+            ), f"Expected Tensor, got {type(target_logits)}"
+            return target_logits
+
+    # Create the wrapped model
+    wrapped_model = ModelWrapper(model.concept_model)
+
+    layers = ["model.concept_residual_concat"]
+
+    mytcav = TCAV(
+        model=wrapped_model,
+        layers=layers,
+        layer_attr_method=LayerIntegratedGradients(
+            model, None, multiply_by_inputs=False
+        ),
+    )
+
+    num_classes = DATASET_INFO[dataset]["num_classes"]
+
+    # Process batches
+    num_processed = 0
+    max_samples = 10000  # Limit the number of samples for computational efficiency
+    import time
+
+    concept_results = {}
+
+    # for batch in test_loader:
+    #     # Skip if we've processed enough samples
+    #     (data, concepts), targets = batch
+    #     # breakpoint()
+    #     data = data.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    #     targets = targets.to(
+    #         torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #     )
+    #     # Create a mask where the last concept is true
+    #     for i, (named_concept, concept_sets) in enumerate(
+    #         zip(named_concepts, all_concept_sets)
+    #     ):
+    #         mask = concepts[:, i].bool()
+    #         print(f"Number of samples in mask: {mask.sum()}")
+    #         print(f"Starting interpretation for {named_concept.name} at {time.time()}")
+    #         data_masked = data[mask]
+    #         targets_masked = targets[mask]
+    concept_data = {nc.name: {"data": None, "targets": None} for nc in named_concepts}
+    MIN_EXAMPLES = 64
+
+    # Collect examples across batches
+    for batch in test_loader:
+        (data, concepts), targets = batch
+        data = data.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+        targets = targets.to(
+            torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        )
+
+        # Break if we have enough examples for all concepts
+        if all(
+            concept_data[nc.name]["data"] is not None
+            and concept_data[nc.name]["data"].shape[0] >= MIN_EXAMPLES
+            for nc in named_concepts
+        ):
+            break
+
+        # Accumulate examples for each concept
+        for i, named_concept in enumerate(named_concepts):
+            mask = concepts[:, i].bool()
+            if mask.sum() > 0:
+                data_masked = data[mask]
+                targets_masked = targets[mask]
+
+                if concept_data[named_concept.name]["data"] is None:
+                    concept_data[named_concept.name]["data"] = data_masked
+                    concept_data[named_concept.name]["targets"] = targets_masked
+                else:
+                    concept_data[named_concept.name]["data"] = torch.cat(
+                        [concept_data[named_concept.name]["data"], data_masked], dim=0
+                    )
+                    concept_data[named_concept.name]["targets"] = torch.cat(
+                        [concept_data[named_concept.name]["targets"], targets_masked],
+                        dim=0,
+                    )
+
+    # Run TCAV analysis for each concept
+    for i, (named_concept, concept_sets) in enumerate(
+        zip(named_concepts, all_concept_sets)
+    ):
+        print(f"Starting interpretation for {named_concept.name}")
+        # Take only the first MIN_EXAMPLES
+        data_masked = concept_data[named_concept.name]["data"][:MIN_EXAMPLES]
+        targets_masked = concept_data[named_concept.name]["targets"][:MIN_EXAMPLES]
+
+        assert (
+            data_masked.shape[0] >= MIN_EXAMPLES
+        ), f"Not enough examples for {named_concept.name}"
+        assert (
+            targets_masked.shape[0] >= MIN_EXAMPLES
+        ), f"Not enough targets for {named_concept.name}"
+
+        tcav_scores = mytcav.interpret(
+            inputs=data_masked,
+            experimental_sets=concept_sets,
+            target=targets_masked,
+            n_steps=50,
+        )
+        P1, P2, pval, relation = get_pval(
+            tcav_scores, concept_sets, layers[0], score_type="sign_count"
+        )
+        concept_results[named_concept.name] = {}
+        concept_results[named_concept.name]["sign_count"] = {
+            "P1": np.array(P1).tolist(),
+            "P2": np.array(P2).tolist(),
+            "pval": pval,
+            "relation": relation,
+        }
+        P1, P2, pval, relation = get_pval(
+            tcav_scores, concept_sets, layers[0], score_type="magnitude"
+        )
+        concept_results[named_concept.name]["magnitude"] = {
+            "P1": np.array(P1).tolist(),
+            "P2": np.array(P2).tolist(),
+            "pval": pval,
+            "relation": relation,
+        }
+
+    return concept_results
+
 
 ### Loading & Execution
 
@@ -914,18 +1613,25 @@ def evaluate(config: dict):
         Evaluation configuration dictionary
     """
     metrics = {}
-
     # Get data loader
-    if config["eval_mode"] == "concept_change_probe" and (config["dataset"] == "celeba" or config["dataset"] == "pitfalls_synthetic"):
+    if (
+        config["eval_mode"] == "concept_change_probe"
+        and (config["dataset"] == "celeba" or config["dataset"] == "pitfalls_synthetic")
+        or (config["eval_mode"] == "tcav" and config["dataset"] == "celeba")
+    ):
         new_config = copy.deepcopy(config)
         new_config["num_concepts"] = 8
+        new_config["batch_size"] = 256
         train_loader = make_datamodule(**new_config).train_dataloader()
         val_loader = make_datamodule(**new_config).val_dataloader()
         test_loader = make_datamodule(**new_config).test_dataloader()
     else:
-        train_loader = make_datamodule(**config).train_dataloader()
-        val_loader = make_datamodule(**config).val_dataloader()
-        test_loader = make_datamodule(**config).test_dataloader()
+        new_config = copy.deepcopy(config)
+        if config["eval_mode"] == "tcav":
+            new_config["batch_size"] = 256
+        train_loader = make_datamodule(**new_config).train_dataloader()
+        val_loader = make_datamodule(**new_config).val_dataloader()
+        test_loader = make_datamodule(**new_config).test_dataloader()
 
     # Load model
     tuner = LightningTuner("val_acc", "max")
@@ -957,10 +1663,14 @@ def evaluate(config: dict):
         )
 
     elif config["eval_mode"] == "random_concepts":
-        metrics["random_concept_acc"] = test_random_concepts(model, test_loader, config["dataset"])
+        metrics["random_concept_acc"] = test_random_concepts(
+            model, test_loader, config["dataset"]
+        )
 
     elif config["eval_mode"] == "random_residual":
-        metrics["random_residual_acc"] = test_random_residual(model, test_loader, config["dataset"])
+        metrics["random_residual_acc"] = test_random_residual(
+            model, test_loader, config["dataset"]
+        )
 
     elif config["eval_mode"] == "correlation":
         metrics["mean_abs_cross_correlation"] = test_correlation(model, test_loader)
@@ -996,10 +1706,11 @@ def evaluate(config: dict):
     if config["eval_mode"] == "tcav":
         # Use Captum's TCAV implementation
         metrics["tcav_scores"] = test_tcav_captum(
-            model,
-            val_loader,
-            test_loader,
-            config["dataset"]
+            model, val_loader, test_loader, config["dataset"]
+        )
+    elif config["eval_mode"] == "deeplift_shapley":
+        metrics["deeplift_shapley"] = test_deep_lift_shapley(
+            model, test_loader, config["dataset"]
         )
 
     # Report evaluation metrics
@@ -1008,17 +1719,18 @@ def evaluate(config: dict):
 
 if __name__ == "__main__":
     MODES = [
-        "accuracy",
-        "neg_intervention",
-        "pos_intervention",
-        "random_concepts",
-        "random_residual",
+        # "accuracy",
+        # "neg_intervention",
+        # "pos_intervention",
+        # "random_concepts",
+        # "random_residual",
         # "correlation",
         # "mutual_info",
         # "concept_pred",
-        #"concept_change",
-        #"concept_change_probe",
-        #"tcav",
+        # "concept_change",
+        # "concept_change_probe",
+        "tcav",
+        # "deeplift_shapley"
     ]
 
     parser = argparse.ArgumentParser()

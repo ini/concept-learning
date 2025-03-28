@@ -11,7 +11,14 @@ from torch.nn import functional as F
 from typing import Any, Callable, Iterable, Literal
 
 from nn_extensions import Apply, VariableKwargs
-from utils import accuracy, auroc, unwrap, zero_loss_fn, remove_prefix, remove_keys_with_prefix
+from utils import (
+    accuracy,
+    auroc,
+    unwrap,
+    zero_loss_fn,
+    remove_prefix,
+    remove_keys_with_prefix,
+)
 from nn_extensions import Chain
 import numpy as np
 import time
@@ -20,6 +27,33 @@ import torch_explain as te
 ### Typing
 
 ConceptBatch = tuple[tuple[Tensor, Tensor], Tensor]  # ((data, concepts), targets)
+
+import torch
+import torch.nn as nn
+from timm.layers import LayerNorm2d
+
+
+class DynamicTanh(nn.Module):
+    def __init__(self, normalized_shape, channels_last, alpha_init_value=0.5):
+        super().__init__()
+        self.normalized_shape = normalized_shape
+        self.alpha_init_value = alpha_init_value
+        self.channels_last = channels_last
+
+        self.alpha = nn.Parameter(torch.ones(1) * alpha_init_value)
+        self.weight = nn.Parameter(torch.ones(normalized_shape))
+        self.bias = nn.Parameter(torch.zeros(normalized_shape))
+
+    def forward(self, x):
+        x = torch.tanh(self.alpha * x)
+        if self.channels_last:
+            x = x * self.weight + self.bias
+        else:
+            x = x * self.weight[:, None, None] + self.bias[:, None, None]
+        return x
+
+    def extra_repr(self):
+        return f"normalized_shape={self.normalized_shape}, alpha_init_value={self.alpha_init_value}, channels_last={self.channels_last}"
 
 
 ### Concept Models
@@ -88,6 +122,7 @@ class ConceptModel(nn.Module):
         super().__init__()
         cross_attention = cross_attention or Apply(lambda *args: args[1])
         self.freeze_base_model = freeze_base_model
+        self.concept_residual_concat = nn.Identity()
 
         def freeze_layers_except_final(model, final_layer_name="fc", freeze_all=False):
             """
@@ -146,6 +181,7 @@ class ConceptModel(nn.Module):
             super().load_state_dict(modified_state_dict, strict=False)
         self.negative_intervention = False
         self.additive_residual = additive_residual
+
     def forward(
         self,
         x: Tensor,
@@ -172,7 +208,7 @@ class ConceptModel(nn.Module):
             Target logits
         """
         # if negative intervention, invert accurate concepts
-        if self.negative_intervention:
+        if concepts is not None and self.negative_intervention:
             concepts = 1 - concepts
 
         # Get concept logits & residual
@@ -187,14 +223,19 @@ class ConceptModel(nn.Module):
         else:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 x = self.base_network(x)
+            # x = self.base_network(x)
 
         if not isinstance(x, torch.Tensor):
             # Handle non-tensor case
             x = x.logits
         x = x.float()
         concept_logits = self.concept_network(x, concepts=concepts)
-        residual = self.residual_network(x, concepts=concepts)
 
+        if concepts is None:
+            concepts = torch.zeros_like(concept_logits).to(x.device)
+
+        residual = self.residual_network(x, concepts=concepts)
+        # residual = self.concept_residual_concat(residual)
         # Process concept logits & residual via bottleneck layer
         if not isinstance(unwrap(self.bottleneck_layer), nn.Identity):
             x = torch.cat([concept_logits, residual], dim=-1)
@@ -231,6 +272,8 @@ class ConceptModel(nn.Module):
             ), f"When additive, the concept and residual should have the same shape, but they are {x_concepts.shape} and {attended_residual.shape}"
             x = x_concepts.detach() + attended_residual
         # Get target logits
+        # x = self.concept_residual_concat(x)
+        x = self.concept_residual_concat(x)
         target_logits = self.target_network(
             x, concepts=concepts, intervention_idxs=intervention_idxs.detach()
         )
@@ -308,22 +351,32 @@ class ConceptModel(nn.Module):
         concepts: Tensor,
         intervention_idxs: Tensor,
         train: bool = False,
+        detach=True,
+        get_concept_pred=True,
     ) -> Tensor:
         """
         Compute concept group scores.
         """
-        concept_preds = self.get_concept_predictions(concept_logits)
-        concept_preds = (
-            concept_preds.detach() * (1 - intervention_idxs)
-            + concepts * intervention_idxs
-        )
+        if get_concept_pred:
+            concept_preds = self.get_concept_predictions(concept_logits)
+        else:
+            concept_preds = concept_logits
+        if detach:
+            concept_preds = (
+                concept_preds.detach() * (1 - intervention_idxs)
+                + concepts * intervention_idxs
+            )
+        else:
+            concept_preds = (
+                concept_preds * (1 - intervention_idxs) + concepts * intervention_idxs
+            )
         attended_residual = self.cross_attention(
             concept_preds, residual, intervention_idxs.detach()
         )
         if not self.additive_residual:
-            x = torch.cat([concept_preds.detach(), attended_residual], dim=-1)
+            x = torch.cat([concept_preds, attended_residual], dim=-1)
         else:
-            x = concept_preds.detach() + attended_residual
+            x = concept_preds + attended_residual
 
         target_logits = self.target_network(
             x, concepts=concepts, intervention_idxs=intervention_idxs.detach()
@@ -370,8 +423,9 @@ class ConceptLightningModel(pl.LightningModule):
         complete_intervention_weight=0,
         patience=15,
         focal_loss=False,
-        torch_explain = False,
+        torch_explain=False,
         freeze_base_model=False,
+        return_auc=False,
         **kwargs,
     ):
         """
@@ -431,6 +485,7 @@ class ConceptLightningModel(pl.LightningModule):
         self.patience = patience
         self.intervention_aware = self.concept_model.intervention_aware
         self.torch_explain = torch_explain
+        self.return_auc = return_auc
 
     def dummy_pass(self, loader: Iterable[ConceptBatch]):
         """
@@ -747,20 +802,20 @@ class ConceptLightningModel(pl.LightningModule):
             #     pos_weight =  self.concept_loss_fn.pos_weight
             #     bce_loss = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction='none')
             #     per_sample_bce = bce_loss(concept_logits, concepts)
-                
+
             #     # If per_sample_bce is [batch_size, num_classes], take mean over classes
             #     if len(per_sample_bce.shape) > 1:
             #         per_sample_bce = per_sample_bce.mean(dim=1)
-                
+
             #     # Calculate certainty weights from concept logvars
             #     # Lower logvar = higher certainty = higher weight
             #     # We take the mean across all concepts for each sample
             #     certainty_weights = torch.exp(-0.5 * concept_logvars.mean(dim=1))
-                
+
             #     # Normalize weights to sum to batch size (to keep overall loss magnitude similar)
             #     batch_size = certainty_weights.size(0)
             #     normalized_weights = certainty_weights * (batch_size / certainty_weights.sum())
-                
+
             #     # Apply weights to the BCE loss
             #     concept_loss = (per_sample_bce * normalized_weights).mean()
             # try:
@@ -784,12 +839,16 @@ class ConceptLightningModel(pl.LightningModule):
                 net_y = self.concept_model.target_network.module
             if not isinstance(net_y, nn.Linear):
                 net_y = net_y[1]
-            A = net_y.weight.abs().sum(0)
+            A = net_y.weight
+            concept_dim = concept_logits.shape[-1]
+            A_residual = A[
+                :, concept_dim:
+            ]  # Only keep the weights corresponding to the residual transform
 
             def compute_l1_loss(w):
-                return torch.abs(w).sum()
+                return torch.abs(w).sum() / w.shape[0]
 
-            reg_loss = compute_l1_loss(A)
+            reg_loss = compute_l1_loss(A_residual)
 
         elif self.reg_type == "eye":
             if type(self.concept_model.target_network) == Chain:
@@ -836,7 +895,7 @@ class ConceptLightningModel(pl.LightningModule):
             optimizer = torch.optim.AdamW(
                 self.concept_model.parameters(),
                 lr=self.lr,
-                weight_decay=self.weight_decay
+                weight_decay=self.weight_decay,
             )
         elif self.chosen_optim == "sgd":
             optimizer = torch.optim.SGD(
@@ -888,7 +947,7 @@ class ConceptLightningModel(pl.LightningModule):
             Dataset split
         """
         (data, concepts), targets = batch
-        t1 = time.time()
+        # t1 = time.time()
         if self.training and self.intervention_aware:
             mask = torch.bernoulli(
                 torch.ones_like(concepts[0]) * self.training_intervention_prob,
@@ -901,7 +960,6 @@ class ConceptLightningModel(pl.LightningModule):
             intervention_idxs = intervention_idxs
         else:
             intervention_idxs = torch.zeros_like(concepts)
-
 
         outputs = self.concept_model(
             data,
@@ -937,7 +995,6 @@ class ConceptLightningModel(pl.LightningModule):
             intervention_target_logits, targets
         )
 
-
         loss = (
             self.alpha * concept_loss
             + self.beta * residual_loss
@@ -946,29 +1003,31 @@ class ConceptLightningModel(pl.LightningModule):
             + self.intervention_task_loss_weight * intervention_task_loss
             + self.complete_intervention_weight * complete_intervention_loss
         )
+
         if self.torch_explain:
-            entropy_loss = te.nn.functional.entropy_logic_loss(self.concept_model.target_network.module)
+            entropy_loss = te.nn.functional.entropy_logic_loss(
+                self.concept_model.target_network.module
+            )
             loss += 0.0001 * entropy_loss
             self.log("entropy_loss", entropy_loss, **self.log_kwargs)
 
         self.log(f"{split}_loss", loss, **self.log_kwargs)
-        
+
         if split != "train":
             # Track baseline accuracy
             outputs = self.concept_model(
                 data, concepts=concepts, intervention_idxs=intervention_idxs
             )
             _, _, target_logits_baseline = outputs
-            
+
             acc_base = accuracy(target_logits_baseline, targets)
             self.log(f"{split}_acc", acc_base, **self.log_kwargs)
+            if self.return_auc:
+                auroc_score_baseline = auroc(target_logits_baseline, targets)
+                self.log(f"{split}_auroc", auroc_score_baseline, **self.log_kwargs)
 
-            auroc_score_baseline = auroc(target_logits_baseline, targets)
-            self.log(f"{split}_auroc", auroc_score_baseline, **self.log_kwargs)
-
-
-        auroc_score = auroc(intervention_target_logits, targets)
-        self.log(f"{split}_intervention_auroc", auroc_score, **self.log_kwargs)
+                auroc_score = auroc(intervention_target_logits, targets)
+                self.log(f"{split}_intervention_auroc", auroc_score, **self.log_kwargs)
 
         intervention_acc = accuracy(intervention_target_logits, targets)
         self.log(f"{split}_intervention_acc", intervention_acc, **self.log_kwargs)
@@ -984,7 +1043,7 @@ class ConceptLightningModel(pl.LightningModule):
             concept_rmse = F.mse_loss(concept_logits, concepts).sqrt()
             self.log(f"{split}_concept_rmse", concept_rmse, **self.log_kwargs)
         t2 = time.time()
-        print(t2 - t1)
+        # print(t2 - t1)
 
         return loss
 
@@ -1047,14 +1106,14 @@ class ConceptLightningModel(pl.LightningModule):
             if not self.intervention_aware:
                 # Randomly select an intervention index
                 available_mask = (intervention_idxs == 0).float()
-    
+
                 # Set very low probability for already intervened concepts
                 scores = torch.where(
                     available_mask == 1,
                     torch.zeros_like(intervention_idxs),
-                    torch.ones_like(intervention_idxs) * (-1000)
+                    torch.ones_like(intervention_idxs) * (-1000),
                 )
-                
+
                 # Use gumbel_softmax for random selection, just like in intervention_aware case
                 selected_groups = torch.nn.functional.gumbel_softmax(
                     scores,
@@ -1115,13 +1174,10 @@ class ConceptLightningModel(pl.LightningModule):
             )
         else:
             intervention_idxs = None
-        t1 = time.time()
-        print(f"Intervention mask time {t1 - t0}")
 
-        res = self.step(batch, split="test", intervention_idxs=intervention_idxs)
-        t2 = time.time()
-        print(f"Forward time {t2 - t1}")
+        # print(f"Forward time {t2 - t1}")
         with torch.no_grad():
+            res = self.step(batch, split="test", intervention_idxs=intervention_idxs)
             if return_intervention_idxs:
                 return (
                     res,
@@ -1142,8 +1198,8 @@ class ConceptLightningModel(pl.LightningModule):
 
         (data, concepts), targets = batch
         forw = self.concept_model.forward(
-                data, concepts, intervention_idxs=intervention_idxs
-            )
+            data, concepts, intervention_idxs=intervention_idxs
+        )
         return (
             forw,
             intervention_idxs,

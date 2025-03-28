@@ -149,7 +149,7 @@ def generate_data(
             result = []
             binary_repr = []
             concepts = concepts[selected]
-            #print(selected)
+            # print(selected)
             for i in range(0, concepts.shape[-1], width):
                 binary_repr.append(str(int(np.sum(concepts[i : i + width]) > 0)))
             return int("".join(binary_repr), 2)
@@ -161,7 +161,7 @@ def generate_data(
             target_transform=lambda x: x[0].long() - 1,
             target_type=["attr"],
         )
-
+        print(celeba_train_data.attr)
         concept_freq = (
             np.sum(celeba_train_data.attr.cpu().detach().numpy(), axis=0)
             / celeba_train_data.attr.shape[0]
@@ -177,8 +177,12 @@ def generate_data(
             "num_concepts",
             celeba_train_data.attr.shape[-1],
         )
+        print("sorted_concepts")
+        print(sorted_concepts)
         concept_idxs = sorted_concepts[:num_concepts]
         concept_idxs = sorted(concept_idxs)
+        print("these concepts are chosen")
+        print(concept_idxs)
         if config.get("num_hidden_concepts", 0):
             num_hidden = config.get("num_hidden_concepts", 0)
             hidden_concepts = sorted(
@@ -190,7 +194,9 @@ def generate_data(
             )
         else:
             hidden_concepts = []
-        #print(concept_idxs, hidden_concepts)
+        print("these are the hidden concepts")
+        print(hidden_concepts)
+        # print(concept_idxs, hidden_concepts)
         logging.debug(f"Selecting concepts: {concept_idxs}")
         logging.debug(f"\tAnd hidden concepts: {hidden_concepts}")
 

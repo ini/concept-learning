@@ -21,9 +21,14 @@ from .celeba import generate_data as celeba_generate_data
 from .aa2 import AA2
 from .cxr import MIMIC_CXR, CheX_Dataset
 import torchxrayvision as xrv
+from .cifar import SUPERCLASSES
 
 DATASET_INFO = {
-    "mnist_modulo": {"concept_type": "binary", "concept_dim": 5, "num_classes": 10},
+    "mnist_modulo": {
+        "concept_type": "binary",
+        "concept_dim": 5,
+        "num_classes": 10,
+    },
     "pitfalls_mnist_without_45": {
         "concept_type": "binary",
         "concept_dim": 2,
@@ -44,19 +49,30 @@ DATASET_INFO = {
         "concept_dim": 3,
         "num_classes": 2,
     },
-    "cifar100": {"concept_type": "binary", "concept_dim": 20, "num_classes": 100},
+    "cifar100": {
+        "concept_type": "binary",
+        "concept_dim": 20,
+        "num_classes": 100,
+        "class_names": list(SUPERCLASSES.keys()),
+    },
     "cub": {"concept_type": "binary", "concept_dim": 112, "num_classes": 200},
     "oai": {"concept_type": "continuous", "concept_dim": 10, "num_classes": 4},
     "oai_binary": {"concept_type": "binary", "concept_dim": 40, "num_classes": 4},
     "imagenet": {"concept_type": "binary", "concept_dim": 65, "num_classes": 1000},
     "celeba": {"concept_type": "binary", "concept_dim": 6, "num_classes": 256},
     "aa2": {"concept_type": "binary", "concept_dim": 85, "num_classes": 50},
-    "mimic_cxr": {"cardiomegaly": {"concept_type": "binary", "concept_dim": 60, "num_classes": 2},\
-                    "effusion": {"concept_type": "binary", "concept_dim": 90, "num_classes": 2},\
-                    "edema": {"concept_type": "binary", "concept_dim": 62, "num_classes": 2},\
-                    "pneumonia": {"concept_type": "binary", "concept_dim": 97, "num_classes": 2},\
-                    "pneumothorax": {"concept_type": "binary", "concept_dim": 35, "num_classes": 2},
-                    "cardiomegaly_transfer": {"concept_type": "binary", "concept_dim": 60, "num_classes": 2},},
+    "mimic_cxr": {
+        "cardiomegaly": {"concept_type": "binary", "concept_dim": 60, "num_classes": 2},
+        "effusion": {"concept_type": "binary", "concept_dim": 90, "num_classes": 2},
+        "edema": {"concept_type": "binary", "concept_dim": 62, "num_classes": 2},
+        "pneumonia": {"concept_type": "binary", "concept_dim": 97, "num_classes": 2},
+        "pneumothorax": {"concept_type": "binary", "concept_dim": 35, "num_classes": 2},
+        "cardiomegaly_transfer": {
+            "concept_type": "binary",
+            "concept_dim": 60,
+            "num_classes": 2,
+        },
+    },
 }
 
 
@@ -67,7 +83,7 @@ def get_datasets(
     resize_oai: bool = True,
     num_concepts: int = -1,
     backbone: str = "resnet34",
-    subset = "cardiomegaly",
+    subset="cardiomegaly",
 ) -> tuple[Dataset, Dataset, Dataset]:
     """
     Get train, validation, and test splits for the given dataset.
@@ -161,7 +177,7 @@ def get_datasets(
         test_dataset = CIFAR100(
             root=data_dir, train=False, transform=transform_test, download=True
         )
-    
+
     elif dataset_name == "mimic_cxr":
         if backbone == "vit_b_16":
             transform_train = transforms.Compose(
@@ -234,22 +250,22 @@ def get_datasets(
                 ]
             )
         if subset == "cardiomegaly_transfer":
-            train_dataset = CheX_Dataset(split='train', transform=transform_train)
+            train_dataset = CheX_Dataset(split="train", transform=transform_train)
 
-            test_dataset = CheX_Dataset(split='val', transform=transform_test)
+            test_dataset = CheX_Dataset(split="val", transform=transform_test)
 
-            val_dataset = CheX_Dataset(split='val', transform=transform_test)
+            val_dataset = CheX_Dataset(split="val", transform=transform_test)
         else:
             train_dataset = MIMIC_CXR(
-                root=data_dir,subset=subset, split="train", transform=transform_train
+                root=data_dir, subset=subset, split="train", transform=transform_train
             )
 
             test_dataset = MIMIC_CXR(
-                root=data_dir,subset=subset, split="test", transform=transform_test
+                root=data_dir, subset=subset, split="test", transform=transform_test
             )
 
             val_dataset = MIMIC_CXR(
-                root=data_dir,subset=subset, split="val", transform=transform_test
+                root=data_dir, subset=subset, split="val", transform=transform_test
             )
 
     elif dataset_name == "cub":
@@ -422,7 +438,7 @@ def get_datamodule(
     resize_oai: bool = True,
     num_concepts: int = -1,
     backbone: str = "resnet34",
-    subset = "cardiomegaly",
+    subset="cardiomegaly",
 ) -> pl.LightningDataModule:
     """
     Get a LightningDataModule for the specified dataset.
@@ -439,7 +455,12 @@ def get_datamodule(
         Number of workers for the data loaders
     """
     train_dataset, val_dataset, test_dataset = get_datasets(
-        dataset_name, data_dir, resize_oai, num_concepts, backbone=backbone, subset=subset
+        dataset_name,
+        data_dir,
+        resize_oai,
+        num_concepts,
+        backbone=backbone,
+        subset=subset,
     )
 
     return pl.LightningDataModule.from_datasets(
@@ -466,7 +487,11 @@ def get_dummy_batch(
         Directory where data is stored (or will be downloaded to)
     """
     loader = get_datamodule(
-        dataset_name, data_dir, num_concepts=num_concepts, backbone=backbone, subset=subset
+        dataset_name,
+        data_dir,
+        num_concepts=num_concepts,
+        backbone=backbone,
+        subset=subset,
     ).train_dataloader()
     return next(iter(loader))
 
@@ -500,7 +525,9 @@ def get_concept_loss_fn(
             subset_name = f"_{subset}"
         else:
             subset_name = ""
-        weights_path = os.path.join(data_dir, f"{dataset_name}{subset_name}_pos_weights.pt")
+        weights_path = os.path.join(
+            data_dir, f"{dataset_name}{subset_name}_pos_weights.pt"
+        )
 
         if os.path.exists(weights_path):
             # Load the pos_weight tensor if it already exists
@@ -561,7 +588,9 @@ def get_target_loss_weights(
             subset_name = f"_{subset}"
         else:
             subset_name = ""
-        weights_path = os.path.join(data_dir, f"{dataset_name}{subset_name}_class_weights.pt")
+        weights_path = os.path.join(
+            data_dir, f"{dataset_name}{subset_name}_class_weights.pt"
+        )
 
         if os.path.exists(weights_path):
             # Load the class weight tensor if it already exists
@@ -594,7 +623,7 @@ def get_target_loss_weights(
         # breakpoint()
 
         return nn.CrossEntropyLoss(weight=class_weights)
-    
+
 
 class RandomTranslation:
     """

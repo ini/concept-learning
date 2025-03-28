@@ -51,3 +51,6 @@ local_settings.py
 
 # Extra
 plot_oai.py
+example_configs/*
+final_plots/*
+*.ipynb

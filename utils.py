@@ -14,6 +14,7 @@ from open_clip import create_model_from_pretrained, get_tokenizer
 from transformers import ViTForImageClassification
 import torchxrayvision as xrv
 import skimage, torch, torchvision
+
 ### Torch
 from torchmetrics import AUROC
 import torch_explain as te
@@ -165,8 +166,10 @@ def make_explain_mlp(
         Activation function for the output layer
     """
     hidden_layers = []
-    hidden_layers.append(te.nn.EntropyLinear(input_dim, hidden_dim, n_classes=output_dim),)
-    for _ in range(num_hidden_layers-1):
+    hidden_layers.append(
+        te.nn.EntropyLinear(input_dim, hidden_dim, n_classes=output_dim),
+    )
+    for _ in range(num_hidden_layers - 1):
         hidden_layers.append(nn.LazyLinear(hidden_dim))
         hidden_layers.append(nn.ReLU())
         if add_layer_norm:
@@ -207,7 +210,7 @@ def make_cnn(
         model = torch.compile(model)
         return model
     elif cnn_type == "densenet121":
-        #transform = torchvision.transforms.Compose([xrv.datasets.XRayCenterCrop(),xrv.datasets.XRayResizer(224)])
+        # transform = torchvision.transforms.Compose([xrv.datasets.XRayCenterCrop(),xrv.datasets.XRayResizer(224)])
         # model = xrv.models.DenseNet(weights="densenet121-res224-all")
         # model.classifier = nn.Linear(1024, output_dim, bias=True)
         # model.op_threshs = None
@@ -218,7 +221,7 @@ def make_cnn(
         )
         model.classifier = nn.Linear(model.classifier.in_features, output_dim)
         model = model.to(dtype=torch.bfloat16)
-        #model = torch.compile(model)
+        # model = torch.compile(model)
         return model
     elif cnn_type == "vit_b_16":
         model_name = "google/vit-base-patch16-224"
@@ -233,7 +236,7 @@ def make_cnn(
         #     weights=ViT_B_16_Weights.IMAGENET1K_V1 if load_weights else None
         # )
         # model.heads = nn.Sequential(nn.Linear(model.heads[0].in_features, output_dim))
-        #model = torch.compile(model)
+        # model = torch.compile(model)
         # model = model.to(dtype=torch.bfloat16)
         return model
 
