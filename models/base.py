@@ -295,7 +295,7 @@ class ConceptModel(nn.Module):
         if target_logits.shape[-1] == 1:
             target_logits = target_logits.squeeze(-1)
 
-        return concept_logits, [residual, target_logits
+        return concept_logits, residual, target_logits
 
     def get_concept_predictions(self, concept_logits: Tensor) -> Tensor:
         """
