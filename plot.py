@@ -2933,7 +2933,7 @@ def plot_mean_attribution(
 if __name__ == "__main__":
     PLOT_FUNCTIONS = {
         # "neg_intervention": plot_negative_interventions,
-        # "pos_intervention": plot_positive_interventions,
+       [] "pos_intervention": plot_positive_interventions,
         # "random": plot_random_concepts_residual,
         # "concept_pred": plot_concept_predictions,
         # "all_concept_pred": plot_all_concept_predictions,
@@ -2957,7 +2957,7 @@ if __name__ == "__main__":
         # ),
         # "plot_threshold_fitting": plot_threshold_fitting,
         # "mutual_info": plot_mutual_info,
-        "posthoc_cbm": plot_posthoc_cbm_performance,
+        # "posthoc_cbm": plot_posthoc_cbm_performance,
     }
 
     parser = argparse.ArgumentParser()
