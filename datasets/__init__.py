@@ -60,7 +60,7 @@ DATASET_INFO = {
     "oai_binary": {"concept_type": "binary", "concept_dim": 40, "num_classes": 4},
     "imagenet": {"concept_type": "binary", "concept_dim": 65, "num_classes": 1000},
     "celeba": {"concept_type": "binary", "concept_dim": 6, "num_classes": 256},
-    "aa2": {"concept_type": "binary", "concept_dim": 85, "num_classes": 50},
+    "aa2": {"concept_type": "binary", "concept_dim": 6, "num_classes": 50},
     "mimic_cxr": {
         "cardiomegaly": {"concept_type": "binary", "concept_dim": 60, "num_classes": 2},
         "effusion": {"concept_type": "binary", "concept_dim": 90, "num_classes": 2},
@@ -390,7 +390,8 @@ def get_datasets(
 
         transform_train = transforms.Compose(
             [
-                transforms.RandomCrop(32, padding=4),
+                transforms.RandomResizedCrop(224),
+                transforms.Resize(32),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 normalize,
@@ -398,6 +399,11 @@ def get_datasets(
         )
         transform_test = transforms.Compose(
             [
+                transforms.Resize(
+                    256
+                ),  # Resize image so its shortest side is 256 pixels
+                transforms.CenterCrop(224),
+                transforms.Resize(32),
                 transforms.ToTensor(),
                 normalize,
             ]

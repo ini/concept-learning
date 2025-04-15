@@ -1,4 +1,5 @@
 import os
+from models.partial_prob_crm import PartialProbabilisticConceptModel
 import ray
 import torch.nn as nn
 import torch
@@ -134,6 +135,23 @@ def make_concept_model(config: dict) -> ConceptModel:
                 residual_network=Apply(lambda x: x[..., 2 * concept_dim :]),
                 target_network=target_network,
                 bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
+                cross_attention=cross_attention,
+                concept_rank_model=concept_rank_model,
+                **config,
+            )
+        elif config.get("model_type") == "mi_residual_info_bottleneck":
+            return PartialProbabilisticConceptModel(
+                base_network=make_cnn(
+                    2 * residual_dim + concept_dim,
+                    cnn_type=backbone,
+                    load_weights=True,
+                ),
+                concept_network=Apply(lambda x: x[..., :concept_dim]),
+                residual_network=Apply(lambda x: x[..., concept_dim:]),
+                target_network=target_network,
+                bottleneck_layer=make_bottleneck_layer(
+                    residual_dim + concept_dim, **config
+                ),
                 cross_attention=cross_attention,
                 concept_rank_model=concept_rank_model,
                 **config,

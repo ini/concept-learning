@@ -99,6 +99,8 @@ class ConceptModel(nn.Module):
         additive_residual=False,
         intervention_aware=True,
         freeze_base_model=False,
+        residual_dim=None,
+        layer_norm_weight=None,
         **kwargs,
     ):
         """
@@ -123,6 +125,12 @@ class ConceptModel(nn.Module):
         cross_attention = cross_attention or Apply(lambda *args: args[1])
         self.freeze_base_model = freeze_base_model
         self.concept_residual_concat = nn.Identity()
+        self.layer_norm_weight = layer_norm_weight
+        if layer_norm_weight is not None:
+            self.layer_norm = nn.LayerNorm(
+                residual_dim,
+                eps=1e-6,
+            )
 
         def freeze_layers_except_final(model, final_layer_name="fc", freeze_all=False):
             """
@@ -181,6 +189,7 @@ class ConceptModel(nn.Module):
             super().load_state_dict(modified_state_dict, strict=False)
         self.negative_intervention = False
         self.additive_residual = additive_residual
+        self.threshold = None
 
     def forward(
         self,
@@ -207,6 +216,8 @@ class ConceptModel(nn.Module):
         target_logits : Tensor
             Target logits
         """
+        # print(concepts[0])
+        # print(x[0])
         # if negative intervention, invert accurate concepts
         if concepts is not None and self.negative_intervention:
             concepts = 1 - concepts
@@ -235,7 +246,9 @@ class ConceptModel(nn.Module):
             concepts = torch.zeros_like(concept_logits).to(x.device)
 
         residual = self.residual_network(x, concepts=concepts)
-        # residual = self.concept_residual_concat(residual)
+        if self.layer_norm_weight is not None:
+            residual = self.layer_norm_weight * self.layer_norm(residual)
+        residual = self.concept_residual_concat(residual)
         # Process concept logits & residual via bottleneck layer
         if not isinstance(unwrap(self.bottleneck_layer), nn.Identity):
             x = torch.cat([concept_logits, residual], dim=-1)
@@ -264,6 +277,8 @@ class ConceptModel(nn.Module):
         attended_residual = self.cross_attention(
             x_concepts, residual, intervention_idxs.detach()
         )
+        # print(x_concepts[0])
+        # print(residual[0][0])
         if not self.additive_residual:
             x = torch.cat([x_concepts.detach(), attended_residual], dim=-1)
         else:
@@ -273,20 +288,22 @@ class ConceptModel(nn.Module):
             x = x_concepts.detach() + attended_residual
         # Get target logits
         # x = self.concept_residual_concat(x)
-        x = self.concept_residual_concat(x)
+        # x = self.concept_residual_concat(x)
         target_logits = self.target_network(
             x, concepts=concepts, intervention_idxs=intervention_idxs.detach()
         )
         if target_logits.shape[-1] == 1:
             target_logits = target_logits.squeeze(-1)
 
-        return concept_logits, residual, target_logits
+        return concept_logits, [residual, target_logits
 
     def get_concept_predictions(self, concept_logits: Tensor) -> Tensor:
         """
         Compute concept predictions from logits.
         """
         if self.concept_type == "binary":
+            if self.threshold is not None:
+                return (concept_logits.sigmoid() > self.threshold).float()
             return concept_logits.sigmoid()
         elif self.concept_type == "one_hot":
             return torch.nn.functional.gumbel_softmax(
@@ -426,6 +443,8 @@ class ConceptLightningModel(pl.LightningModule):
         torch_explain=False,
         freeze_base_model=False,
         return_auc=False,
+        delta=1.0,
+        mi_const=1.5,
         **kwargs,
     ):
         """
@@ -458,6 +477,9 @@ class ConceptLightningModel(pl.LightningModule):
         self.lr = lr
         self.alpha = alpha
         self.beta = beta
+        self.lamb = 0.0
+        self.lamb_lr = delta
+        self.MI_const = mi_const
         self.training_intervention_prob = training_intervention_prob
         self.max_horizon = max_horizon
         self.horizon_rate = horizon_rate
@@ -772,8 +794,12 @@ class ConceptLightningModel(pl.LightningModule):
             concept_logits, concept_logvars = concept_logits
         else:
             concept_logvars = None
-        if type(residual) == tuple:
+        if type(residual) == tuple and len(residual) == 2:
+            # full probabilistc
             residual, residual_logvars = residual
+        elif type(residual) == tuple and len(residual) == 4:
+            # partial probabilistic
+            residual, means, stds, logprob = residual
         else:
             residual_logvars = None
 
@@ -966,7 +992,8 @@ class ConceptLightningModel(pl.LightningModule):
             concepts=concepts,
             intervention_idxs=torch.ones_like(intervention_idxs),
         )
-        concept_logits, _, intervention_target_logits = outputs
+        concept_logits, residual, intervention_target_logits = outputs
+
         if type(concept_logits) == tuple:
             concept_logits, concept_logvars = concept_logits
 
@@ -991,6 +1018,22 @@ class ConceptLightningModel(pl.LightningModule):
             batch, outputs
         )
 
+        if hasattr(self.concept_model, "x_r_mi_loss"):
+            r_c_mi_loss = self.concept_model.x_r_mi_loss(
+                residual,
+            )
+            constraint = self.MI_const - r_c_mi_loss
+            self.lamb += self.lamb_lr * constraint.detach().cpu().numpy().item()
+
+            self.log(
+                f"{split}_r_c_mi_loss",
+                r_c_mi_loss,
+                **self.log_kwargs,
+            )
+        else:
+            r_c_mi_loss = torch.tensor(0.0, device=concept_logits.device)
+            constraint = torch.tensor(0.0, device=concept_logits.device)
+
         complete_intervention_loss = self.target_loss_fn(
             intervention_target_logits, targets
         )
@@ -998,6 +1041,7 @@ class ConceptLightningModel(pl.LightningModule):
         loss = (
             self.alpha * concept_loss
             + self.beta * residual_loss
+            + self.lamb * constraint
             + self.reg_gamma * reg_loss
             + self.intervention_weight * intervention_loss
             + self.intervention_task_loss_weight * intervention_task_loss

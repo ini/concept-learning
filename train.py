@@ -11,7 +11,13 @@ from datetime import datetime
 from pathlib import Path
 from ray.tune.schedulers import AsyncHyperBandScheduler
 
-from datasets import get_concept_loss_fn, get_target_loss_weights, get_dummy_batch, get_datamodule, DATASET_INFO
+from datasets import (
+    get_concept_loss_fn,
+    get_target_loss_weights,
+    get_dummy_batch,
+    get_datamodule,
+    DATASET_INFO,
+)
 from lightning_ray import LightningTuner, parse_args_dynamic
 from models import *
 from utils import cross_correlation, RayConfig
@@ -103,6 +109,9 @@ def make_concept_model(**config) -> ConceptLightningModel:
     elif model_type == "mi_residual_prob":
         model = experiment_module.make_concept_model(config)
         model = MutualInfoConceptLightningModel(model, **config)
+    elif model_type == "mi_residual_info_bottleneck":
+        model = experiment_module.make_concept_model(config)
+        model = MutualInfoConceptLightningModel(model, **config)
 
     # With concept embedding
     elif model_type == "cem":
@@ -148,7 +157,6 @@ def make_concept_model(**config) -> ConceptLightningModel:
         config.get("num_concepts", -1),
         config.get("backbone", "resnet34"),
         config.get("subset", None),
-
     )
     model.dummy_pass([batch])
 
@@ -205,7 +213,7 @@ if __name__ == "__main__":
         dataset_names = list(dataset_names.values())
     dataset_names = [dataset_names] if isinstance(dataset_names, str) else dataset_names
     subsets = []
-    #if type(config.get("subset", None)) == list
+    # if type(config.get("subset", None)) == list
     for dataset_name in dataset_names:
         get_datamodule(
             dataset_name,
@@ -233,6 +241,8 @@ if __name__ == "__main__":
     else:
         if config.get("dataset") == "mimic_cxr":
             metric_to_max = "val_intervention_auroc"
+        elif config.get("dataset") == "cub":
+            metric_to_max = "val_acc"
         else:
             metric_to_max = "val_intervention_acc"
         tuner = LightningTuner(

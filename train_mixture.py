@@ -96,40 +96,41 @@ def filter_eval_configs(configs: list[dict]) -> list[dict]:
     return configs_to_keep
 
 
-def evaluate(config: dict):
-    """
-    Evaluate a trained model.
+# def evaluate(config: dict):
+#     """
+#     Evaluate a trained model.
 
-    Parameters
-    ----------
-    config : dict
-        Evaluation configuration dictionary
-    """
-    metrics = {}
+#     Parameters
+#     ----------
+#     config : dict
+#         Evaluation configuration dictionary
+#     """
+#     metrics = {}
 
-    # Load model
-    tuner = LightningTuner("val_acc", "max")
-    model_path = tuner.load_model(
-        make_concept_model, config["train_result"], return_path=True
-    )
+#     # Load model
+#     tuner = LightningTuner("val_acc", "max")
+#     model_path = tuner.load_model(
+#         make_concept_model, config["train_result"], return_path=True
+#     )
 
-    config["base_model_ckpt"] = model_path
-    del config["train_result"]
-    run_config = tune.get_trial_context().run_config
-    assert 0, run_config
+#     config["base_model_ckpt"] = model_path
+#     del config["train_result"]
+#     run_config = tune.get_trial_context().run_config
 
-    tuner.fit(
-        make_concept_model,
-        make_datamodule,
-        param_space=config,
-        save_dir=config.get("save_dir"),
-        experiment_name=experiment_name,
-        num_workers_per_trial=config.get("num_workers", 1),
-        num_cpus_per_worker=config.get("num_cpus", 1),
-        num_gpus_per_worker=config.get("num_gpus", 1),
-        gpu_memory_per_worker=config.get("gpu_memory_per_worker", None),
-        groupby=config.get("groupby", []),
-    )
+#     breakpoint()
+
+#     tuner.fit(
+#         make_concept_model,
+#         make_datamodule,
+#         param_space=config,
+#         save_dir=config.get("save_dir"),
+#         experiment_name=experiment_name,
+#         num_workers_per_trial=config.get("num_workers", 1),
+#         num_cpus_per_worker=config.get("num_cpus", 1),
+#         num_gpus_per_worker=config.get("num_gpus", 1),
+#         gpu_memory_per_worker=config.get("gpu_memory_per_worker", None),
+#         groupby=config.get("groupby", []),
+#     )
 
 
 if __name__ == "__main__":
@@ -224,7 +225,7 @@ if __name__ == "__main__":
     index = parts.index(experiment_name)
     data_index = index + 1
     date = parts[data_index]
-    experiment_name = f"{experiment_name}/{date}/mixture"
+    experiment_name = f"{experiment_name}/{date}/posthoc_cbm"
 
     # filter out the train_resul model path, we want to load that
     tuner = LightningTuner("val_acc", "max")
@@ -236,8 +237,8 @@ if __name__ == "__main__":
         config["base_model_ckpt"] = model_path
         del config["train_result"]
         # update training mode
-        config["training_mode"] = "semi_independent"
-        config["lr"] = args.new_lr
+        # config["training_mode"] = "semi_independent"
+        # config["lr"] = args.new_lr
         config["max_epochs"] = args.new_epochs
 
     tuner = LightningTuner(

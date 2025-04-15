@@ -14,7 +14,6 @@ from utils import (
 from .celeba import CrossAttentionModel
 
 
-
 def make_concept_model(config: dict) -> ConceptModel:
     num_classes = config["num_classes"]
     concept_dim = config["concept_dim"]
@@ -58,10 +57,11 @@ def make_concept_model(config: dict) -> ConceptModel:
         model_cls = ConceptEmbeddingModel
         base_network = make_cnn(1000, cnn_type=backbone)
         concept_network, residual_network = make_concept_embedding_model(
-            1000, residual_dim, concept_dim, embedding_activation="leakyrelu")
+            1000, residual_dim, concept_dim, embedding_activation="leakyrelu"
+        )
     else:
         model_cls = ConceptModel
-        if config.get('separate_branches', False):
+        if config.get("separate_branches", False):
             base_network = nn.Identity()
             concept_network = make_cnn(bottleneck_dim, cnn_type=backbone)
             residual_network = make_cnn(bottleneck_dim, cnn_type=backbone)
@@ -71,7 +71,8 @@ def make_concept_model(config: dict) -> ConceptModel:
             residual_network = Apply(lambda x: x[..., concept_dim:])
         if config.get("cross", False) and residual_dim >= 4:
             cross_attention = CrossAttentionModel(
-                concept_dim, residual_dim, residual_dim, min(residual_dim, 8))
+                concept_dim, residual_dim, residual_dim, min(residual_dim, 8)
+            )
 
     target_network = make_mlp(
         num_classes,

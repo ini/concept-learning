@@ -83,12 +83,18 @@ class AA2(Dataset):
         animals_dict = load_animals(
             self.dataset_dir / "Animals_with_Attributes2" / "classes.txt"
         )
-        animals_class_to_idx = {v: int(k) - 1 for k, v in animals_dict.items()}
+        self.animals_class_to_idx = {v: int(k) - 1 for k, v in animals_dict.items()}
+        predicates_dict = load_animals(
+            self.dataset_dir / "Animals_with_Attributes2" / "predicates.txt"
+        )
+        self.predicates_name_to_idx = {
+            v: int(k) - 1 for k, v in predicates_dict.items()
+        }
         modified_idx_to_class = {
             v: k.replace("+", " ") for k, v in ds_all.class_to_idx.items()
         }
         self.idx_from_pytorch_to_true = {
-            k: animals_class_to_idx[v] for k, v in modified_idx_to_class.items()
+            k: self.animals_class_to_idx[v] for k, v in modified_idx_to_class.items()
         }
 
         self.predicate_matrix = np.loadtxt(
@@ -96,6 +102,22 @@ class AA2(Dataset):
             / "Animals_with_Attributes2"
             / "predicate-matrix-binary.txt"
         )
+        selected_predicate_names = [
+            "forager",
+            "white",
+            "solitary",
+            "small",
+            "fierce",
+            "plains",
+        ]
+
+        # Create an array of indices for these predicates
+        selected_indices = [
+            self.predicates_name_to_idx[name] for name in selected_predicate_names
+        ]
+        self.selected_predicates = selected_predicate_names
+        self.selected_predicates_indices = selected_indices
+        self.predicate_matrix = self.predicate_matrix[:, selected_indices]
 
     def download(self):
         """
@@ -117,6 +139,8 @@ class AA2(Dataset):
         return (image, self.get_concepts(label)), label
 
     def get_concepts(self, label: int):
+
+        # Define which predicates you want to keep
         return torch.tensor(self.predicate_matrix[label]).float()
 
     # def get_concepts(self, label: int):

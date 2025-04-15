@@ -1,8 +1,14 @@
 import os
+from models.partial_prob_crm import PartialProbabilisticConceptModel
 import ray
 import torch.nn as nn
 
-from models import ConceptModel, ConceptEmbeddingModel, make_bottleneck_layer, ProbabilisticConceptModel
+from models import (
+    ConceptModel,
+    ConceptEmbeddingModel,
+    make_bottleneck_layer,
+    ProbabilisticConceptModel,
+)
 from nn_extensions import Apply
 from utils import (
     make_cnn,
@@ -75,7 +81,7 @@ class CrossAttentionModel(nn.Module):
         combined_residuals = (
             residuals_norm.squeeze(0) + self.scale * attended_residuals
         )  # (batch_size, embed_dim)
-        
+
         # Project to input_dim_r if dimensions don't match
         combined_residuals = self.proj(combined_residuals)
         return combined_residuals
@@ -146,8 +152,13 @@ def make_concept_model(config: dict) -> ConceptModel:
         bottleneck_dim = (
             concept_dim * residual_dim
         )  # residual dim is the size of the concept embedding for cem
-    elif config.get("model_type") == "mi_residual_prob" or config.get("model_type") == "latent_residual_prob":
-        bottleneck_dim = 2*concept_dim + 2*residual_dim
+    elif (
+        config.get("model_type") == "mi_residual_prob"
+        or config.get("model_type") == "latent_residual_prob"
+    ):
+        bottleneck_dim = 2 * concept_dim + 2 * residual_dim
+    elif config.get("model_type") == "mi_residual_info_bottleneck":
+        bottleneck_dim = concept_dim + residual_dim
     else:
         bottleneck_dim = concept_dim + residual_dim
 
@@ -178,11 +189,12 @@ def make_concept_model(config: dict) -> ConceptModel:
             + (int_model_layers or [256, 128])  # + previous interventions
             + [concept_dim]
         )
-    elif config.get("model_type") == "mi_residual_prob" or config.get("model_type") == "latent_residual_prob":
+    elif (
+        config.get("model_type") == "mi_residual_prob"
+        or config.get("model_type") == "latent_residual_prob"
+    ):
         units = (
-            [
-                2*concept_dim + 2*residual_dim
-            ]  # Bottleneck  # Prev interventions
+            [2 * concept_dim + 2 * residual_dim]  # Bottleneck  # Prev interventions
             + (int_model_layers or [256, 128])
             + [concept_dim]
         )
@@ -254,14 +266,34 @@ def make_concept_model(config: dict) -> ConceptModel:
             )
         else:
             cross_attention = PassThrough(concept_dim, residual_dim, residual_dim, 8)
-        
-        if config.get("model_type") == "mi_residual_prob" or config.get("model_type") == "latent_residual_prob":
+
+        if (
+            config.get("model_type") == "mi_residual_prob"
+            or config.get("model_type") == "latent_residual_prob"
+        ):
             return ProbabilisticConceptModel(
                 base_network=make_cnn(bottleneck_dim, cnn_type=backbone),
-                concept_network=Apply(lambda x: x[..., :2*concept_dim]),
-                residual_network=Apply(lambda x: x[..., 2*concept_dim:]),
+                concept_network=Apply(lambda x: x[..., : 2 * concept_dim]),
+                residual_network=Apply(lambda x: x[..., 2 * concept_dim :]),
                 target_network=target_network,
                 bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
+                cross_attention=cross_attention,
+                concept_rank_model=concept_rank_model,
+                **config,
+            )
+        elif config.get("model_type") == "mi_residual_info_bottleneck":
+            return PartialProbabilisticConceptModel(
+                base_network=make_cnn(
+                    2 * residual_dim + concept_dim,
+                    cnn_type=backbone,
+                    load_weights=True,
+                ),
+                concept_network=Apply(lambda x: x[..., :concept_dim]),
+                residual_network=Apply(lambda x: x[..., concept_dim:]),
+                target_network=target_network,
+                bottleneck_layer=make_bottleneck_layer(
+                    residual_dim + concept_dim, **config
+                ),
                 cross_attention=cross_attention,
                 concept_rank_model=concept_rank_model,
                 **config,

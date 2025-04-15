@@ -8,7 +8,7 @@ def get_config(**kwargs) -> dict:
         "model_type": tune.grid_search(
             ["latent_residual", "decorrelated_residual", "mi_residual"]
         ),
-        "residual_dim": tune.grid_search([1, 2, 4, 8, 16, 32, 64, 128]),
+        "residual_dim": 32,  # tune.grid_search([1, 2, 4, 8, 16, 32, 64, 128]),
         "lr": 1e-4,
         "num_epochs": 300,
         "momentum": 0.9,
@@ -25,7 +25,7 @@ def get_config(**kwargs) -> dict:
         "cw_alignment_frequency": 20,
         "num_cpus": 8,
         "num_gpus": 1.0,
-        "num_samples": 5,
+        "num_samples": 1,
         "batch_size": 64,
         "checkpoint_frequency": 5,
         "norm_type": None,

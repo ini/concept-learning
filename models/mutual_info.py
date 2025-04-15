@@ -6,7 +6,8 @@ from torch import Tensor
 from typing import Any
 
 from .base import ConceptModel, ConceptLightningModel
-from lib.club import CLUB
+from lib.club import CLUB, CLUBSample
+from lib.mine import MINE
 
 
 class MutualInformationLoss(nn.Module):
@@ -15,7 +16,14 @@ class MutualInformationLoss(nn.Module):
     between x and y samples.
     """
 
-    def __init__(self, x_dim: int, y_dim: int, hidden_dim: int = 64, lr: float = 1e-3):
+    def __init__(
+        self,
+        x_dim: int,
+        y_dim: int,
+        hidden_dim: int = 64,
+        lr: float = 1e-3,
+        mi_type="club",
+    ):
         """
         Parameters
         ----------
@@ -29,7 +37,13 @@ class MutualInformationLoss(nn.Module):
             Learning rate for mutual information estimator optimizer
         """
         super().__init__()
-        self.mi_estimator = CLUB(x_dim, y_dim, hidden_dim)
+        if mi_type == "club":
+            self.mi_estimator = CLUB(x_dim, y_dim, hidden_dim)
+        elif mi_type == "sample":
+            self.mi_estimator = CLUBSample(x_dim, y_dim, hidden_dim)
+        elif mi_type == "mine":
+            self.mi_estimator = MINE(x_dim, y_dim, hidden_size=hidden_dim)
+
         self.mi_optimizer = torch.optim.RMSprop(self.mi_estimator.parameters(), lr=lr)
 
         # Freeze all params for MI estimator inference
@@ -215,6 +229,7 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
                 kwargs["concept_dim"],
                 hidden_dim=kwargs["mi_estimator_hidden_dim"],
                 lr=kwargs["mi_optimizer_lr"],
+                mi_type=kwargs.get("mi_type", "club"),
             )
         super().__init__(concept_model, residual_loss_fn=residual_loss_fn, **kwargs)
 
@@ -240,7 +255,7 @@ class MutualInfoConceptLightningModel(ConceptLightningModel):
                 concept_logits = concept_logits[0]
             if type(residual) == tuple:
                 residual = residual[0]
-            
+
             # Calculate mutual information estimator loss
             mi_estimator_loss = self.residual_loss_fn.step(residual, concepts)
             mi_estimate = self.residual_loss_fn(residual, concepts)

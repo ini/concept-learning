@@ -4,6 +4,7 @@ import copy
 import json
 from tqdm import tqdm
 import random
+from tqdm import tqdm
 
 # make sure slurm isn't exposed
 if "SLURM_NTASKS" in os.environ:
@@ -27,7 +28,7 @@ from ray import air, tune
 from torch import Tensor
 from torch.utils.data import DataLoader
 
-from datasets import DATASET_INFO
+from datasets import DATASET_INFO, get_concept_loss_fn
 from lightning_ray import LightningTuner
 from nn_extensions import Chain
 from models import ConceptLightningModel
@@ -135,6 +136,48 @@ def test_interventions(
         new_model = deepcopy(model)
         new_model.num_test_interventions = num_interventions
         new_model.concept_model.negative_intervention = negative
+
+        # new_model.concept_model.target_network = Chain(
+        #     intervention,
+        #     new_model.concept_model.target_network,
+        # )
+        results = test(new_model, test_loader)
+        if dataset != "mimic_cxr":
+            y[i] = results["test_acc"]
+        else:
+            y[i] = results["test_auroc"]
+
+    return {"x": x, "y": y}
+
+
+def test_threshold_fitting(
+    model: ConceptLightningModel,
+    test_loader: DataLoader,
+    dataset: str,
+) -> float:
+    """
+    Test model accuracy with concept interventions.
+
+    Parameters
+    ----------
+    model : ConceptLightningModel
+        Model to evaluate
+    test_loader : DataLoader
+        Test data loader
+    concept_dim : int
+        Dimension of concept vector
+    negative : bool
+        Whether to intervene with incorrect concept values
+    max_samples : int
+        Maximum number of interventions to test (varying the # of concepts intervened on)
+    """
+    x = np.linspace(0.45, 0.55, num=10, dtype=float)
+    # x = x[::-1]
+    y = np.zeros(len(x))
+    for i, threshold in enumerate(x):
+        # intervention = Intervention(num_interventions, negative=negative)
+        new_model = deepcopy(model)
+        new_model.concept_model.threshold = threshold
 
         # new_model.concept_model.target_network = Chain(
         #     intervention,
@@ -267,15 +310,23 @@ def test_mutual_info(
     num_mi_epochs : int
         Number of epochs to train mutual information estimator
     """
+    model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    print(
+        f"Using device: {torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU'}"
+    )
     # Get mutual information estimator
     (data, concepts), targets = next(iter(test_loader))
+    data = data.to(model.device)
+    concepts = concepts.to(model.device)
     _, residual, _ = model(data, concepts=concepts)
     concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
     mutual_info_estimator = MutualInformationLoss(residual_dim, concept_dim)
-
+    mutual_info_estimator = mutual_info_estimator.to(model.device)
     # Learn mutual information estimator
     for epoch in range(num_mi_epochs):
         for (data, concepts), targets in test_loader:
+            data = data.to(model.device)
+            concepts = concepts.to(model.device)
             with torch.no_grad():
                 _, residual, _ = model(data, concepts=concepts)
             mutual_info_estimator.step(residual, concepts)
@@ -283,11 +334,335 @@ def test_mutual_info(
     # Calculate mutual information
     mutual_infos = []
     for (data, concepts), target in test_loader:
+        data = data.to(model.device)
+        concepts = concepts.to(model.device)
         with torch.no_grad():
             _, residual, _ = model(data, concepts=concepts)
         mutual_infos.append(mutual_info_estimator(residual, concepts).item())
 
     return np.mean(mutual_infos)
+
+
+def test_counterfactual_2(
+    model: ConceptLightningModel,
+    test_loader: DataLoader,
+) -> float:
+    model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    print(
+        f"Using device: {torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU'}"
+    )
+    # Get mutual information estimator
+    (data, concepts), targets = next(iter(test_loader))
+    model.eval()
+    data = data.to(model.device)
+    concepts = concepts.to(model.device)
+    _, residual, _ = model(data, concepts=concepts)
+    if type(residual) == tuple:
+        residual = residual[0]
+    concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
+    base_ds = test_loader.dataset
+    predicate_matrix = base_ds.predicate_matrix
+    class_to_idx = base_ds.animals_class_to_idx
+    predicates_name_to_idx = {v: k for k, v in enumerate(base_ds.selected_predicates)}
+    accuracy_polar_list = []
+    accuracy_still_brown_list = []
+    accuracy_brown_list = []
+
+    for (data, concepts), target in test_loader:
+        data = data.to(model.device)
+        concepts = concepts.to(model.device)
+
+        mask = target == class_to_idx["grizzly bear"]
+        if mask.sum() > 0:
+            data_masked = data[mask]
+            concepts_masked = concepts[mask].clone()
+            concepts_masked_int = concepts_masked.clone()
+            target_polar = (
+                (torch.ones_like(target[mask]) * class_to_idx["polar bear"])
+                .to(target.dtype)
+                .to(model.device)
+            ).clone()
+            target_grizzly = (
+                (torch.ones_like(target[mask]) * class_to_idx["grizzly bear"])
+                .to(target.dtype)
+                .to(model.device)
+            ).clone()
+            with torch.no_grad():
+                intervention_idxs = torch.ones_like(concepts_masked)
+                # intervene on the white concept
+                concepts_masked_int[:, predicates_name_to_idx["white"]] = 1
+                _, residual, y_pred_polar = model(
+                    data_masked,
+                    concepts=concepts_masked_int,
+                    intervention_idxs=intervention_idxs,
+                )
+                _, residual, y_pred_brown = model(
+                    data_masked,
+                    concepts=concepts_masked,
+                    intervention_idxs=intervention_idxs,
+                )
+                # breakpoint()
+                correct_pred_polar = (
+                    (y_pred_polar.argmax(dim=-1) == target_polar).float().cpu().numpy()
+                )
+                accuracy_polar_list.append(correct_pred_polar)
+
+                incorrect_still_brown = (
+                    (y_pred_polar.argmax(dim=-1) == target_grizzly)
+                    .float()
+                    .cpu()
+                    .numpy()
+                )
+                accuracy_still_brown_list.append(incorrect_still_brown)
+
+                correct_pred_grizzly = (
+                    (y_pred_brown.argmax(dim=-1) == target_grizzly)
+                    .float()
+                    .cpu()
+                    .numpy()
+                )
+                accuracy_brown_list.append(correct_pred_grizzly)
+
+    return [
+        np.mean(np.concatenate(accuracy_polar_list)),
+        np.mean(np.concatenate(accuracy_still_brown_list)),
+        np.mean(np.concatenate(accuracy_brown_list)),
+    ]
+
+
+def test_counterfactual(
+    model: ConceptLightningModel,
+    test_loader: DataLoader,
+) -> tuple:
+    model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    print(
+        f"Using device: {torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU'}"
+    )
+    # Get mutual information estimator
+    (data, concepts), targets = next(iter(test_loader))
+    model.eval()
+    data = data.to(model.device)
+    concepts = concepts.to(model.device)
+    _, residual, _ = model(data, concepts=concepts)
+    if type(residual) == tuple:
+        residual = residual[0]
+    concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
+    base_ds = test_loader.dataset
+    predicate_matrix = base_ds.predicate_matrix
+    class_to_idx = base_ds.animals_class_to_idx
+    predicates_name_to_idx = {v: k for k, v in enumerate(base_ds.selected_predicates)}
+
+    # Lists to store original and predicted classes
+    original_classes = []
+    predicted_classes_after_intervention = []
+
+    for (data, concepts), target in test_loader:
+        data = data.to(model.device)
+        concepts = concepts.to(model.device)
+
+        mask = target == class_to_idx["grizzly bear"]
+        if mask.sum() > 0:
+            data_masked = data[mask]
+            concepts_masked = concepts[mask].clone()
+            concepts_masked_int = concepts_masked.clone()
+
+            # Store original class (should all be grizzly bear based on the mask)
+            # original_classes.extend([class_to_idx["grizzly bear"]] * mask.sum().item())
+
+            with torch.no_grad():
+                intervention_idxs = torch.ones_like(concepts_masked)
+                _, _, y_pred_grizzly = model(
+                    data_masked,
+                    concepts=concepts_masked,
+                    intervention_idxs=intervention_idxs,
+                )
+                # Store what the predictions were before intervention
+                predictions = y_pred_grizzly.argmax(dim=-1).cpu().numpy().tolist()
+                original_classes.extend(predictions)
+                # intervene on the white concept
+                concepts_masked_int[:, predicates_name_to_idx["white"]] = 1
+                _, _, y_pred_polar = model(
+                    data_masked,
+                    concepts=concepts_masked_int,
+                    intervention_idxs=intervention_idxs,
+                )
+
+                # Store what the predictions changed to after intervention
+                predictions = y_pred_polar.argmax(dim=-1).cpu().numpy().tolist()
+                predicted_classes_after_intervention.extend(predictions)
+
+    # Return the lists of original classes and predicted classes after intervention
+    return original_classes, predicted_classes_after_intervention
+
+
+def analyze_residuals_with_pca(
+    model: ConceptLightningModel,
+    test_loader: DataLoader,
+) -> tuple:
+    """
+    Collects residuals for grizzly bears and polar bears, reduces them to 2D using PCA,
+    and returns two lists of 2D points for visualization.
+
+    Args:
+        model: The concept lightning model
+        test_loader: DataLoader for test data
+
+    Returns:
+        tuple: (grizzly_bear_points, polar_bear_points) - Two lists of 2D points after PCA
+    """
+    import numpy as np
+    from sklearn.decomposition import PCA
+
+    model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    print(
+        f"Using device: {torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU'}"
+    )
+
+    # Get class indices
+    base_ds = test_loader.dataset
+    class_to_idx = base_ds.animals_class_to_idx
+    grizzly_idx = class_to_idx["grizzly bear"]
+    polar_idx = class_to_idx["polar bear"]
+
+    # Lists to store residuals for each class
+    grizzly_residuals = []
+    polar_residuals = []
+
+    model.eval()
+    with torch.no_grad():
+        for (data, concepts), target in test_loader:
+            # Create masks for each class
+            grizzly_mask = target == grizzly_idx
+            polar_mask = target == polar_idx
+
+            # Skip batch if no grizzly or polar bears
+            if not (grizzly_mask.any() or polar_mask.any()):
+                continue
+
+            # Get combined mask for both classes
+            combined_mask = grizzly_mask | polar_mask
+
+            # Skip if no relevant samples
+            if not combined_mask.any():
+                continue
+
+            # Apply mask to data and concepts
+            masked_data = data[combined_mask].to(model.device)
+            masked_concepts = concepts[combined_mask].to(model.device)
+            masked_target = target[combined_mask]
+
+            # Get model outputs including residuals only for relevant samples
+            _, residual, _ = model(masked_data, concepts=masked_concepts)
+            if type(residual) == tuple:
+                residual = residual[0]
+
+            # Add residuals to appropriate lists
+            for i, t in enumerate(masked_target):
+                if t.item() == grizzly_idx:
+                    grizzly_residuals.append(residual[i].cpu().numpy())
+                elif t.item() == polar_idx:
+                    polar_residuals.append(residual[i].cpu().numpy())
+
+    # Convert lists to numpy arrays
+    grizzly_residuals = np.array(grizzly_residuals)
+    polar_residuals = np.array(polar_residuals)
+
+    # Check if we have samples for both classes
+    if len(grizzly_residuals) == 0:
+        print("Warning: No grizzly bear samples found in the dataset")
+        return [], []
+
+    if len(polar_residuals) == 0:
+        print("Warning: No polar bear samples found in the dataset")
+        return [], []
+
+    # Convert lists to numpy arrays
+    grizzly_residuals = np.array(grizzly_residuals)
+    polar_residuals = np.array(polar_residuals)
+
+    # Combine all residuals for PCA fitting
+    all_residuals = np.vstack([grizzly_residuals, polar_residuals])
+
+    # Apply PCA to reduce dimensionality to 2D
+    pca = PCA(n_components=2)
+    pca.fit(all_residuals)
+
+    # Transform each class's residuals to 2D
+    grizzly_points = pca.transform(grizzly_residuals).tolist()
+    polar_points = pca.transform(polar_residuals).tolist()
+
+    return grizzly_points, polar_points
+
+
+def test_confusion_matrix(
+    model: ConceptLightningModel,
+    test_loader: DataLoader,
+) -> float:
+    model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    print(
+        f"Using device: {torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU'}"
+    )
+    # Get mutual information estimator
+    # (data, concepts), targets = next(iter(test_loader))
+    # data = data.to(model.device)
+    # concepts = concepts.to(model.device)
+    # _, residual, _ = model(data, concepts=concepts)
+    # model.concept_model.training = False
+    # concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
+    # base_ds = test_loader.dataset
+    from sklearn.metrics import confusion_matrix
+
+    # Initialize lists to store true labels and predictions
+    all_targets = []
+    all_predictions = []
+    model.eval()
+
+    # Iterate through the test loader
+    for (data, concepts), target in test_loader:
+        data = data.to(model.device)
+        concepts = concepts.to(model.device)
+        target = target.to(model.device)
+
+        with torch.no_grad():
+            intervention_idxs = torch.ones_like(concepts)
+            # intervene on the white concept
+            _, residual, y_pred_polar = model(
+                data,
+                concepts=concepts,
+                intervention_idxs=intervention_idxs,
+            )
+            # model.test_step(
+            #     ((data, concepts), target), batch_idx=0, return_intervention_idxs=False
+            # )
+
+            # Get predicted class (assuming y_pred_polar contains class probabilities)
+            _, predicted = torch.max(y_pred_polar, 1)
+
+            # Append batch predictions and targets
+            all_targets.append(target.cpu().numpy())
+            all_predictions.append(predicted.cpu().numpy())
+            # print(all_targets[0])
+            # print(all_predictions[0])
+            # print(y_pred_polar[0])
+
+    # Concatenate all batches
+    all_targets = np.concatenate(all_targets)
+    all_predictions = np.concatenate(all_predictions)
+
+    # new_model = deepcopy(model)
+    # new_model.num_test_interventions = 6
+    # new_model.concept_model.negative_intervention = False
+
+    # new_model.concept_model.target_network = Chain(
+    #     intervention,
+    #     new_model.concept_model.target_network,
+    # )
+    # results = test(new_model, test_loader)
+
+    # Calculate confusion matrix
+    cm = confusion_matrix(all_targets, all_predictions)
+
+    return cm
 
 
 def test_concept_pred(
@@ -296,8 +671,12 @@ def test_concept_pred(
     train_loader: DataLoader,
     val_loader: DataLoader,
     test_loader: DataLoader,
-    num_train_epochs: int = 1,
+    num_train_epochs: int = 10,
     dataset=None,
+    data_dir=None,
+    num_concepts=None,
+    backbone=None,
+    subset=None,
 ) -> float:
     """
     Test mutual information between concepts and residuals.
@@ -316,11 +695,27 @@ def test_concept_pred(
         hidden_concepts = 0
     else:
         hidden_concepts = 0
+
+    concept_loss_fn = get_concept_loss_fn(
+        dataset,
+        data_dir,
+        num_concepts=num_concepts,
+        backbone=backbone,
+        subset=subset,
+    )
+
+    model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     (data, concepts), targets = next(iter(test_loader))
+    data = data.to(model.device)
+    concepts = concepts.to(model.device)
+
     if hidden_concepts != 0:
         _, residual, _ = model(data, concepts=concepts[:, :-hidden_concepts])
     else:
         _, residual, _ = model(data, concepts=concepts)
+
+    if type(residual) == tuple:
+        residual = residual[0]
     if model_type == "cem" or model_type == "cem_mi":
         concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1] // 2
         concept_predictor = ConceptEmbeddingConceptPred(
@@ -329,6 +724,7 @@ def test_concept_pred(
             binary=model.concept_model.concept_type == "binary",
             hidden_concept=hidden_concepts > 0,
             num_hidden_concept=hidden_concepts,
+            concept_loss_fn=concept_loss_fn,
         )
     else:
         concept_dim, residual_dim = concepts.shape[-1], residual.shape[-1]
@@ -338,7 +734,9 @@ def test_concept_pred(
             binary=model.concept_model.concept_type == "binary",
             hidden_concept=hidden_concepts > 0,
             num_hidden_concept=hidden_concepts,
+            concept_loss_fn=concept_loss_fn,
         )
+    concept_predictor = concept_predictor.to(model.device)
 
     best_val_loss = float("inf")
     best_predictor_state = None
@@ -348,6 +746,8 @@ def test_concept_pred(
         # Training phase
         concept_predictor.train()
         for (data, concepts), targets in train_loader:
+            data = data.to(model.device)
+            concepts = concepts.to(model.device)
             if model_type == "cem" or model_type == "cem_mi":
                 with torch.no_grad():
                     if hidden_concepts != 0:
@@ -356,6 +756,8 @@ def test_concept_pred(
                         )
                     else:
                         pre_contexts, residual, _ = model(data, concepts=concepts)
+                if type(residual) == tuple:
+                    residual = residual[0]
                 contexts = pre_contexts.sigmoid()
                 r_dim = residual.shape[-1]
                 pos_embedding = residual[:, :, : r_dim // 2]
@@ -372,12 +774,16 @@ def test_concept_pred(
                         )
                     else:
                         _, residual, _ = model(data, concepts=concepts)
+                if type(residual) == tuple:
+                    residual = residual[0]
                 concept_predictor.step(residual.detach(), concepts.detach())
 
         # Validation phase
         val_losses = []
         concept_predictor.eval()
         for (data, concepts), targets in val_loader:
+            data = data.to(model.device)
+            concepts = concepts.to(model.device)
             with torch.no_grad():
                 if hidden_concepts != 0:
                     pre_contexts, residual, _ = model(
@@ -385,6 +791,8 @@ def test_concept_pred(
                     )
                 else:
                     pre_contexts, residual, _ = model(data, concepts=concepts)
+                if type(residual) == tuple:
+                    residual = residual[0]
                 if model_type == "cem" or model_type == "cem_mi":
                     contexts = pre_contexts.sigmoid()
                     r_dim = residual.shape[-1]
@@ -396,11 +804,8 @@ def test_concept_pred(
                 else:
                     x = residual
                 y_pred = concept_predictor(x)
-                if model.concept_model.concept_type == "binary":
-                    loss_fn = nn.BCEWithLogitsLoss()
-                else:
-                    loss_fn = nn.MSELoss()
-                val_loss = loss_fn(y_pred, concepts).item()
+
+                val_loss = concept_loss_fn(y_pred, concepts).item()
                 val_losses.append(val_loss)
 
         mean_val_loss = np.mean(val_losses)
@@ -412,6 +817,9 @@ def test_concept_pred(
     # Load the best predictor state
     if best_predictor_state is not None:
         concept_predictor.load_state_dict(best_predictor_state)
+    concept_predictor = concept_predictor.to(
+        torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    )
 
     # Evaluate the concept predictor
     metrics = []
@@ -421,7 +829,12 @@ def test_concept_pred(
     for i in range(concept_dim):
         intchange_metrics.append([])
 
+    predictions = [[] for _ in range(concept_dim)]
+    ground_truth = [[] for _ in range(concept_dim)]
+
     for (data, concepts), target in test_loader:
+        data = data.to(model.device)
+        concepts = concepts.to(model.device)
         with torch.no_grad():
             if hidden_concepts != 0:
                 pre_contexts, residual, _ = model(
@@ -429,6 +842,8 @@ def test_concept_pred(
                 )
             else:
                 pre_contexts, residual, _ = model(data, concepts=concepts)
+            if type(residual) == tuple:
+                residual = residual[0]
             if model_type == "cem" or model_type == "cem_mi":
                 contexts = pre_contexts.sigmoid()
                 r_dim = residual.shape[-1]
@@ -444,6 +859,9 @@ def test_concept_pred(
                 y_pred_base = torch.sigmoid(y_pred_base)
                 for i in range(concept_dim):
                     pred = (y_pred_base[:, i] > 0.5).float()
+                    predictions[i].append(pred)
+                    ground_truth[i].append(concepts[:, i])
+
                     accuracy = (pred == concepts[:, i]).float().mean().item()
                     metrics[i].append(accuracy)
             else:
@@ -483,11 +901,22 @@ def test_concept_pred(
     mean_metrics = np.array([np.mean(metric) for metric in metrics])
     mean_change_metrics = np.array([np.mean(metric) for metric in intchange_metrics])
 
+    predictions = [torch.cat(pred).to("cpu") for pred in predictions]
+    ground_truth = [torch.cat(gt).to("cpu") for gt in ground_truth]
+    from torchmetrics.classification import BinaryF1Score
+
+    f1_scores = np.array(
+        [
+            BinaryF1Score()(pred, gt).item()
+            for pred, gt in zip(predictions, ground_truth)
+        ]
+    )
+
     if hidden_concepts > 0:
         return np.array(
             [
-                np.mean(mean_metrics[:-hidden_concepts]),
-                np.mean(mean_metrics[-hidden_concepts:]),
+                np.mean(f1_scores[:-hidden_concepts]),
+                np.mean(f1_scores[-hidden_concepts:]),
                 np.mean(mean_change_metrics[:-hidden_concepts]),
                 np.mean(mean_change_metrics[-hidden_concepts:]),
             ]
@@ -495,7 +924,7 @@ def test_concept_pred(
     else:
         return np.array(
             [
-                np.mean(mean_metrics),
+                np.mean(f1_scores),
                 0,
                 np.mean(mean_change_metrics),
                 0,
@@ -904,6 +1333,12 @@ def test_deep_lift_shapley(
     """
     from captum.attr import DeepLift, DeepLiftShap
     import torch.nn.functional as F
+    import torch
+
+    model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    print(
+        f"Using device: {torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU'}"
+    )
 
     # Create a wrapper class for the concept model that Captum can use
     class ModelWrapper(nn.Module):
@@ -944,14 +1379,24 @@ def test_deep_lift_shapley(
     num_processed = 0
     max_samples = 10000  # Limit the number of samples for computational efficiency
 
-    for (data, concepts), targets in test_loader:
+    for (data, concepts), targets in tqdm(test_loader):
         # Skip if we've processed enough samples
         if num_processed >= max_samples:
             break
 
+        data = data.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+        targets = targets.to(
+            torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        )
+        concepts = concepts.to(
+            torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        )
+
         with torch.no_grad():
             # Get model predictions and extract concepts and residuals
             concept_outputs, residual_outputs, _ = model(data, concepts=concepts)
+            if type(residual_outputs) == tuple:
+                residual_outputs = residual_outputs[0]
 
             # For binary concepts, ensure they're in the right format
             if (
@@ -969,23 +1414,27 @@ def test_deep_lift_shapley(
         residual_baseline = (
             torch.zeros_like(residual_outputs).float().reshape(residual_outputs.shape)
         )
+        concept_baseline = concept_baseline.to(
+            torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        )
+        residual_baseline = residual_baseline.to(
+            torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        )
 
         # Prepare inputs for DeepLift
         baselines = (concept_baseline, residual_baseline)
         inputs = (concept_inputs, residual_outputs)
 
         # Compute attributions
-        attributions = deep_lift.attribute(
-            inputs, baselines, target=random.randint(0, num_classes - 1)
-        )
+        attributions = deep_lift.attribute(inputs, baselines, target=targets)
 
         # Extract attributions and take absolute value for each sample
         # We're not averaging over batch here, keeping individual sample attributions
         concept_attr = (
-            attributions[0].detach().abs()
+            attributions[0].cpu().detach().abs()
         )  # Take absolute value of each sample
         residual_attr = (
-            attributions[1].detach().abs()
+            attributions[1].cpu().detach().abs()
         )  # Take absolute value of each sample
 
         concept_attributions.append(concept_attr)
@@ -998,8 +1447,8 @@ def test_deep_lift_shapley(
     all_residual_attr = torch.cat(residual_attributions, dim=0)
 
     # Compute mean across all samples (after taking absolute values)
-    avg_concept_attr = torch.mean(all_concept_attr, dim=0)
-    avg_residual_attr = torch.mean(all_residual_attr, dim=0)
+    avg_concept_attr = all_concept_attr  # torch.mean(all_concept_attr, dim=0)
+    avg_residual_attr = all_residual_attr  # torch.mean(all_residual_attr, dim=0)
 
     # Convert to numpy for easier handling
     concept_attr_np = avg_concept_attr.cpu().numpy()
@@ -1009,11 +1458,6 @@ def test_deep_lift_shapley(
     attribution_results = {
         "concept_attributions": concept_attr_np,
         "residual_attributions": residual_attr_np,
-        "concept_attribution_mean": concept_attr_np.mean(),
-        "residual_attribution_mean": residual_attr_np.mean(),
-        # These will now be the same as the non-abs means since we already took abs values
-        "concept_attribution_abs_mean": concept_attr_np.mean(),
-        "residual_attribution_abs_mean": residual_attr_np.mean(),
     }
 
     # For datasets with known concept names, add named attributions
@@ -1661,6 +2105,10 @@ def evaluate(config: dict):
         metrics["pos_intervention_accs"] = test_interventions(
             model, test_loader, concept_dim, config["dataset"], negative=False
         )
+    elif config["eval_mode"] == "threshold_fitting":
+        metrics["threshold_fitting"] = test_threshold_fitting(
+            model, test_loader, config["dataset"]
+        )
 
     elif config["eval_mode"] == "random_concepts":
         metrics["random_concept_acc"] = test_random_concepts(
@@ -1679,6 +2127,7 @@ def evaluate(config: dict):
         metrics["mutual_info"] = test_mutual_info(model, test_loader)
 
     elif config["eval_mode"] == "concept_pred":
+
         metrics["concept_pred"] = test_concept_pred(
             model,
             config["model_type"],
@@ -1686,6 +2135,10 @@ def evaluate(config: dict):
             val_loader,
             test_loader,
             dataset=config["dataset"],
+            data_dir=config["data_dir"],
+            num_concepts=config.get("num_concepts", -1),
+            backbone=config.get("backbone", "resnet34"),
+            subset=config.get("subset", None),
         )
     elif config["eval_mode"] == "concept_change":
         metrics["concept_change"] = test_concept_change(
@@ -1712,6 +2165,14 @@ def evaluate(config: dict):
         metrics["deeplift_shapley"] = test_deep_lift_shapley(
             model, test_loader, config["dataset"]
         )
+    elif config["eval_mode"] == "test_counterfactual":
+        metrics["test_counterfactual"] = test_counterfactual(model, test_loader)
+    elif config["eval_mode"] == "test_confusion_matrix":
+        metrics["test_confusion_matrix"] = test_confusion_matrix(model, test_loader)
+    elif config["eval_mode"] == "test_counterfactual_2":
+        metrics["test_counterfactual_2"] = test_counterfactual_2(model, test_loader)
+    elif config["eval_mode"] == "pca":
+        metrics["pca"] = analyze_residuals_with_pca(model, test_loader)
 
     # Report evaluation metrics
     ray.train.report(metrics)
@@ -1721,7 +2182,7 @@ if __name__ == "__main__":
     MODES = [
         # "accuracy",
         # "neg_intervention",
-        # "pos_intervention",
+        "pos_intervention",
         # "random_concepts",
         # "random_residual",
         # "correlation",
@@ -1729,8 +2190,13 @@ if __name__ == "__main__":
         # "concept_pred",
         # "concept_change",
         # "concept_change_probe",
-        "tcav",
-        # "deeplift_shapley"
+        # "tcav",
+        # "deeplift_shapley",
+        # "threshold_fitting",
+        # "test_counterfactual",
+        # "test_counterfactual_2",
+        # "test_confusion_matrix",
+        # "pca",
     ]
 
     parser = argparse.ArgumentParser()

@@ -7,22 +7,22 @@ from experiments.celeba import (
 
 def get_config(**kwargs) -> dict:
     experiment_config = {
-        "model_type": tune.grid_search(
-            ["latent_residual", "decorrelated_residual", "mi_residual"]
-        ),
+        "model_type": "mi_residual_info_bottleneck",
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/celeba/",
         "ray_storage_dir": "/data/renos/ray_results/",
-        "residual_dim": tune.grid_search([1, 2, 4, 8, 16, 32, 64, 96, 128]),
-        "lr": 0.006,
-        "num_epochs": 25,
+        "residual_dim": 16,
+        "lr": 0.001,
+        "num_epochs": 50,
         "momentum": 0.9,
-        "lr_scheduler": "reduce_on_plateau",
-        "chosen_optim": "sgd",
-        # "lr_scheduler": "cosine annealing",
-        # "chosen_optim": "adam",
+        # "lr_scheduler": "reduce_on_plateau",
+        # "chosen_optim": "sgd",
+        "lr_scheduler": "cosine annealing",
+        "chosen_optim": "adam",
         "alpha": 1.0,
-        "beta": 1.0,
+        "beta": tune.grid_search([0.0, 2.0]),
+        "delta": 1e-3,
+        "mi_const": tune.grid_search([0.25, 0.5, 1.0, 1.5]),
         "mi_estimator_hidden_dim": 256,
         "mi_optimizer_lr": 0.001,
         "cw_alignment_frequency": 20,
@@ -41,8 +41,8 @@ def get_config(**kwargs) -> dict:
         "intervention_task_loss_weight": 1.0,
         "intervention_weight": 5.0,
         "patience": 3,
-        "cross": True,
-        "intervention_aware": True,  # True for intervention-aware training
+        "cross": False,
+        "intervention_aware": False,  # True for intervention-aware training
         "num_target_network_layers": 0,  # Number of layers in the target network
         "weight_pred": False,
     }
