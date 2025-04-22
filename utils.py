@@ -207,7 +207,7 @@ def make_cnn(
             weights=ResNet34_Weights.IMAGENET1K_V1 if load_weights else None
         )
         model.fc = nn.Linear(model.fc.in_features, output_dim)
-        model = torch.compile(model)
+        # model = torch.compile(model)
         return model
     elif cnn_type == "densenet121":
         # transform = torchvision.transforms.Compose([xrv.datasets.XRayCenterCrop(),xrv.datasets.XRayResizer(224)])

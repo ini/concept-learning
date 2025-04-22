@@ -11,7 +11,7 @@ def get_config(**kwargs) -> dict:
         ),
         "residual_dim": tune.grid_search([1, 2, 4, 8, 16, 32, 64]),
         "lr": 3e-4,
-        "num_epochs": 200,
+        "num_epochs": 50,
         "momentum": 0.9,
         # "lr_scheduler": "reduce_on_plateau",
         # "chosen_optim": "sgd",

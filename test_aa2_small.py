@@ -504,6 +504,8 @@ if __name__ == "__main__":
     class_to_idx = train_dataset.animals_class_to_idx
     predicates_name_to_idx = train_dataset.predicates_name_to_idx
 
+    breakpoint()
+
     # Create reverse mapping for class names
     idx_to_class = {v: k for k, v in class_to_idx.items()}
 

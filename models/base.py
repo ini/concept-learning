@@ -101,6 +101,7 @@ class ConceptModel(nn.Module):
         freeze_base_model=False,
         residual_dim=None,
         layer_norm_weight=None,
+        batch_norm_layer=None,
         **kwargs,
     ):
         """
@@ -164,6 +165,9 @@ class ConceptModel(nn.Module):
         self.residual_network = VariableKwargs(residual_network)
         self.target_network = VariableKwargs(target_network)
         self.bottleneck_layer = VariableKwargs(bottleneck_layer)
+        self.batch_norm_layer = (
+            batch_norm_layer if batch_norm_layer is not None else nn.Identity()
+        )
         self.intervention_aware = intervention_aware
 
         if self.intervention_aware:
@@ -289,6 +293,7 @@ class ConceptModel(nn.Module):
         # Get target logits
         # x = self.concept_residual_concat(x)
         # x = self.concept_residual_concat(x)
+        x = self.batch_norm_layer(x)
         target_logits = self.target_network(
             x, concepts=concepts, intervention_idxs=intervention_idxs.detach()
         )
@@ -973,7 +978,7 @@ class ConceptLightningModel(pl.LightningModule):
             Dataset split
         """
         (data, concepts), targets = batch
-        # t1 = time.time()
+        t1 = time.time()
         if self.training and self.intervention_aware:
             mask = torch.bernoulli(
                 torch.ones_like(concepts[0]) * self.training_intervention_prob,
@@ -1087,7 +1092,7 @@ class ConceptLightningModel(pl.LightningModule):
             concept_rmse = F.mse_loss(concept_logits, concepts).sqrt()
             self.log(f"{split}_concept_rmse", concept_rmse, **self.log_kwargs)
         t2 = time.time()
-        # print(t2 - t1)
+        print(t2 - t1)
 
         return loss
 

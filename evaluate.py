@@ -903,7 +903,7 @@ def test_concept_pred(
 
     predictions = [torch.cat(pred).to("cpu") for pred in predictions]
     ground_truth = [torch.cat(gt).to("cpu") for gt in ground_truth]
-    from torchmetrics.classification import BinaryF1Score
+    from torchmetrics.classification import BinaryF1Score, BinaryAccuracy
 
     f1_scores = np.array(
         [
@@ -922,13 +922,11 @@ def test_concept_pred(
             ]
         )
     else:
-        return np.array(
-            [
-                np.mean(f1_scores),
-                0,
-                np.mean(mean_change_metrics),
-                0,
-            ]
+        return (
+            np.mean(f1_scores),
+            f1_scores,
+            np.mean(mean_change_metrics),
+            0,
         )
 
 
@@ -1374,25 +1372,24 @@ def test_deep_lift_shapley(
     residual_attributions = []
 
     num_classes = DATASET_INFO[dataset]["num_classes"]
+    max_samples = 10000
+    device = model.device
+    all_concept_inputs = []
+    all_residual_outputs = []
+    all_targets = []
 
-    # Process batches
+    print("Phase 1: Collecting data for baseline calculation...")
+    # First pass: collect all concept inputs and residual outputs
     num_processed = 0
-    max_samples = 10000  # Limit the number of samples for computational efficiency
+    with torch.no_grad():
+        for (data, concepts), targets in tqdm(test_loader):
+            # Skip if we've processed enough samples
+            if num_processed >= max_samples:
+                break
 
-    for (data, concepts), targets in tqdm(test_loader):
-        # Skip if we've processed enough samples
-        if num_processed >= max_samples:
-            break
+            data = data.to(device)
+            concepts = concepts.to(device)
 
-        data = data.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-        targets = targets.to(
-            torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        )
-        concepts = concepts.to(
-            torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        )
-
-        with torch.no_grad():
             # Get model predictions and extract concepts and residuals
             concept_outputs, residual_outputs, _ = model(data, concepts=concepts)
             if type(residual_outputs) == tuple:
@@ -1407,18 +1404,38 @@ def test_deep_lift_shapley(
             else:
                 concept_inputs = concepts
 
-        # Create baseline for attribution (typically zeros)
-        concept_baseline = (
-            torch.zeros_like(concept_inputs).float().reshape(concept_inputs.shape)
-        ) + 0.5
-        residual_baseline = (
-            torch.zeros_like(residual_outputs).float().reshape(residual_outputs.shape)
-        )
-        concept_baseline = concept_baseline.to(
-            torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        )
-        residual_baseline = residual_baseline.to(
-            torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            # Store concepts and residuals for baseline calculation
+            all_concept_inputs.append(concept_inputs.cpu())
+            all_residual_outputs.append(residual_outputs.cpu())
+            all_targets.append(targets.cpu())
+
+            num_processed += len(data)
+
+    # Calculate global means
+    print("Calculating global mean baselines...")
+    all_concepts = torch.cat(all_concept_inputs, dim=0)
+    all_residuals = torch.cat(all_residual_outputs, dim=0)
+
+    concept_mean = all_concepts.mean(dim=0, keepdim=False)
+    residual_mean = all_residuals.mean(dim=0, keepdim=False)
+
+    print(f"Concept mean shape: {concept_mean.shape}")
+    print(f"Residual mean shape: {residual_mean.shape}")
+
+    # Reset for second pass
+    num_processed = 0
+
+    print("Phase 2: Calculating attributions with global mean baselines...")
+    # Second pass: calculate attributions using the global means
+    for batch_idx in range(len(all_concept_inputs)):
+        concept_inputs = all_concept_inputs[batch_idx].to(device)
+        residual_outputs = all_residual_outputs[batch_idx].to(device)
+        targets = all_targets[batch_idx].to(device)
+
+        # Create baselines using the global means (expand to match batch size)
+        concept_baseline = concept_mean.expand(concept_inputs.shape[0], -1).to(device)
+        residual_baseline = residual_mean.expand(residual_outputs.shape[0], -1).to(
+            device
         )
 
         # Prepare inputs for DeepLift
@@ -1429,19 +1446,13 @@ def test_deep_lift_shapley(
         attributions = deep_lift.attribute(inputs, baselines, target=targets)
 
         # Extract attributions and take absolute value for each sample
-        # We're not averaging over batch here, keeping individual sample attributions
-        concept_attr = (
-            attributions[0].cpu().detach().abs()
-        )  # Take absolute value of each sample
-        residual_attr = (
-            attributions[1].cpu().detach().abs()
-        )  # Take absolute value of each sample
+        concept_attr = attributions[0].cpu().detach().abs()
+        residual_attr = attributions[1].cpu().detach().abs()
 
         concept_attributions.append(concept_attr)
         residual_attributions.append(residual_attr)
 
         num_processed += len(data)
-
     # Concatenate all samples' attributions
     all_concept_attr = torch.cat(concept_attributions, dim=0)
     all_residual_attr = torch.cat(residual_attributions, dim=0)
@@ -1471,6 +1482,104 @@ def test_deep_lift_shapley(
             attribution_results["named_concept_attributions"] = named_concept_attrs
 
     return attribution_results
+
+    # # Process batches
+    # num_processed = 0
+    # max_samples = 10000  # Limit the number of samples for computational efficiency
+
+    # for (data, concepts), targets in tqdm(test_loader):
+    #     # Skip if we've processed enough samples
+    #     if num_processed >= max_samples:
+    #         break
+
+    #     data = data.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    #     targets = targets.to(
+    #         torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #     )
+    #     concepts = concepts.to(
+    #         torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #     )
+
+    #     with torch.no_grad():
+    #         # Get model predictions and extract concepts and residuals
+    #         concept_outputs, residual_outputs, _ = model(data, concepts=concepts)
+    #         if type(residual_outputs) == tuple:
+    #             residual_outputs = residual_outputs[0]
+
+    #         # For binary concepts, ensure they're in the right format
+    #         if (
+    #             hasattr(model.concept_model, "concept_type")
+    #             and model.concept_model.concept_type == "binary"
+    #         ):
+    #             concept_inputs = concepts
+    #         else:
+    #             concept_inputs = concepts
+
+    #     # Create baseline for attribution (typically zeros)
+    #     concept_baseline = (
+    #         torch.zeros_like(concept_inputs).float().reshape(concept_inputs.shape)
+    #     ) + 0.5
+    #     residual_baseline = (
+    #         torch.zeros_like(residual_outputs).float().reshape(residual_outputs.shape)
+    #     )
+    #     breakpoint()
+    #     concept_baseline = concept_baseline.to(
+    #         torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #     )
+    #     residual_baseline = residual_baseline.to(
+    #         torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #     )
+
+    #     # Prepare inputs for DeepLift
+    #     baselines = (concept_baseline, residual_baseline)
+    #     inputs = (concept_inputs, residual_outputs)
+
+    #     # Compute attributions
+    #     attributions = deep_lift.attribute(inputs, baselines, target=targets)
+
+    #     # Extract attributions and take absolute value for each sample
+    #     # We're not averaging over batch here, keeping individual sample attributions
+    #     concept_attr = (
+    #         attributions[0].cpu().detach().abs()
+    #     )  # Take absolute value of each sample
+    #     residual_attr = (
+    #         attributions[1].cpu().detach().abs()
+    #     )  # Take absolute value of each sample
+
+    #     concept_attributions.append(concept_attr)
+    #     residual_attributions.append(residual_attr)
+
+    #     num_processed += len(data)
+
+    # # Concatenate all samples' attributions
+    # all_concept_attr = torch.cat(concept_attributions, dim=0)
+    # all_residual_attr = torch.cat(residual_attributions, dim=0)
+
+    # # Compute mean across all samples (after taking absolute values)
+    # avg_concept_attr = all_concept_attr  # torch.mean(all_concept_attr, dim=0)
+    # avg_residual_attr = all_residual_attr  # torch.mean(all_residual_attr, dim=0)
+
+    # # Convert to numpy for easier handling
+    # concept_attr_np = avg_concept_attr.cpu().numpy()
+    # residual_attr_np = avg_residual_attr.cpu().numpy()
+
+    # # Create result dictionary
+    # attribution_results = {
+    #     "concept_attributions": concept_attr_np,
+    #     "residual_attributions": residual_attr_np,
+    # }
+
+    # # For datasets with known concept names, add named attributions
+    # if dataset in DATASET_INFO:
+    #     dataset_info = DATASET_INFO[dataset]
+    #     if "concept_names" in dataset_info:
+    #         concept_names = dataset_info["concept_names"]
+    #         named_concept_attrs = {
+    #             name: float(attr) for name, attr in zip(concept_names, concept_attr_np)
+    #         }
+    #         attribution_results["named_concept_attributions"] = named_concept_attrs
+
+    # return attribution_results
 
 
 # def test_deep_lift_shapley(
@@ -2059,9 +2168,10 @@ def evaluate(config: dict):
     metrics = {}
     # Get data loader
     if (
-        config["eval_mode"] == "concept_change_probe"
-        and (config["dataset"] == "celeba" or config["dataset"] == "pitfalls_synthetic")
-        or (config["eval_mode"] == "tcav" and config["dataset"] == "celeba")
+        # config["eval_mode"] == "concept_change_probe"
+        # and (config["dataset"] == "celeba" or config["dataset"] == "pitfalls_synthetic") or
+        config["eval_mode"] == "tcav"
+        and config["dataset"] == "celeba"
     ):
         new_config = copy.deepcopy(config)
         new_config["num_concepts"] = 8
@@ -2182,12 +2292,12 @@ if __name__ == "__main__":
     MODES = [
         # "accuracy",
         # "neg_intervention",
-        "pos_intervention",
+        # "pos_intervention",
         # "random_concepts",
         # "random_residual",
         # "correlation",
         # "mutual_info",
-        # "concept_pred",
+        "concept_pred",
         # "concept_change",
         # "concept_change_probe",
         # "tcav",

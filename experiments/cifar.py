@@ -85,6 +85,10 @@ def make_concept_model(config: dict) -> ConceptModel:
         layers.append(torch.nn.Linear(units[i - 1], units[i]))
         if i != len(units) - 1:
             layers.append(torch.nn.LeakyReLU())
+    if config.get("use_batch_norm_layer", False):
+        batch_norm_layer = nn.BatchNorm1d(num_features=bottleneck_dim)
+    else:
+        batch_norm_layer = None
 
     if config.get("intervention_weight", 0.0) > 0:
         concept_rank_model = torch.nn.Sequential(*layers)
@@ -166,6 +170,7 @@ def make_concept_model(config: dict) -> ConceptModel:
             bottleneck_layer=make_bottleneck_layer(bottleneck_dim, **config),
             cross_attention=cross_attention,
             concept_rank_model=concept_rank_model,
+            batch_norm_layer=batch_norm_layer,
             **config,
         )
 

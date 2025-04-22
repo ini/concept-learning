@@ -952,6 +952,9 @@ def plot_all_concept_predictions(
         dim: {method: [] for method in method_types} for dim in residual_dims
     }
 
+    individual_f1_data = {
+        dim: {method: [] for method in method_types} for dim in residual_dims
+    }
     # Group and aggregate results
     for result in plot_results:
         res_dim = result.config[residual_dim_key]
@@ -960,6 +963,63 @@ def plot_all_concept_predictions(
         # Add the MI score if it exists
         if "concept_pred" in result.metrics:
             results_data[res_dim][method].append(result.metrics["concept_pred"][0])
+            individual_f1_data[res_dim][method].append(
+                result.metrics["concept_pred"][1]
+            )
+
+    individual_f1_data_means = {
+        dim: {
+            method: np.mean(np.stack(scores), axis=0) if scores else np.nan
+            for method, scores in methods.items()
+        }
+        for dim, methods in individual_f1_data.items()
+    }
+    individual_f1_data_stds = {
+        dim: {
+            method: np.std(np.stack(scores), axis=0) if scores else np.nan
+            for method, scores in methods.items()
+        }
+        for dim, methods in individual_f1_data.items()
+    }
+    individual_means_csv_path = get_save_path(
+        plot_key, prefix=name, suffix="concept_pred_acc_means", save_dir=save_dir
+    ).with_suffix(".csv")
+    individual_stds_csv_path = get_save_path(
+        plot_key, prefix=name, suffix="concept_pred_acc_means_stds", save_dir=save_dir
+    ).with_suffix(".csv")
+
+    # Prepare means data for CSV
+    means_rows = []
+    stds_rows = []
+    for dim in residual_dims:
+        for method in method_types:
+            # Create row for means
+            means_row = {
+                "Residual Dimension": dim,
+                f"{groupby_key.replace('_', ' ').title()}": method,
+            }
+
+            # Create row for stds
+            stds_row = {
+                "Residual Dimension": dim,
+                f"{groupby_key.replace('_', ' ').title()}": method,
+            }
+
+            # Add each concept's mean and std
+            if isinstance(individual_f1_data_means[dim][method], np.ndarray):
+                for i, score in enumerate(individual_f1_data_means[dim][method]):
+                    means_row[f"concept_{i}"] = score
+
+            if isinstance(individual_f1_data_stds[dim][method], np.ndarray):
+                for i, score in enumerate(individual_f1_data_stds[dim][method]):
+                    stds_row[f"concept_{i}"] = score
+
+            means_rows.append(means_row)
+            stds_rows.append(stds_row)
+
+    # Save to CSVs
+    pd.DataFrame(means_rows).to_csv(individual_means_csv_path, index=False)
+    pd.DataFrame(stds_rows).to_csv(individual_stds_csv_path, index=False)
 
     # Calculate means and standard deviations
     means_data = {
@@ -2525,6 +2585,7 @@ def plot_attribution(
         suffix=f"deeplift_shapley_{which_attribution}",
         save_dir=make_attr_folder,
     )
+    csv_save_path = save_path.with_suffix(".csv")
 
     # Aggregate results
     groupby = groupby[0] if len(groupby) == 1 else groupby
@@ -2548,7 +2609,26 @@ def plot_attribution(
     n_concepts = first_array.shape[1]
     methods = list(all_scores.keys())
 
+    # Calculate and save average attributions to CSV
+    import pandas as pd
+
+    # Create a DataFrame to store average attributions
+    avg_attributions = {}
+    for method, scores in all_scores.items():
+        # Calculate mean across all samples for each concept
+        avg_attributions[method] = np.mean(scores, axis=0)
+
+    # Convert to DataFrame
+    avg_df = pd.DataFrame(
+        avg_attributions, index=[f"concept_{i}" for i in range(n_concepts)]
+    )
+
+    # Save to CSV
+    avg_df.to_csv(csv_save_path)
+    print(f"Average attributions saved to {csv_save_path}")
+
     # Calculate grid dimensions
+
     max_cols = 4
     n_cols = min(n_concepts, max_cols)
     n_rows = (n_concepts + max_cols - 1) // max_cols
@@ -2634,6 +2714,8 @@ def plot_posthoc_cbm_performance(
     save_dir: Path | str = "./plots",
     show: bool = True,
     name: str = "",
+    crm: bool = True,
+    no_cbm: bool = False,
 ):
     """
     Plot results with number of concepts, baseline and intervention accuracy.
@@ -2652,8 +2734,18 @@ def plot_posthoc_cbm_performance(
         Whether to show the plot
     """
     plt.clf()
+    crm = "_cr" if crm else ""
+    if no_cbm:
+        no_cbm_name = "_no_cbm"
+        key_name = "posthoc_res"
+    else:
+        no_cbm_name = ""
+        key_name = f"posthoc_fitter{crm}"
     save_path = get_save_path(
-        plot_key, prefix=name, suffix="intervention", save_dir=save_dir
+        plot_key,
+        prefix=name,
+        suffix=f"intervention{crm}{no_cbm_name}",
+        save_dir=save_dir,
     )
 
     # Extract groupby key (usually decorrelation_type or method)
@@ -2663,11 +2755,25 @@ def plot_posthoc_cbm_performance(
 
     # Get all unique residual dimensions
     residual_dims = sorted(
-        set(result.config["residual_dim"] for result in plot_results)
+        set(
+            result.config["residual_dim"]
+            for result in plot_results
+            if result is not None
+            and result.config is not None
+            and key_name in result.metrics
+        )
     )
 
     # Get all unique method types (e.g., decorrelation types)
-    method_types = sorted(set(result.config[groupby_key] for result in plot_results))
+    method_types = sorted(
+        set(
+            result.config[groupby_key]
+            for result in plot_results
+            if result is not None
+            and result.config is not None
+            and key_name in result.metrics
+        )
+    )
 
     # Aggregate results
     grouped_results = group_results(plot_results, groupby=groupby_key)
@@ -2680,13 +2786,31 @@ def plot_posthoc_cbm_performance(
         # Extract values from posthoc_fitter at positions 0, 1, and 2
         results = grouped_results[key]
         avg_num_concepts = np.mean(
-            [result.metrics["posthoc_fitter"][0] for result in results]
+            [
+                result.metrics[key_name][0]
+                for result in results
+                if result is not None
+                and result.config is not None
+                and f"posthoc_fitter{crm}" in result.metrics
+            ]
         )
         avg_baseline = np.mean(
-            [result.metrics["posthoc_fitter"][1] for result in results]
+            [
+                result.metrics[key_name][1]
+                for result in results
+                if result is not None
+                and result.config is not None
+                and key_name in result.metrics
+            ]
         )
         avg_intervention = np.mean(
-            [result.metrics["posthoc_fitter"][2] for result in results]
+            [
+                result.metrics[key_name][2]
+                for result in results
+                if result is not None
+                and result.config is not None
+                and key_name in result.metrics
+            ]
         )
 
         num_concepts_list.append(avg_num_concepts)
@@ -2704,18 +2828,24 @@ def plot_posthoc_cbm_performance(
     }
 
     for result in plot_results:
+        if (
+            result is not None
+            or result.config is not None
+            or key_name in result.metrics
+        ):
+            continue
         dim = result.config["residual_dim"]
         method = result.config[groupby_key]
 
         if "posthoc_fitter" in result.metrics:
             data_by_dim_method[dim][method]["num_concepts"].append(
-                result.metrics["posthoc_fitter"][0]
+                result.metrics[key_name][0]
             )
             data_by_dim_method[dim][method]["baseline"].append(
-                result.metrics["posthoc_fitter"][1]
+                result.metrics[key_name][1]
             )
             data_by_dim_method[dim][method]["intervention"].append(
-                result.metrics["posthoc_fitter"][2]
+                result.metrics[key_name][2]
             )
 
     # Create DataFrame for detailed CSV
@@ -2773,7 +2903,7 @@ def plot_posthoc_cbm_performance(
     # Add second y-axis for actual concept numbers
     ax2 = ax.twinx()
     ax2.set_ylabel("Number of Concepts")
-    ax2.set_ylim(0, max_concepts * 1.1)  # 10% margin
+    # ax2.set_ylim(0, max_concepts * 1.1)  # 10% margin
 
     # Add labels and styling
     ax.set_xlabel(f"Grouped by {groupby_key}")
@@ -2933,10 +3063,10 @@ def plot_mean_attribution(
 if __name__ == "__main__":
     PLOT_FUNCTIONS = {
         # "neg_intervention": plot_negative_interventions,
-       [] "pos_intervention": plot_positive_interventions,
+        # "pos_intervention": plot_positive_interventions,
         # "random": plot_random_concepts_residual,
         # "concept_pred": plot_concept_predictions,
-        # "all_concept_pred": plot_all_concept_predictions,
+        "all_concept_pred": plot_all_concept_predictions,
         # "counterfactual_intervention": plot_all_counterfactual_intervention,
         # "counterfactual_intervention_single": plot_all_counterfactual_intervention_2,
         # "plot_residual_pca_scatter": plot_residual_pca_scatter,
@@ -2958,6 +3088,7 @@ if __name__ == "__main__":
         # "plot_threshold_fitting": plot_threshold_fitting,
         # "mutual_info": plot_mutual_info,
         # "posthoc_cbm": plot_posthoc_cbm_performance,
+        # "posthoc_crm": partial(plot_posthoc_cbm_performance, no_cbm=True),
     }
 
     parser = argparse.ArgumentParser()

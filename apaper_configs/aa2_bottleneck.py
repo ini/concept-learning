@@ -6,10 +6,8 @@ def get_config(**kwargs) -> dict:
     experiment_config = {
         "save_dir": "/data/renos/supervised_concept_learning/",
         "data_dir": "/data/Datasets/",
-        "model_type": tune.grid_search(
-            ["latent_residual", "decorrelated_residual", "mi_residual"]
-        ),
-        "residual_dim": tune.grid_search([1, 2, 4, 8, 16, 32, 64]),
+        "model_type": "latent_residual",
+        "residual_dim": 0,
         "lr": 3e-4,
         "num_epochs": 200,
         "momentum": 0.9,

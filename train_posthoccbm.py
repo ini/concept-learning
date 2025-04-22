@@ -295,7 +295,7 @@ def train_posthoc_fitter(
 
     with open(config["concept_set_path"]) as f:
         concepts = f.read().split("\n")
-    if True or not os.path.exists(config["save_dir"] / "final_features"):
+    if not os.path.exists(config["save_dir"] / "final_features"):
         os.makedirs(config["save_dir"] / "final_features", exist_ok=True)
         for ds, split in zip(
             [train_loader, val_loader, test_loader],
@@ -378,7 +378,7 @@ def train_posthoc_fitter(
     proj_layer = torch.nn.Linear(
         in_features=proj_layer_size, out_features=len(concepts), bias=False
     ).to(model.device)
-    opt = torch.optim.Adam(proj_layer.parameters(), lr=1e-3)
+    opt = torch.optim.Adam(proj_layer.parameters(), lr=1e-4)
 
     indices = [ind for ind in range(len(train_residuals))]
 
@@ -388,11 +388,13 @@ def train_posthoc_fitter(
     proj_batch_size = min(config["proj_batch_size"], len(train_residuals))
     similarity_fn = cos_similarity_cubed_single
     if use_concept_res:
-        weight_name = "best_proj_weights_cr.pt"
+        weight_name = f"best_proj_weights_cr{proj_batch_size}.pt"
     else:
         weight_name = "best_proj_weights.pt"
-    if not os.path.exists(os.path.join(config["save_dir"], weight_name)) or config.get(
-        "overwrite_proj_weights", False
+    if (
+        True
+        or not os.path.exists(os.path.join(config["save_dir"], weight_name))
+        or config.get("overwrite_proj_weights", False)
     ):
         for i in range(config["proj_steps"]):
             batch = torch.LongTensor(random.sample(indices, k=proj_batch_size))
@@ -460,7 +462,7 @@ def train_posthoc_fitter(
 
         torch.save(
             best_weights.cpu(),
-            os.path.join(config["save_dir"], f"best_proj_weights.pt"),
+            os.path.join(config["save_dir"], weight_name),
         )
         print(
             "Best step:{}, Avg val similarity:{:.4f}".format(
@@ -468,9 +470,9 @@ def train_posthoc_fitter(
             )
         )
     else:
-        best_weights = torch.load(
-            os.path.join(config["save_dir"], f"best_proj_weights.pt")
-        ).to(model.device)
+        best_weights = torch.load(os.path.join(config["save_dir"], weight_name)).to(
+            model.device
+        )
 
     proj_layer.load_state_dict({"weight": best_weights})
 
@@ -483,6 +485,10 @@ def train_posthoc_fitter(
             outs = proj_layer(val_residuals.to(model.device).detach())
         sim = similarity_fn(val_clip_features.to(model.device).detach(), outs)
         interpretable = sim > config["interpretability_cutoff"]
+        if interpretable.sum() > 256:
+            top_indices = sim.argsort(descending=True)[:256]
+            interpretable = torch.zeros_like(sim, dtype=torch.bool)
+            interpretable[top_indices] = True
 
     # if True:
     #     for i, concept in enumerate(concepts):
@@ -503,23 +509,29 @@ def train_posthoc_fitter(
 
     with torch.no_grad():
         if use_concept_res:
-            train_residuals_batch = torch.cat([train_residuals, train_concepts], dim=1)
+            train_residuals_batch = torch.cat(
+                [train_residuals, train_concept_preds], dim=1
+            )
             train_r = proj_layer(train_residuals_batch.detach())
 
-            val_residuals_batch = torch.cat([val_residuals, val_concepts], dim=1)
+            val_residuals_batch = torch.cat([val_residuals, val_concept_preds], dim=1)
             val_r = proj_layer(val_residuals_batch.detach())
         else:
             train_r = proj_layer(train_residuals.detach())
             val_r = proj_layer(val_residuals.detach())
-
-        train_cr = torch.cat([train_r, train_concepts], dim=1)
-        val_cr = torch.cat([val_r, val_concepts], dim=1)
+        # train_cr = train_r
+        # val_cr = val_r
+        train_cr = torch.cat([train_r, train_concept_preds], dim=1)
+        val_cr = torch.cat([val_r, val_concept_preds], dim=1)
 
         train_mean = torch.mean(train_cr, dim=0, keepdim=True)
-        train_std = torch.std(val_cr, dim=0, keepdim=True)
+        train_std = torch.std(train_cr, dim=0, keepdim=True)
+        if config.get("no_glm", False):
+            train_mean = torch.zeros_like(train_mean)
+            train_std = torch.ones_like(train_std)
 
         train_cr -= train_mean
-        val_cr /= train_std
+        train_cr /= train_std
 
         train_y = torch.LongTensor(train_targets)
         indexed_train_ds = IndexedTensorDataset(train_cr, train_y)
@@ -536,62 +548,150 @@ def train_posthoc_fitter(
     )
     val_loader = DataLoader(val_ds, batch_size=config["saga_batch_size"], shuffle=False)
 
-    # Make linear model and zero initialize
-    linear = torch.nn.Linear(train_cr.shape[1], num_classes).to(model.device)
-    linear.weight.data.zero_()
-    linear.bias.data.zero_()
+    if config.get("no_glm", False):
+        # Use Adam optimizer instead of GLM SAGA
+        linear = torch.nn.Linear(train_cr.shape[1], num_classes).to(model.device)
 
-    STEP_SIZE = 0.1
-    ALPHA = 0.99
-    metadata = {}
-    metadata["max_reg"] = {}
-    metadata["max_reg"]["nongrouped"] = config["lam"]
+        # Initialize optimizer
+        optimizer = torch.optim.Adam(
+            linear.parameters(), lr=config.get("adam_lr", 1e-3)
+        )
 
-    # Solve the GLM path
-    output_proj = glm_saga(
-        linear,
-        indexed_train_loader,
-        STEP_SIZE,
-        config["n_iters"],
-        ALPHA,
-        epsilon=1,
-        k=1,
-        val_loader=val_loader,
-        do_zero=False,
-        metadata=metadata,
-        n_ex=len(train_cr),
-        n_classes=num_classes,
-        verbose=10,
-    )
-    W_g = output_proj["path"][0]["weight"]
-    b_g = output_proj["path"][0]["bias"]
-    import datetime
+        # Loss function
+        criterion = torch.nn.CrossEntropyLoss()
 
-    torch.save(train_mean, os.path.join(config["save_dir"], "proj_mean.pt"))
-    torch.save(train_std, os.path.join(config["save_dir"], "proj_std.pt"))
-    torch.save(W_c, os.path.join(config["save_dir"], "W_c.pt"))
-    torch.save(W_g, os.path.join(config["save_dir"], "W_g.pt"))
-    torch.save(b_g, os.path.join(config["save_dir"], "b_g.pt"))
+        # Training loop
+        num_epochs = 30
+        best_val_acc = 0
+        best_state = None
 
-    if len(concepts) > 0:
-        with open(os.path.join(config["save_dir"], "chosen_concepts.txt"), "w") as f:
-            f.write(concepts[0])
-            for concept in concepts[1:]:
-                f.write("\n" + concept)
+        for epoch in range(num_epochs):
+            # Training
+            linear.train()
+            train_loss = 0.0
 
-    with open(os.path.join(config["save_dir"], "metrics.txt"), "w") as f:
-        out_dict = {}
-        for key in ("lam", "lr", "alpha", "time"):
-            out_dict[key] = float(output_proj["path"][0][key])
-        out_dict["metrics"] = output_proj["path"][0]["metrics"]
-        nnz = (W_g.abs() > 1e-5).sum().item()
-        total = W_g.numel()
-        out_dict["sparsity"] = {
-            "Non-zero weights": nnz,
-            "Total weights": total,
-            "Percentage non-zero": nnz / total,
-        }
-        json.dump(out_dict, f, indent=2)
+            for out in indexed_train_loader:
+                inputs, targets, _ = out
+                inputs, targets = inputs.to(model.device), targets.to(model.device)
+
+                # Forward pass
+                outputs = linear(inputs)
+                loss = criterion(outputs, targets)
+
+                # Backward and optimize
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                train_loss += loss.item() * inputs.size(0)
+
+            train_loss /= len(indexed_train_ds)
+
+            # Validation
+            linear.eval()
+            val_loss = 0.0
+            correct = 0
+            total = 0
+
+            with torch.no_grad():
+                for inputs, targets in val_loader:
+                    inputs, targets = inputs.to(model.device), targets.to(model.device)
+
+                    outputs = linear(inputs)
+                    loss = criterion(outputs, targets)
+
+                    val_loss += loss.item() * inputs.size(0)
+
+                    _, predicted = outputs.max(1)
+                    total += targets.size(0)
+                    correct += predicted.eq(targets).sum().item()
+
+            val_loss /= len(val_ds)
+            val_acc = correct / total
+
+            # Save best model
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                best_state = {
+                    "weight": linear.weight.data.clone(),
+                    "bias": linear.bias.data.clone(),
+                }
+
+            if epoch % 10 == 0:
+                print(
+                    f"Epoch {epoch}/{num_epochs}, Train Loss: {train_loss:.4f}, "
+                    f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}"
+                )
+
+        # Use the best model weights
+        if best_state is not None:
+            W_g = best_state["weight"]
+            b_g = best_state["bias"]
+        else:
+            W_g = linear.weight.data
+            b_g = linear.bias.data
+
+    else:
+
+        # Make linear model and zero initialize
+        linear = torch.nn.Linear(train_cr.shape[1], num_classes).to(model.device)
+        linear.weight.data.zero_()
+        linear.bias.data.zero_()
+
+        STEP_SIZE = 0.1
+        ALPHA = 0.99
+        metadata = {}
+        metadata["max_reg"] = {}
+        metadata["max_reg"]["nongrouped"] = config["lam"]
+
+        # Solve the GLM path
+        output_proj = glm_saga(
+            linear,
+            indexed_train_loader,
+            STEP_SIZE,
+            config["n_iters"],
+            ALPHA,
+            epsilon=1,
+            k=1,
+            val_loader=val_loader,
+            do_zero=False,
+            metadata=metadata,
+            n_ex=len(train_cr),
+            n_classes=num_classes,
+            verbose=10,
+        )
+        W_g = output_proj["path"][0]["weight"]
+        b_g = output_proj["path"][0]["bias"]
+
+        import datetime
+
+        torch.save(train_mean, os.path.join(config["save_dir"], "proj_mean.pt"))
+        torch.save(train_std, os.path.join(config["save_dir"], "proj_std.pt"))
+        torch.save(W_c, os.path.join(config["save_dir"], "W_c.pt"))
+        torch.save(W_g, os.path.join(config["save_dir"], "W_g.pt"))
+        torch.save(b_g, os.path.join(config["save_dir"], "b_g.pt"))
+
+        if len(concepts) > 0:
+            with open(
+                os.path.join(config["save_dir"], "chosen_concepts.txt"), "w"
+            ) as f:
+                f.write(concepts[0])
+                for concept in concepts[1:]:
+                    f.write("\n" + concept)
+
+        with open(os.path.join(config["save_dir"], "metrics.txt"), "w") as f:
+            out_dict = {}
+            for key in ("lam", "lr", "alpha", "time"):
+                out_dict[key] = float(output_proj["path"][0][key])
+            out_dict["metrics"] = output_proj["path"][0]["metrics"]
+            nnz = (W_g.abs() > 1e-5).sum().item()
+            total = W_g.numel()
+            out_dict["sparsity"] = {
+                "Non-zero weights": nnz,
+                "Total weights": total,
+                "Percentage non-zero": nnz / total,
+            }
+            json.dump(out_dict, f, indent=2)
     (
         test_residuals,
         test_concept_preds,
@@ -618,6 +718,8 @@ def train_posthoc_fitter(
         test_r_int = test_r
     test_cr = torch.cat([test_r, test_concept_preds], dim=1)
     test_cr_int = torch.cat([test_r_int, test_concepts], dim=1)
+    # test_cr = test_r
+    # test_cr_int = test_r_int
 
     test_cr -= train_mean
     test_cr /= train_std
@@ -640,6 +742,258 @@ def train_posthoc_fitter(
         )
     )
     return interpretable.sum().item(), test_y_acc, test_y_acc_int
+
+
+def train_posthoc_crm(
+    model: ConceptLightningModel,
+    model_type: str,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    num_train_epochs: int = 10,
+    dataset=None,
+    data_dir=None,
+    num_concepts=None,
+    backbone=None,
+    subset=None,
+    config={},
+    use_concept_res=True,
+) -> float:
+    """
+    Test mutual information between concepts and residuals.
+
+    Parameters
+    ----------
+    model : ConceptLightningModel
+        Model to evaluate
+    test_loader : DataLoader
+        Test data loader
+    num_train_epochs : int
+        Number of epochs to train mutual information estimator
+    """
+    # Get mutual information estimator
+    if dataset == "cifar100":
+        num_classes = 100
+    elif dataset == "cub":
+        num_classes = 200
+    clip_path = os.path.join(config["data_dir"], "ViT-B/16/")
+
+    concept_loss_fn = get_concept_loss_fn(
+        dataset,
+        data_dir,
+        num_concepts=num_concepts,
+        backbone=backbone,
+        subset=subset,
+    )
+
+    model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+
+    with open(config["concept_set_path"]) as f:
+        concepts = f.read().split("\n")
+    if not os.path.exists(config["save_dir"] / "final_features"):
+        os.makedirs(config["save_dir"] / "final_features", exist_ok=True)
+        for ds, split in zip(
+            [train_loader, val_loader, test_loader],
+            ["train", "val", "test"],
+        ):
+            save_residual_preds(
+                model, ds, clip_path, config["save_dir"] / "final_features", split
+            )
+    (
+        train_residuals,
+        train_concept_preds,
+        train_concepts,
+        train_targets,
+        train_clip_features,
+    ) = load_featurees(config, "train", clip_path)
+
+    (
+        val_residuals,
+        val_concept_preds,
+        val_concepts,
+        val_targets,
+        val_clip_features,
+    ) = load_featurees(config, "val", clip_path)
+
+    train_cr = torch.cat([train_residuals, train_concepts], dim=1)
+    val_cr = torch.cat([val_residuals, val_concepts], dim=1)
+
+    train_mean = torch.mean(train_cr, dim=0, keepdim=True)
+    train_std = torch.std(train_cr, dim=0, keepdim=True)
+    if config.get("no_glm", False):
+        train_mean = torch.zeros_like(train_mean)
+        train_std = torch.ones_like(train_std)
+
+    train_cr -= train_mean
+    train_cr /= train_std
+
+    val_cr -= train_mean
+    val_cr /= train_std
+
+    train_y = torch.LongTensor(train_targets)
+    indexed_train_ds = IndexedTensorDataset(train_cr, train_y)
+    val_y = torch.LongTensor(val_targets)
+    val_ds = TensorDataset(val_cr, val_y)
+
+    indexed_train_loader = DataLoader(
+        indexed_train_ds, batch_size=config["saga_batch_size"], shuffle=True
+    )
+    val_loader = DataLoader(val_ds, batch_size=config["saga_batch_size"], shuffle=False)
+
+    # Make linear model and zero initialize
+    linear = torch.nn.Linear(train_cr.shape[1], num_classes).to(model.device)
+    linear.weight.data.zero_()
+    linear.bias.data.zero_()
+
+    # Check if config["no_glm"] is on
+    if config.get("no_glm", False):
+        # Use Adam optimizer instead of GLM SAGA
+        linear = torch.nn.Linear(train_cr.shape[1], num_classes).to(model.device)
+
+        # Initialize optimizer
+        optimizer = torch.optim.Adam(
+            linear.parameters(), lr=config.get("adam_lr", 1e-3)
+        )
+
+        # Loss function
+        criterion = torch.nn.CrossEntropyLoss()
+
+        # Training loop
+        num_epochs = 30
+        best_val_acc = 0
+        best_state = None
+
+        for epoch in range(num_epochs):
+            # Training
+            linear.train()
+            train_loss = 0.0
+
+            for out in indexed_train_loader:
+                inputs, targets, _ = out
+                inputs, targets = inputs.to(model.device), targets.to(model.device)
+
+                # Forward pass
+                outputs = linear(inputs)
+                loss = criterion(outputs, targets)
+
+                # Backward and optimize
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                train_loss += loss.item() * inputs.size(0)
+
+            train_loss /= len(indexed_train_ds)
+
+            # Validation
+            linear.eval()
+            val_loss = 0.0
+            correct = 0
+            total = 0
+
+            with torch.no_grad():
+                for inputs, targets in val_loader:
+                    inputs, targets = inputs.to(model.device), targets.to(model.device)
+
+                    outputs = linear(inputs)
+                    loss = criterion(outputs, targets)
+
+                    val_loss += loss.item() * inputs.size(0)
+
+                    _, predicted = outputs.max(1)
+                    total += targets.size(0)
+                    correct += predicted.eq(targets).sum().item()
+
+            val_loss /= len(val_ds)
+            val_acc = correct / total
+
+            # Save best model
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                best_state = {
+                    "weight": linear.weight.data.clone(),
+                    "bias": linear.bias.data.clone(),
+                }
+
+            if epoch % 10 == 0:
+                print(
+                    f"Epoch {epoch}/{num_epochs}, Train Loss: {train_loss:.4f}, "
+                    f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}"
+                )
+
+        # Use the best model weights
+        if best_state is not None:
+            W_g = best_state["weight"]
+            b_g = best_state["bias"]
+        else:
+            W_g = linear.weight.data
+            b_g = linear.bias.data
+
+    else:
+
+        STEP_SIZE = 0.1
+        ALPHA = 0.99
+        metadata = {}
+        metadata["max_reg"] = {}
+        metadata["max_reg"]["nongrouped"] = config["lam"]
+
+        # Solve the GLM path
+        output_proj = glm_saga(
+            linear,
+            indexed_train_loader,
+            STEP_SIZE,
+            config["n_iters"],
+            ALPHA,
+            epsilon=1,
+            k=1,
+            val_loader=val_loader,
+            do_zero=False,
+            metadata=metadata,
+            n_ex=len(train_cr),
+            n_classes=num_classes,
+            verbose=10,
+        )
+        W_g = output_proj["path"][0]["weight"]
+        b_g = output_proj["path"][0]["bias"]
+
+    (
+        test_residuals,
+        test_concept_preds,
+        test_concepts,
+        test_targets,
+        _,
+    ) = load_featurees(config, "test", clip_path)
+
+    final = torch.nn.Linear(in_features=W_g.shape[1], out_features=W_g.shape[0]).to(
+        model.device
+    )
+    final.load_state_dict({"weight": W_g, "bias": b_g})
+    test_cr = torch.cat([test_residuals, test_concept_preds], dim=1)
+    test_cr_int = torch.cat([test_residuals, test_concepts], dim=1)
+    # test_cr = test_r
+    # test_cr_int = test_r_int
+
+    test_cr -= train_mean
+    test_cr /= train_std
+
+    test_cr_int -= train_mean
+    test_cr_int /= train_std
+    test_cr = test_cr.to(model.device)
+    test_cr_int = test_cr_int.to(model.device)
+    test_y_pred = final(test_cr).cpu()
+    test_y_pred = torch.argmax(test_y_pred, dim=1)
+    test_y_acc = torch.sum(test_y_pred == test_targets).item() / len(test_targets)
+    test_y_pred_int = final(test_cr_int).cpu()
+    test_y_pred_int = torch.argmax(test_y_pred_int, dim=1)
+    test_y_acc_int = torch.sum(test_y_pred_int == test_targets).item() / len(
+        test_targets
+    )
+    print(
+        "Test accuracy: {:.4f}, Test accuracy with intervention: {:.4f}".format(
+            test_y_acc, test_y_acc_int
+        )
+    )
+    return 0, test_y_acc, test_y_acc_int
 
 
 def load_featurees(config, split, clip_path):
@@ -863,20 +1217,36 @@ def evaluate(config: dict):
     #     assert 0, "Dataset not supported"
     cr = "_cr" if config.get("use_concept_res", True) else ""
 
-    metrics[f"posthoc_fitter{cr}"] = train_posthoc_fitter(
-        model,
-        config["model_type"],
-        train_loader,
-        val_loader,
-        test_loader,
-        dataset=config["dataset"],
-        data_dir=config["data_dir"],
-        num_concepts=config.get("num_concepts", -1),
-        backbone=config.get("backbone", "resnet34"),
-        subset=config.get("subset", None),
-        config=config,
-        use_concept_res=config.get("use_concept_res", True),
-    )
+    if config.get("no_cbm", False):
+        metrics[f"posthoc_res"] = train_posthoc_crm(
+            model,
+            config["model_type"],
+            train_loader,
+            val_loader,
+            test_loader,
+            dataset=config["dataset"],
+            data_dir=config["data_dir"],
+            num_concepts=config.get("num_concepts", -1),
+            backbone=config.get("backbone", "resnet34"),
+            subset=config.get("subset", None),
+            config=config,
+            use_concept_res=config.get("use_concept_res", True),
+        )
+    else:
+        metrics[f"posthoc_fitter{cr}"] = train_posthoc_fitter(
+            model,
+            config["model_type"],
+            train_loader,
+            val_loader,
+            test_loader,
+            dataset=config["dataset"],
+            data_dir=config["data_dir"],
+            num_concepts=config.get("num_concepts", -1),
+            backbone=config.get("backbone", "resnet34"),
+            subset=config.get("subset", None),
+            config=config,
+            use_concept_res=config.get("use_concept_res", True),
+        )
     # Report evaluation metrics
     ray.train.report(metrics)
 
@@ -958,7 +1328,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n_iters",
         type=int,
-        default=1000,
+        default=100,
         help="How many iterations to run the final layer solver for",
     )
     parser.add_argument(
@@ -970,6 +1340,15 @@ if __name__ == "__main__":
         "--use_concept_res",
         action="store_true",
         help="Use concept residuals when training the projection layer",
+    )
+    parser.add_argument(
+        "--no_cbm",
+        action="store_true",
+        help="Use concept residuals when training the target network",
+    )
+    parser.add_argument(
+        "--no_glm",
+        action="store_true",
     )
 
     args = parser.parse_args()

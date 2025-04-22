@@ -58,12 +58,30 @@ class AA2(Dataset):
         #     ds_idx = None
         else:
             assert 0, "Invalid split"
-        ds_all = datasets.ImageFolder(
-            root=self.dataset_dir / "Animals_with_Attributes2" / "JPEGImages",
-            transform=transform,
-            *args,
-            **kwargs,
-        )
+        import os
+
+        if os.path.exists("/dev/shm/AA2/Animals_with_Attributes2/"):
+            if os.path.exists(
+                "/dev/shm/AA2/Animals_with_Attributes2/JPEGImages_optimized/"
+            ):
+                subfolder = "JPEGImages_optimized"
+            else:
+                subfolder = "JPEGImages"
+            ds_all = datasets.ImageFolder(
+                root=Path("/dev/shm/AA2/Animals_with_Attributes2/") / subfolder,
+                transform=transform,
+                *args,
+                **kwargs,
+            )
+            # assert 0, subfolder
+        else:
+
+            ds_all = datasets.ImageFolder(
+                root=self.dataset_dir / "Animals_with_Attributes2" / "JPEGImages",
+                transform=transform,
+                *args,
+                **kwargs,
+            )
         self.dataset = torch.utils.data.Subset(ds_all, ds_idx)
         self.split = split
 
@@ -71,7 +89,7 @@ class AA2(Dataset):
             animals = {}
             with open(filename, "r") as file:
                 for line in file:
-                    # Split each line at the tab character
+                    # Split each line at the tab characterd
                     parts = line.strip().split("\t")
                     if len(parts) == 2:
                         # Replace '+' with spaces in the animal name

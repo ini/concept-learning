@@ -182,7 +182,6 @@ def generate_data(
         concept_idxs = sorted_concepts[:num_concepts]
         concept_idxs = sorted(concept_idxs)
         print("these concepts are chosen")
-        print(concept_idxs)
         if config.get("num_hidden_concepts", 0):
             num_hidden = config.get("num_hidden_concepts", 0)
             hidden_concepts = sorted(
@@ -193,6 +192,7 @@ def generate_data(
                 ]
             )
         else:
+            # assert 0, "should not be here"
             hidden_concepts = []
         print("these are the hidden concepts")
         print(hidden_concepts)

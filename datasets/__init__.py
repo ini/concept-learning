@@ -390,7 +390,7 @@ def get_datasets(
 
         transform_train = transforms.Compose(
             [
-                transforms.RandomResizedCrop(224),
+                transforms.RandomResizedCrop(64),
                 transforms.Resize(32),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
@@ -402,7 +402,7 @@ def get_datasets(
                 transforms.Resize(
                     256
                 ),  # Resize image so its shortest side is 256 pixels
-                transforms.CenterCrop(224),
+                transforms.CenterCrop(64),
                 transforms.Resize(32),
                 transforms.ToTensor(),
                 normalize,
