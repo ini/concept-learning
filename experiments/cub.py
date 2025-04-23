@@ -21,7 +21,7 @@ def make_concept_model(config: dict) -> ConceptModel:
     residual_dim = config["residual_dim"]
     int_model_use_bn = config.get("int_model_use_bn", True)
     int_model_layers = config.get("int_model_layers", None)
-    backbone = config.get("backbone", "resnet34")
+    backbone = config.get("backbone", "inception_v3")
 
     if config["model_type"].startswith("cem"):
         bottleneck_dim = concept_dim * residual_dim
@@ -74,11 +74,19 @@ def make_concept_model(config: dict) -> ConceptModel:
             cross_attention = CrossAttentionModel(
                 concept_dim, residual_dim, residual_dim, min(residual_dim, 8)
             )
-    target_network = make_mlp(
-        num_classes,
-        num_hidden_layers=config.get("num_target_network_layers", 0),
-        hidden_dim=64,
-    )
+    # target_network = make_mlp(
+    #     num_classes,
+    #     num_hidden_layers=config.get("num_target_network_layers", 0),
+    #     hidden_dim=64,
+    # )
+    if config.get("num_target_network_layers", 0) > 0:
+        target_network = make_mlp(
+            num_classes,
+            num_hidden_layers=config.get("num_target_network_layers", 0),
+            hidden_dim=64,
+        )
+    else:
+        target_network = nn.Linear(bottleneck_dim, num_classes)
 
     if config.get("model_type") == "mi_residual_info_bottleneck":
         return PartialProbabilisticConceptModel(

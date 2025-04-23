@@ -709,10 +709,15 @@ def test_concept_pred(
     data = data.to(model.device)
     concepts = concepts.to(model.device)
 
+
     if hidden_concepts != 0:
         _, residual, _ = model(data, concepts=concepts[:, :-hidden_concepts])
     else:
         _, residual, _ = model(data, concepts=concepts)
+
+    if residual.shape[-1] < 1:
+        print("Residual is empty")
+        return [0,0,0,0]
 
     if type(residual) == tuple:
         residual = residual[0]
@@ -776,7 +781,10 @@ def test_concept_pred(
                         _, residual, _ = model(data, concepts=concepts)
                 if type(residual) == tuple:
                     residual = residual[0]
-                concept_predictor.step(residual.detach(), concepts.detach())
+                try:
+                    concept_predictor.step(residual.detach(), concepts.detach())
+                except Exception as e:
+                    breakpoint()
 
         # Validation phase
         val_losses = []
@@ -2147,7 +2155,7 @@ def filter_eval_configs(configs: list[dict]) -> list[dict]:
                 continue
 
         if config["model_type"] == "no_residual" or config["residual_dim"] == 0:
-            if config["eval_mode"] in ("correlation", "mutual_info"):
+            if config["eval_mode"] in ("correlation", "mutual_info", "concept_pred"):
                 print("Correlation / MI metrics not available for no-residual models")
                 continue
 
@@ -2296,8 +2304,8 @@ if __name__ == "__main__":
         # "random_concepts",
         # "random_residual",
         # "correlation",
-        # "mutual_info",
-        "concept_pred",
+        "mutual_info",
+        #"concept_pred",
         # "concept_change",
         # "concept_change_probe",
         # "tcav",
