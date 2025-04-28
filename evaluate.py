@@ -671,7 +671,7 @@ def test_concept_pred(
     train_loader: DataLoader,
     val_loader: DataLoader,
     test_loader: DataLoader,
-    num_train_epochs: int = 10,
+    num_train_epochs: int = 5,
     dataset=None,
     data_dir=None,
     num_concepts=None,
@@ -703,6 +703,7 @@ def test_concept_pred(
         backbone=backbone,
         subset=subset,
     )
+    print(concept_loss_fn)
 
     model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     (data, concepts), targets = next(iter(test_loader))
@@ -833,6 +834,7 @@ def test_concept_pred(
     metrics = []
     for i in range(concept_dim):
         metrics.append([])
+    loss = []
     intchange_metrics = []
     for i in range(concept_dim):
         intchange_metrics.append([])
@@ -874,8 +876,9 @@ def test_concept_pred(
                     metrics[i].append(accuracy)
             else:
                 for i in range(concept_dim):
-                    mse = ((y_pred_base[:, i] - concepts[:, i]) ** 2).mean().item()
+                    mse = ((y_pred_base[:, i] - concepts[:, i]) ** 2).mean().sqrt().item()
                     metrics[i].append(mse)
+                loss.append(torch.nn.functional.mse_loss(y_pred_base, concepts).sqrt())
 
             # perform concept interventions with concept full concepts
             if model_type == "cem" or model_type == "cem_mi":
@@ -909,16 +912,19 @@ def test_concept_pred(
     mean_metrics = np.array([np.mean(metric) for metric in metrics])
     mean_change_metrics = np.array([np.mean(metric) for metric in intchange_metrics])
 
-    predictions = [torch.cat(pred).to("cpu") for pred in predictions]
-    ground_truth = [torch.cat(gt).to("cpu") for gt in ground_truth]
-    from torchmetrics.classification import BinaryF1Score, BinaryAccuracy
+    if model.concept_model.concept_type == "binary":
+        predictions = [torch.cat(pred).to("cpu") for pred in predictions]
+        ground_truth = [torch.cat(gt).to("cpu") for gt in ground_truth]
+        from torchmetrics.classification import BinaryF1Score, BinaryAccuracy
 
-    f1_scores = np.array(
-        [
-            BinaryF1Score()(pred, gt).item()
-            for pred, gt in zip(predictions, ground_truth)
-        ]
-    )
+        f1_scores = np.array(
+            [
+                BinaryF1Score()(pred, gt).item()
+                for pred, gt in zip(predictions, ground_truth)
+            ]
+        )
+    else:
+        f1_scores = mean_metrics
 
     if hidden_concepts > 0:
         return np.array(
@@ -2302,14 +2308,14 @@ if __name__ == "__main__":
         # "neg_intervention",
         # "pos_intervention",
         # "random_concepts",
-        # "random_residual",
+        # "random_residual", 
         # "correlation",
-        "mutual_info",
-        #"concept_pred",
+        # "mutual_info",
+        # "concept_pred",
         # "concept_change",
         # "concept_change_probe",
         # "tcav",
-        # "deeplift_shapley",
+        "deeplift_shapley",
         # "threshold_fitting",
         # "test_counterfactual",
         # "test_counterfactual_2",
