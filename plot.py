@@ -2632,6 +2632,8 @@ def plot_attribution(
     max_cols = 4
     n_cols = min(n_concepts, max_cols)
     n_rows = (n_concepts + max_cols - 1) // max_cols
+    if n_rows == 0 or n_cols == 0:
+        return
 
     # Create figure
     fig, axes = plt.subplots(
@@ -2919,7 +2921,7 @@ def plot_posthoc_cbm_performance(
         plt.show()
 
 
-def plot_mean_attribution(
+def plot_mean_attribution_old(
     plot_results: ResultGrid,
     plot_key: tuple[str, ...],
     groupby: list[str] = ["model_type"],
@@ -3060,13 +3062,174 @@ def plot_mean_attribution(
         plt.show()
 
 
+def plot_mean_attribution(
+    plot_results: ResultGrid,
+    plot_key: tuple[str, ...],
+    groupby: list[str] = ["model_type"],
+    save_dir: Path | str = "./plots",
+    show: bool = True,
+    name: str = "",
+    plot_concepts: bool = False,
+    top_n: int = 20,  # Number of top concepts to show when there are many
+    save_stats_csv: bool = True,  # Whether to save stats to CSV
+):
+    """
+    Plot mean attribution scores for each concept as lines and save statistics to CSV.
+
+    Parameters
+    ----------
+    plot_results : ResultGrid
+        Results for the given plot
+    plot_key : tuple[str]
+        Identifier for this plot
+    groupby : list[str]
+        List of train config keys to group by
+    save_dir : Path or str
+        Directory to save plots to
+    show : bool
+        Whether to show the plot
+    name : str
+        Name prefix for saved file
+    plot_concepts : bool
+        Whether to plot concept attributions (True) or residual attributions (False)
+    top_n : int
+        Maximum number of concepts to show individually when there are many
+    save_stats_csv : bool
+        Whether to save summary statistics to CSV
+    """
+    plt.clf()
+    which_attribution = "concept" if plot_concepts else "residual"
+    make_attr_folder = save_dir / "attribution"
+    make_attr_folder.mkdir(parents=True, exist_ok=True)
+    save_path = get_save_path(
+        plot_key,
+        prefix=name,
+        suffix=f"deeplift_shapley_{which_attribution}_mean",
+        save_dir=make_attr_folder,
+    )
+
+    # Aggregate results
+    groupby = groupby[0] if len(groupby) == 1 else groupby
+    plot_results = group_results(plot_results, groupby=groupby)
+    all_mean_scores = {}
+    
+    # For CSV export
+    csv_data = [] 
+
+    for key in plot_results.keys():
+        results = plot_results[key]
+        attribution_scores = [
+            result.metrics["deeplift_shapley"][f"{which_attribution}_attributions"]
+            for result in results
+            if "deeplift_shapley" in result.metrics
+        ]
+
+        if attribution_scores:
+            # Concatenate all attribution scores
+            all_attributions = np.concatenate(attribution_scores, axis=0)
+            batch_attributions = np.stack(attribution_scores, axis=0)
+            
+            # Calculate mean across all concepts for each sample (axis=1)
+            batch_means = np.mean(batch_attributions, axis=1)
+            batch_means = np.mean(batch_means, axis=1)
+
+            # Calculate mean and std of the sample means
+            batch_mean = np.mean(batch_means)
+            batch_std = np.std(batch_means)
+            
+            # Store for CSV export
+            model_type = plot_key[0]
+            csv_data.append({
+                "Residual Dimension": key,
+                "Model Type": model_type,
+                "Shap Mean": batch_mean,
+                "Shap Std": batch_std
+            })
+            
+            # Calculate mean across all samples for each concept (for plotting)
+            mean_scores = np.mean(all_attributions, axis=0)
+            all_mean_scores[key] = mean_scores
+
+    if not all_mean_scores:
+        print("No attribution data found")
+        return
+
+    # Save statistics to CSV
+    if save_stats_csv and csv_data:
+        import pandas as pd
+        stats_df = pd.DataFrame(csv_data)
+        stats_df.to_csv(save_path.with_suffix(".csv"), index=False)
+
+    # Get dimensions
+    first_array = next(iter(all_mean_scores.values()))
+    n_concepts = first_array.shape[0]
+    methods = list(all_mean_scores.keys())
+
+    # Create figure with appropriate size
+    plt.figure(figsize=(12, 6))
+
+    # Plot each method as a line on the same plot
+    for method_idx, (method, mean_scores) in enumerate(all_mean_scores.items()):
+        # Sort according to the global sorting
+        sorted_indices = np.argsort(-np.abs(mean_scores))
+        sorted_indices = sorted_indices[:top_n]
+        sorted_scores = mean_scores[sorted_indices]
+
+        # Plot as line with markers
+        plt.plot(
+            range(len(sorted_scores)),
+            sorted_scores,
+            marker="o",
+            linewidth=2,
+            markersize=6,
+            label=method,
+            color=plt.cm.tab10(method_idx % 10),
+            alpha=0.8,
+        )
+
+    # Set plot parameters
+    plt.ylabel("Mean Attribution Score")
+    plt.title(
+        f"Mean {which_attribution.capitalize()} Attribution Scores\n(Sorted by Average Absolute Magnitude)"
+    )
+    plt.grid(alpha=0.3)
+
+    # Hide x-tick labels but keep the ticks
+    plt.xticks(range(len(sorted_indices)))
+
+    # Add minimal tick lines to indicate concept positions
+    plt.tick_params(axis="x", which="both", length=4, width=1, direction="out", pad=8)
+
+    # Add note about truncation if needed
+    if n_concepts > top_n:
+        plt.figtext(
+            0.5,
+            0.01,
+            f"Note: Only showing top {top_n} concepts out of {n_concepts} total (sorted by absolute value)",
+            ha="center",
+            fontsize=10,
+            style="italic",
+        )
+
+    # Add legend
+    plt.legend(loc="best")
+
+    plt.tight_layout()
+
+    # Save the figure
+    plt.savefig(save_path, bbox_inches="tight")
+
+    if show:
+        plt.show()
+
+
 if __name__ == "__main__":
     PLOT_FUNCTIONS = {
         # "neg_intervention": plot_negative_interventions,
         # "pos_intervention": plot_positive_interventions,
-        # "random": plot_random_concepts_residual,
-        # "concept_pred": plot_concept_predictions,
-        "all_concept_pred": plot_all_concept_predictions,
+        # "random": plot_random_concepts_residual,  
+        # "concept_pred": plot_concept_predictions, 
+        #"all_concept_pred": plot_all_concept_predictions,
         # "counterfactual_intervention": plot_all_counterfactual_intervention,
         # "counterfactual_intervention_single": plot_all_counterfactual_intervention_2,
         # "plot_residual_pca_scatter": plot_residual_pca_scatter,
@@ -3079,14 +3242,14 @@ if __name__ == "__main__":
         # "tcav_sign_count": partial(plot_tcav, plot_magnitude=False),
         # "tcav_magnitude": partial(plot_tcav, plot_magnitude=True),
         # "attribution": plot_attribution,
-        # "attribution_concepts": partial(plot_attribution, plot_concepts=True),
-        # "attribution_residuals": partial(plot_attribution, plot_concepts=False),
-        # "mean_attribution_concepts": partial(plot_mean_attribution, plot_concepts=True),
+        #"attribution_concepts": partial(plot_attribution, plot_concepts=True),
+        #"attribution_residuals": partial(plot_attribution, plot_concepts=False),
+        "mean_attribution_concepts": partial(plot_mean_attribution, plot_concepts=True),
         # "mean_attribution_residuals": partial(
         #     plot_mean_attribution, plot_concepts=False
         # ),
         # "plot_threshold_fitting": plot_threshold_fitting,
-        # "mutual_info": plot_mutual_info,
+       # "mutual_info": plot_mutual_info, 
         # "posthoc_cbm": plot_posthoc_cbm_performance,
         # "posthoc_crm": partial(plot_posthoc_cbm_performance, no_cbm=True),
     }
