@@ -2595,9 +2595,14 @@ def plot_attribution(
     )
     raw_save_path = save_path.with_suffix(".pkl")
 
-    if not os.path.exists(raw_save_path):
-        just_shap = [result.metrics["deeplift_shapley"] for result in plot_results if "deeplift_shapley" in result.metrics]
+    if True or not os.path.exists(raw_save_path):
+        just_shap = [
+            result.metrics
+            for result in plot_results
+            if "deeplift_shapley" in result.metrics
+        ]
         import pickle
+
         with open(raw_save_path, "wb") as f:
             pickle.dump(just_shap, f)
 
@@ -2636,7 +2641,7 @@ def plot_attribution(
     avg_df = pd.DataFrame(
         avg_attributions, index=[f"concept_{i}" for i in range(n_concepts)]
     )
-    #breakpoint()
+    # breakpoint()
 
     # Save to CSV
     avg_df.to_csv(csv_save_path)
@@ -3127,9 +3132,9 @@ def plot_mean_attribution(
     groupby = groupby[0] if len(groupby) == 1 else groupby
     plot_results = group_results(plot_results, groupby=groupby)
     all_mean_scores = {}
-    
+
     # For CSV export
-    csv_data = [] 
+    csv_data = []
 
     for key in plot_results.keys():
         results = plot_results[key]
@@ -3143,7 +3148,7 @@ def plot_mean_attribution(
             # Concatenate all attribution scores
             all_attributions = np.concatenate(attribution_scores, axis=0)
             batch_attributions = np.stack(attribution_scores, axis=0)
-            
+
             # Calculate mean across all concepts for each sample (axis=1)
             batch_means = np.mean(batch_attributions, axis=1)
             batch_means = np.mean(batch_means, axis=1)
@@ -3151,16 +3156,18 @@ def plot_mean_attribution(
             # Calculate mean and std of the sample means
             batch_mean = np.mean(batch_means)
             batch_std = np.std(batch_means)
-            
+
             # Store for CSV export
             model_type = plot_key[0]
-            csv_data.append({
-                "Residual Dimension": key,
-                "Model Type": model_type,
-                "Shap Mean": batch_mean,
-                "Shap Std": batch_std
-            })
-            
+            csv_data.append(
+                {
+                    "Residual Dimension": key,
+                    "Model Type": model_type,
+                    "Shap Mean": batch_mean,
+                    "Shap Std": batch_std,
+                }
+            )
+
             # Calculate mean across all samples for each concept (for plotting)
             mean_scores = np.mean(all_attributions, axis=0)
             all_mean_scores[key] = mean_scores
@@ -3172,6 +3179,7 @@ def plot_mean_attribution(
     # Save statistics to CSV
     if save_stats_csv and csv_data:
         import pandas as pd
+
         stats_df = pd.DataFrame(csv_data)
         stats_df.to_csv(save_path.with_suffix(".csv"), index=False)
 
@@ -3242,9 +3250,9 @@ if __name__ == "__main__":
     PLOT_FUNCTIONS = {
         # "neg_intervention": plot_negative_interventions,
         # "pos_intervention": plot_positive_interventions,
-        # "random": plot_random_concepts_residual,  
-        # "concept_pred": plot_concept_predictions, 
-        #"all_concept_pred": plot_all_concept_predictions,
+        # "random": plot_random_concepts_residual,
+        # "concept_pred": plot_concept_predictions,
+        # "all_concept_pred": plot_all_concept_predictions,
         # "counterfactual_intervention": plot_all_counterfactual_intervention,
         # "counterfactual_intervention_single": plot_all_counterfactual_intervention_2,
         # "plot_residual_pca_scatter": plot_residual_pca_scatter,
@@ -3258,13 +3266,13 @@ if __name__ == "__main__":
         # "tcav_magnitude": partial(plot_tcav, plot_magnitude=True),
         # "attribution": plot_attribution,
         "attribution_concepts": partial(plot_attribution, plot_concepts=True),
-        #"attribution_residuals": partial(plot_attribution, plot_concepts=False),
-        #"mean_attribution_concepts": partial(plot_mean_attribution, plot_concepts=True),
+        # "attribution_residuals": partial(plot_attribution, plot_concepts=False),
+        # "mean_attribution_concepts": partial(plot_mean_attribution, plot_concepts=True),
         # "mean_attribution_residuals": partial(
         #     plot_mean_attribution, plot_concepts=False
         # ),
         # "plot_threshold_fitting": plot_threshold_fitting,
-       # "mutual_info": plot_mutual_info, 
+        # "mutual_info": plot_mutual_info,
         # "posthoc_cbm": plot_posthoc_cbm_performance,
         # "posthoc_crm": partial(plot_posthoc_cbm_performance, no_cbm=True),
     }

@@ -710,7 +710,6 @@ def test_concept_pred(
     data = data.to(model.device)
     concepts = concepts.to(model.device)
 
-
     if hidden_concepts != 0:
         _, residual, _ = model(data, concepts=concepts[:, :-hidden_concepts])
     else:
@@ -718,7 +717,7 @@ def test_concept_pred(
 
     if residual.shape[-1] < 1:
         print("Residual is empty")
-        return [0,0,0,0]
+        return [0, 0, 0, 0]
 
     if type(residual) == tuple:
         residual = residual[0]
@@ -876,7 +875,9 @@ def test_concept_pred(
                     metrics[i].append(accuracy)
             else:
                 for i in range(concept_dim):
-                    mse = ((y_pred_base[:, i] - concepts[:, i]) ** 2).mean().sqrt().item()
+                    mse = (
+                        ((y_pred_base[:, i] - concepts[:, i]) ** 2).mean().sqrt().item()
+                    )
                     metrics[i].append(mse)
                 loss.append(torch.nn.functional.mse_loss(y_pred_base, concepts).sqrt())
 
@@ -1448,7 +1449,15 @@ def test_deep_lift_shapley(
         targets = all_targets[batch_idx].to(device)
 
         # Create baselines using the global means (expand to match batch size)
-        concept_baseline = concept_mean.expand(concept_inputs.shape[0], -1).to(device)
+        if dataset == "oai":
+            concept_baseline = concept_mean.expand(concept_inputs.shape[0], -1).to(
+                device
+            )
+        else:
+            # if concepts are binary, we want our baseline to be the uncertainty case where we're unsure of which class it is
+            concept_baseline = (
+                torch.zeros_like(concept_inputs).float().reshape(concept_inputs.shape)
+            ) + 0.5
         residual_baseline = residual_mean.expand(residual_outputs.shape[0], -1).to(
             device
         )
@@ -2311,7 +2320,7 @@ if __name__ == "__main__":
         # "neg_intervention",
         # "pos_intervention",
         # "random_concepts",
-        # "random_residual", 
+        # "random_residual",
         # "correlation",
         # "mutual_info",
         # "concept_pred",
