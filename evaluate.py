@@ -1384,6 +1384,7 @@ def test_deep_lift_shapley(
     # Store attribution scores
     concept_attributions = []
     residual_attributions = []
+    concept_values = []
 
     num_classes = DATASET_INFO[dataset]["num_classes"]
     max_samples = 10000
@@ -1465,11 +1466,12 @@ def test_deep_lift_shapley(
 
         concept_attributions.append(concept_attr)
         residual_attributions.append(residual_attr)
-
+        concept_values.append(concept_inputs.cpu())
         num_processed += len(data)
     # Concatenate all samples' attributions
     all_concept_attr = torch.cat(concept_attributions, dim=0)
     all_residual_attr = torch.cat(residual_attributions, dim=0)
+    all_concept_values = torch.cat(concept_values, dim=0)
 
     # Compute mean across all samples (after taking absolute values)
     avg_concept_attr = all_concept_attr  # torch.mean(all_concept_attr, dim=0)
@@ -1483,6 +1485,7 @@ def test_deep_lift_shapley(
     attribution_results = {
         "concept_attributions": concept_attr_np,
         "residual_attributions": residual_attr_np,
+        "concept_values": all_concept_values.cpu().numpy(),
     }
 
     # For datasets with known concept names, add named attributions

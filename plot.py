@@ -2587,6 +2587,20 @@ def plot_attribution(
     )
     csv_save_path = save_path.with_suffix(".csv")
 
+    raw_save_path = get_save_path(
+        plot_key,
+        prefix=name,
+        suffix=f"deeplift_shapley_{which_attribution}_raw",
+        save_dir=make_attr_folder,
+    )
+    raw_save_path = save_path.with_suffix(".pkl")
+
+    if not os.path.exists(raw_save_path):
+        just_shap = [result.metrics["deeplift_shapley"] for result in plot_results if "deeplift_shapley" in result.metrics]
+        import pickle
+        with open(raw_save_path, "wb") as f:
+            pickle.dump(just_shap, f)
+
     # Aggregate results
     groupby = groupby[0] if len(groupby) == 1 else groupby
     plot_results = group_results(plot_results, groupby=groupby)
@@ -2622,6 +2636,7 @@ def plot_attribution(
     avg_df = pd.DataFrame(
         avg_attributions, index=[f"concept_{i}" for i in range(n_concepts)]
     )
+    #breakpoint()
 
     # Save to CSV
     avg_df.to_csv(csv_save_path)
@@ -3242,9 +3257,9 @@ if __name__ == "__main__":
         # "tcav_sign_count": partial(plot_tcav, plot_magnitude=False),
         # "tcav_magnitude": partial(plot_tcav, plot_magnitude=True),
         # "attribution": plot_attribution,
-        #"attribution_concepts": partial(plot_attribution, plot_concepts=True),
+        "attribution_concepts": partial(plot_attribution, plot_concepts=True),
         #"attribution_residuals": partial(plot_attribution, plot_concepts=False),
-        "mean_attribution_concepts": partial(plot_mean_attribution, plot_concepts=True),
+        #"mean_attribution_concepts": partial(plot_mean_attribution, plot_concepts=True),
         # "mean_attribution_residuals": partial(
         #     plot_mean_attribution, plot_concepts=False
         # ),
@@ -3306,7 +3321,6 @@ if __name__ == "__main__":
     plot_folder = "plots"
     for plot_key, plot_results in tqdm(results.items()):
         for mode in tqdm(args.mode):
-            print(plot_key)
             PLOT_FUNCTIONS[mode](
                 plot_results,
                 plot_key,
