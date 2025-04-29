@@ -2595,21 +2595,22 @@ def plot_attribution(
     )
     raw_save_path = save_path.with_suffix(".pkl")
 
-    if True or not os.path.exists(raw_save_path):
-        just_shap = [
-            result.metrics
-            for result in plot_results
-            if "deeplift_shapley" in result.metrics
-        ]
-        import pickle
+    # if True or not os.path.exists(raw_save_path):
+    #     just_shap = [
+    #         result.metrics
+    #         for result in plot_results
+    #         if "deeplift_shapley" in result.metrics
+    #     ]
+    #     import pickle
 
-        with open(raw_save_path, "wb") as f:
-            pickle.dump(just_shap, f)
+    #     with open(raw_save_path, "wb") as f:
+    #         pickle.dump(just_shap, f)
 
     # Aggregate results
     groupby = groupby[0] if len(groupby) == 1 else groupby
     plot_results = group_results(plot_results, groupby=groupby)
     all_scores = {}
+    all_scores_2 = {}
     for key in plot_results.keys():
         results = plot_results[key]
         attribution_scores = [
@@ -2618,10 +2619,12 @@ def plot_attribution(
             if "deeplift_shapley" in result.metrics
         ]
         try:
-            attribution_scores = np.concatenate(attribution_scores, axis=0)
+            attribution_scores_ = np.stack(attribution_scores, axis=0)
+            attribution_scores_2 = np.concatenate(attribution_scores, axis=0)
         except:
             breakpoint()
-        all_scores[key] = attribution_scores
+        all_scores[key] = attribution_scores_2
+        all_scores_2[key] = attribution_scores_
 
     # Get dimensions from first entry
     first_array = next(iter(all_scores.values()))
@@ -2632,16 +2635,25 @@ def plot_attribution(
     import pandas as pd
 
     # Create a DataFrame to store average attributions
+    # avg_attributions = {}
+    # for method, scores in all_scores.items():
+    #     # Calculate mean across all samples for each concept
+    #     avg_attributions[method] = np.mean(scores, axis=1)
+
+    # # Convert to DataFrame
+    # avg_df = pd.DataFrame(
+    #     avg_attributions, index=[f"concept_{i}" for i in range(n_concepts)]
+    # )
     avg_attributions = {}
-    for method, scores in all_scores.items():
+    for method, scores in all_scores_2.items():
         # Calculate mean across all samples for each concept
-        avg_attributions[method] = np.mean(scores, axis=0)
+        t = np.mean(scores, axis=1)
+        t = np.mean(t, axis=1)
+
+        avg_attributions[method] = (np.mean(t), np.std(t))
 
     # Convert to DataFrame
-    avg_df = pd.DataFrame(
-        avg_attributions, index=[f"concept_{i}" for i in range(n_concepts)]
-    )
-    # breakpoint()
+    avg_df = pd.DataFrame(avg_attributions, index=["mean", "std"])
 
     # Save to CSV
     avg_df.to_csv(csv_save_path)
