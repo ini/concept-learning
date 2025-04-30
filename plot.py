@@ -2605,6 +2605,22 @@ def plot_attribution(
 
     #     with open(raw_save_path, "wb") as f:
     #         pickle.dump(just_shap, f)
+    # if True or not os.path.exists(raw_save_path):
+    #     just_shap = [
+    #         result.metrics
+    #         for result in plot_results
+    #         if "deeplift_shapley" in result.metrics
+    #     ]
+    #     just_shap_reduced = [
+    #         {
+    #            'deeplift_shapley': result['deeplift_shapley'],
+    #            'config': {'residual_dim': result['config']['residual_dim']},
+    #         }
+    #         for result in just_shap
+    #     ]
+    #     import pickle
+    #     with open(raw_save_path, "wb") as f:
+    #         pickle.dump(just_shap_reduced, f)
 
     # Aggregate results
     groupby = groupby[0] if len(groupby) == 1 else groupby
